@@ -9,36 +9,8 @@ The architecture is designed to scale horizontally across **multiple protocols (
 ---
 
 ## 🏗️ Architecture Summary
+<img width="931" height="312" alt="Screenshot 2025-10-29 at 8 04 09 PM" src="https://github.com/user-attachments/assets/5217449a-a41e-4952-ac48-a08e6530a970" />
 
-```mermaid
-flowchart LR
-  subgraph UI[Web App (Next.js + Wagmi/Viem)]
-    LP[LP Ops: Add/Remove/Adjust/Claim/Compound]
-    AN[Analytics: APR, PnL, Health, Ticks]
-  end
-
-  subgraph SVC[Backend & Services]
-    API[REST API]
-    IDX[Ponder Indexer → Postgres]
-    Q[Job Queue (BullMQ) → Redis]
-  end
-
-  subgraph CHAIN[On-Chain]
-    subgraph CP[CopyPools Contracts]
-      LM[LPManager (UUPS)]
-      HA[HookAdapterV4]
-      RH[RangeHelper]
-      FC[FeeCollector (future)]
-    end
-    U4[(Uniswap v4 Pools + Hooks)]
-  end
-
-  UI <-->|read| API
-  UI -->|wallet tx (viem)| CP
-  API <-->|events| IDX
-  API --> Q
-  CP <-->|calls| U4
-```
 
 ### Design Principles
 
@@ -121,30 +93,11 @@ flowchart LR
 ## 🔄 Core Flows
 
 ### Add Liquidity
+<img width="805" height="361" alt="Screenshot 2025-10-29 at 8 06 25 PM" src="https://github.com/user-attachments/assets/e381cddd-78d8-4c14-8cbf-545dd727efc7" />
 
-```mermaid
-sequenceDiagram
-  autonumber
-  User->>UI: Set range & amounts
-  UI->>LM: addLiquidity(params)
-  LM->>HA: encode & validate
-  HA->>U4: create/modify position
-  U4-->>LM: tokenId + liquidity
-  LM-->>UI: emit PositionAdded
-```
 
 ### Manual Compound
-
-```mermaid
-sequenceDiagram
-  autonumber
-  User->>UI: Click “Compound”
-  UI->>LM: manualCompound(tokenId)
-  LM->>HA: collect fees + optional swap
-  HA->>U4: increaseLiquidity
-  U4-->>LM: new liquidity
-  LM-->>UI: emit ManuallyCompounded
-```
+<img width="809" height="340" alt="Screenshot 2025-10-29 at 8 06 57 PM" src="https://github.com/user-attachments/assets/483f50cd-2ef8-451a-9dd0-13dd04edb3e7" />
 
 ---
 
@@ -203,7 +156,7 @@ GET /actions?owner=0x...
 
 **Deliverables:**
 
-* Finalized diagrams, storage layout, adapter interfaces (`ILiquidityAdapter`, `IRouter`), upgrade plan (UUPS).
+* Finalizing diagrams, storage layout, adapter interfaces (`ILiquidityAdapter`, `IRouter`), upgrade plan (UUPS).
 * Monorepo (Turborepo) with packages: `contracts/`, `apps/web/`, `services/api/`, `indexers/ponder/`, `packages/shared/`.
 * Docker Compose (Postgres, Redis), local Uniswap v4 fork; CI (lint, typecheck, unit/forge, gas snapshots).
   **Exit Criteria:** CI green, local `make up` brings full stack.
@@ -264,28 +217,8 @@ GET /actions?owner=0x...
 **Artifacts:** `addresses.json`, `ABIs/`, `docs/v1.5-plan.md`.
 
 ### Mermaid Gantt (Paste-ready)
+<img width="971" height="247" alt="Screenshot 2025-10-29 at 8 09 48 PM" src="https://github.com/user-attachments/assets/350c4a55-5c97-457b-890b-85a6807feb7f" />
 
-```mermaid
-gantt
-  title Copy Pools V1 — 10-Week Roadmap
-  dateFormat  YYYY-MM-DD
-  section Architecture & Setup
-  Arch & Env (W1)        :done,    a1, 2025-10-29, 7d
-  section Contracts
-  LP Core (W2)           :active,  c1, 2025-11-05, 7d
-  Compound & Range (W3)  :         c2, 2025-11-12, 7d
-  section Services
-  API+Indexer (W4)       :         s1, 2025-11-19, 7d
-  section Web App
-  Core Flows (W5)        :         w1, 2025-11-26, 7d
-  Claim+Analytics (W6)   :         w2, 2025-12-03, 7d
-  section Quality & Security
-  Perf & QA (W7)         :         q1, 2025-12-10, 7d
-  Security & Ops (W8)    :         q2, 2025-12-17, 7d
-  section Launch
-  Beta & Onboarding (W9) :         l1, 2025-12-24, 7d
-  Mainnet Launch (W10)   :         l2, 2025-12-31, 7d
-```
 
 ---
 
@@ -318,44 +251,6 @@ gantt
 * **Copy Pools Pros:** V4-native with adapters; upgrade-safe; safety-first MEV/oracle guards; faster TS-native data pipeline.
 * **Copy Pools Risks:** New surface area (v4 hooks); must keep adapter boundary tight; rely on indexer correctness.
 
-### Side-by-Side Diagram (Conceptual)
-
-```mermaid
-flowchart LR
-  subgraph Revert
-    RUI[Revert UI]
-    RSVC[Data Services / Backtests]
-    RSC[Contracts (V3 Position Mgmt / Vaults)]
-    RV3[(Uniswap V3)]
-  end
-
-  subgraph CopyPools
-    CUI[Copy Pools UI]
-    CAPIs[API + Ponder + BullMQ]
-    CSC[UUPS LPManager + HookAdapter]
-    CV4[(Uniswap V4 + Hooks)]
-  end
-
-  RUI-->RSVC-->RSC-->RV3
-  CUI-->CAPIs-->CSC-->CV4
-```
-
----|---|---|
-| **Primary Protocol (now)** | Uniswap **V3** (mature auto-compound, analytics) | Uniswap **V4** (native hooks), V3-ready via adapter |
-| **Architecture Layers** | UI ↔ Data Services ↔ Contracts | UI ↔ API/Indexer/Jobs ↔ Contracts (same structure) |
-| **Contract Pattern** | Per-vault/position managers (non-proxy in many cases) | **UUPS proxy** core + **adapter layer** for protocols |
-| **Upgradeability** | Mixed (often upgrades via new deployments) | Timelocked **UUPS** upgrades + storage gaps |
-| **Protocol Abstraction** | V3-specific tooling | `ILiquidityAdapter` (V4 today; V3/Algebra/Ambient tomorrow) |
-| **Hooks Dependency** | N/A (V3) | V4 **HookAdapter**, hook risk registry (codehash, owner) |
-| **MEV Protections** | Slippage/TTL; some private routing | **TWAP-gated**, hybrid Oracle (TWAP+CL), private orderflow, atomic compound |
-| **Compounding** | Automated vaults, performance fee | Manual first; auto-compounder as V1.5 (FeeCollector switch) |
-| **Pool Selection** | By fee tier & depth; V3 fewer pools | V4 fragmentation handled by allowlist + scoring (APR/Depth/HookRisk) |
-| **Indexing** | Proprietary + The Graph | **Ponder** (TS-native) + Postgres + BullMQ jobs |
-| **Analytics** | APR, backtests, incentives | APR7/30, PnL, health, tick charts (extensible) |
-| **Lending** | Revert Lend (LP NFT collateral) | Deferred (Phase 2), compatible with adapter & oracle design |
-| **Gas Strategy** | Standard modify flows | Heuristic: modify vs burn+mint, grid-snap, simulation gates |
-| **Custody** | Non-custodial | Non-custodial, approvals via Permit2 |
-| **Gasless** | Not core | Optional **Paymaster** stubs (off by default) |
 
 ### Side-by-Side Diagram (Conceptual)
 
@@ -364,7 +259,7 @@ flowchart LR
   subgraph Revert
     RUI[Revert UI]
     RSVC[Data Services / Backtests]
-    RSC[Contracts (V3 Position Mgmt / Vaults)]
+    RSC["Contracts (V3 Position Mgmt / Vaults)"]
     RV3[(Uniswap V3)]
   end
 
