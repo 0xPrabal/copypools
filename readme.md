@@ -207,7 +207,7 @@ Chainlink becomes necessary only when you introduce USD valuation, lending, or m
 drafting start for  V1.5 plan (auto-compounder, referrals, scoring splits, Paymaster).
 **Exit Criteria:** Stable mainnet for 7d; KPIs tracked (success rate). **(M5)**
 
-### Mermaid Gantt (Paste-ready)
+### Mermaid Gantt
 <img width="971" height="247" alt="Screenshot 2025-10-29 at 8 09 48 PM" src="https://github.com/user-attachments/assets/350c4a55-5c97-457b-890b-85a6807feb7f" />
 
 
