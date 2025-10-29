@@ -4,7 +4,7 @@
 
 **Copy Pools** is a Revert-like liquidity management platform built initially for **Uniswap v4**. It allows users to manage LP positions—create, join, adjust ranges, claim fees, and manually compound rewards—through a decentralized, non-custodial interface.
 
-The architecture is designed to scale horizontally across **multiple protocols (v3, v4, Algebra, Ambient)** and **multiple chains (Base, Arbitrum, Polygon)** in later phases.
+The architecture is designed to scale horizontally across **multiple protocols (v3, v4, sushiswap, Pancake)** and **multiple chains (Base, Arbitrum, Polygon)** in later phases.
 
 ---
 
