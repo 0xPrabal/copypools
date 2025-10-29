@@ -28,9 +28,8 @@ The architecture is designed to scale horizontally across **multiple protocols (
 * **Responsibilities:** wallet connect, pool/position views, tx builders (add/remove/compound/move), analytics visualization (APR, PnL, in-range health, tick charts).
 * **State/Data:** TanStack Query for API reads; Zustand for ephemeral UI state; request deduplication & optimistic updates on tx submit.
 * **Safety UX:** slippage & TTL inputs, route preview, oracle badges (TWAP vs Chainlink deviation), gas estimates, failure fallbacks.
-* **Extensibility:** feature flags (env-based) to toggle Paymaster, private orderflow, and pool allowlist badges.
 
-### 2) API Services (Hono/Express)
+### 2) API Services (Express)
 
 * **Responsibilities:** expose normalized read models: positions, actions, pool metrics (APR/price/tick/TVL), health scores; serve chart data; gatekeeper for heavy queries.
 * **Composition:** stateless REST; reads from Postgres; caches hot paths in Redis with short TTLs; pushes heavy work to BullMQ workers.
@@ -49,7 +48,7 @@ The architecture is designed to scale horizontally across **multiple protocols (
 ### 4) Workers (BullMQ → Redis)
 
 * **Responsibilities:** periodic APR7/APR30 computation, tick snapshots, health scoring, pool scoring (APR·Depth·HookRisk), cache warmers.
-* **Reliability:** retries (exponential backoff), dead-letter queue, metrics via bull-board + Prometheus exporters.
+* **Reliability:** retries (exponential backoff), dead-letter queue, metrics.
 
 ### 5) Smart Contracts (UUPS)
 
@@ -61,12 +60,12 @@ The architecture is designed to scale horizontally across **multiple protocols (
 ### 6) Oracles & MEV Controls
 
 * **Hybrid Oracle:** action guarded if `|TWAP - Chainlink| > threshold`.
-* **MEV Mitigation:** exact-output swaps with `minReceive`, atomic collect→swap→add, TWAP gating, optional private submission (Flashbots/MEV-Share), chunked large moves.
+* **MEV Mitigation:** exact-output swaps with `minReceive`, atomic collect→swap→add, TWAP gating.
 
 ### 7) Security & Governance
 
 * **Security:** checks-effects-interactions, reentrancy guards, bounded external calls, revert-reason surfacing; fuzz/invariant tests.
-* **Governance:** roles via OZ AccessControl; `UPGRADER_ROLE` behind timelocked multisig; emergency `pausePool(pool)`.
+* **Governance:** roles via OZ AccessControl;
 
 ---
 
@@ -122,8 +121,8 @@ GET /actions?owner=0x...
 
 * **TWAP-gated execution** to avoid flashloan-based price spikes.
 * **Exact-output swaps** with `minReceive` + TTL for compounding.
-* **Hybrid Oracle**: abort if |TWAP - Chainlink| > 1%.
-* **Optional private orderflow (Flashbots/MEV-Share)** for large positions.
+* **Hybrid Oracle**: we can absolutely ship Copy Pools V1 on TWAP only, because all critical operations (add/remove/compound) are local to Uniswap V4.
+Chainlink becomes necessary only when you introduce USD valuation, lending, or multi-protocol integration.
 
 ---
 
@@ -135,7 +134,7 @@ GET /actions?owner=0x...
 | Indexer   | Ponder             | Real-time event processing |
 | Database  | Postgres           | Persistent position data   |
 | Queue     | BullMQ + Redis     | APR/health background jobs |
-| API       | Express/Hono       | REST endpoints for UI      |
+| API       | Express            | REST endpoints for UI      |
 | Web       | Next.js 14 + Wagmi | Vercel hosted              |
 
 ---
@@ -158,63 +157,55 @@ GET /actions?owner=0x...
 
 * Finalizing diagrams, storage layout, adapter interfaces (`ILiquidityAdapter`, `IRouter`), upgrade plan (UUPS).
 * Monorepo (Turborepo) with packages: `contracts/`, `apps/web/`, `services/api/`, `indexers/ponder/`, `packages/shared/`.
-* Docker Compose (Postgres, Redis), local Uniswap v4 fork; CI (lint, typecheck, unit/forge, gas snapshots).
-  **Exit Criteria:** CI green, local `make up` brings full stack.
-  **Artifacts:** `/docs/arch.md`, `/docs/adr/0001-uups.md`.
+* Docker Compose (Postgres, Redis), local Uniswap v4 .
+  
 
 #### **Week 2 — Contracts I (LP Core)**
 
 **Deliverables:** `LPManager (UUPS)` with `addLiquidity`, `removeLiquidity`, core events; `HookAdapterV4` stub; `PositionMeta` mappings; Foundry unit tests.
-**Exit Criteria:** add/remove pass on local fork; >70% cov; proxy upgrade smoke test.
-**Artifacts:** `artifacts/LPManager.json`, `deploy/00_deploy.ts`.
+**Exit Criteria:** add/remove pass on local fork,testnet; >70% cov; proxy upgrade smoke test.
+
 
 #### **Week 3 — Contracts II (Compound & Range)**
 
-**Deliverables:** `claimFees`, `manualCompound`, `moveRange`; `RangeHelper`; `FeeCollector` stub; permit2; TWAP reads; invariant/fuzz suite; reentrancy guards.
+**Deliverables:** `claimFees`, `manualCompound`, `moveRange`; `RangeHelper`; `FeeCollector` ; TWAP reads; reentrancy guards.
 **Exit Criteria:** >85% coverage; invariants pass; gas deltas recorded. **(M1)**
-**Artifacts:** `reports/coverage.html`, `reports/gas.md`.
 
 #### **Week 4 — Services I (API & Indexer Bootstrapping)**
 
-**Deliverables:** Ponder entities (`Position`, `Pool`, `Action`); Postgres migrations; REST endpoints: `/positions`, `/positions/:id`, `/actions`; BullMQ workers (retry/backoff/DLQ).
+**Deliverables:** Ponder entities (`Position`, `Pool`, `Action`); Postgres migrations; REST endpoints: `/positions`, `/positions/:id`, `/actions`; BullMQ workers (retry/backoff).
 **Exit Criteria:** create position → indexed → visible via API.
-**Artifacts:** `openapi.yaml`, `migrations/*.sql`.
 
 #### **Week 5 — Web I (Core Flows on Testnet)**
 
 **Deliverables:** Wallet connect (MetaMask/Rabby); Pool List/Detail; Add/Remove forms with preview (slippage, TTL, gas); testnet deploy & verify; public staging URL.
 **Exit Criteria:** first add/remove succeeds on testnet. **(M2)**
-**Artifacts:** `apps/web/.env.staging`, explorer links, staging URL.
 
 #### **Week 6 — Web II (Claim/Compound + Analytics)**
 
 **Deliverables:** Claim & Manual Compound UI; analytics jobs (APR7/30, tick snapshots); health metric (in-range %, distance to bounds); `/pools/:id/metrics` API; hybrid oracle checks.
 **Exit Criteria:** APR & health visible in UI; compound works on testnet. **(M3)**
-**Artifacts:** `dashboards/metrics.json`, screenshots for docs.
 
 #### **Week 7 — Quality & Performance**
 
-**Deliverables:** UI polish (range slider, tick grid perf); API caching/pagination/rate limits; indexer backfills & replay; contract gas optimizations (modify vs burn+mint thresholds).
-**Exit Criteria:** Playwright e2e pass; p95 API <300ms on staging; **M3 reinforced**.
-**Artifacts:** `reports/perf.md`, `playwright-report/`.
+**Deliverables:** UI polish (range slider, tick grid perf); API caching/pagination/rate limits; indexer backfills & replay; contract gas optimizations (modify ).
+**Exit Criteria:** everything working **M3 reinforced**.
 
 #### **Week 8 — Security, Ops & Governance**
 
-**Deliverables:** Slither/Mythril static, Echidna fuzz; pause switches per pool; timelock setup; monitoring (Sentry, Prometheus/Grafana), bull-board; incident runbooks.
+**Deliverables:** Slither; (pause switches per pool) need to discuss; timelock setup; monitoring (Sentry), bull-board; incident runbooks.
 **Exit Criteria:** audit checklist complete; monitoring live; beta flag on.
-**Artifacts:** `docs/security-checklist.md`, `docs/runbooks/*.md`.
 
 #### **Week 9 — Beta & Onboarding**
 
 **Deliverables:** Onboarding guides, tooltips, risk disclaimers; pool allowlist UI + HookRisk badges; mainnet rehearsal; migration scripts; versioned release notes.
 **Exit Criteria:** beta build approved; dry-run mainnet deploy passes. **(M4)**
-**Artifacts:** `CHANGELOG.md`, `scripts/migrate.ts`.
 
 #### **Week 10 — Launch & Feedback Loop**
 
-**Deliverables:** Mainnet deploy & verification; API + workers prod; indexer backfill & cache warm; telemetry (PostHog/Sentry); feedback intake; draft V1.5 plan (auto-compounder, referrals, scoring splits, Paymaster).
-**Exit Criteria:** Stable mainnet for 7d; KPIs tracked (DAU, positions, success rate). **(M5)**
-**Artifacts:** `addresses.json`, `ABIs/`, `docs/v1.5-plan.md`.
+**Deliverables:** Mainnet deploy & verification; API + workers prod; indexer backfill & cache warm; telemetry (PostHog/Sentry); feedback intake;
+drafting start for  V1.5 plan (auto-compounder, referrals, scoring splits, Paymaster).
+**Exit Criteria:** Stable mainnet for 7d; KPIs tracked (success rate). **(M5)**
 
 ### Mermaid Gantt (Paste-ready)
 <img width="971" height="247" alt="Screenshot 2025-10-29 at 8 09 48 PM" src="https://github.com/user-attachments/assets/350c4a55-5c97-457b-890b-85a6807feb7f" />
@@ -278,8 +269,8 @@ flowchart LR
 
 1. **V4-native**: Hooks-aware adapter and hook risk registry.
 2. **Upgrade-ready**: UUPS + timelock from day one (no full redeploys for small changes).
-3. **Extensibility**: Clean `ILiquidityAdapter` lets us add Algebra/Ambient without touching the core.
-4. **Safety-first**: TWAP gates + Chainlink sanity + private orderflow + atomic compound.
+3. **Extensibility**: Clean `ILiquidityAdapter` lets us add pancake/v3 without touching the core.
+4. **Safety-first**: TWAP gates + Chainlink sanity.
 5. **Data velocity**: Ponder + BullMQ = faster iteration vs heavy Graph pipelines.
 
 ---
@@ -291,17 +282,16 @@ flowchart LR
 * **Uniswap v3 Adapter:** reuse `ILiquidityAdapter` to support NFT positions; adjust tick math; disable hook-specific paths.
 * **SushiSwap Adapter:** for chains where Sushi uses V3-style concentrated liquidity; normalize fee collection and modify flows.
 * **PancakeSwap (v3/v4):** v3 parity with Uni v3; if v4-equivalent launches, reuse HookAdapter with chain/protocol registry.
-* **Algebra / Ambient:** integrate non-uni math & pool discovery; ensure APR calculations align with protocol fee mechanics.
 
-### 2) Strategy Layer (V1.5+)
+### 2) Strategy Layer (V1.5+ future scope)
 
 * **Auto-Compounder Vaults:** separate strategy contracts that call LPManager; optional performance fee via `FeeCollector`.
 * **Rebalancing Policies:** grid/capped-volatility/vol-target — configurable templates per user or per pool.
-* **Pool Selection Engine:** scoring with incentives feeds; optional split across top-N pools.
+* **Pool Selection Engine:** scoring with incentives feeds;
 
 ### 3) Cross-Chain & Gasless
 
-* **Cross-Chain LP:** CCIP/LxLy message layer; mirrored metadata; off-chain coordination for quotes.
+* **Cross-Chain LP:** CCIP message layer; mirrored metadata; off-chain coordination for quotes.
 * **Gasless:** Paymaster integration with policy (cap per wallet, volume-based allowlist); never custodial.
 
 ### 4) Lending / Borrowing (Phase 2)
