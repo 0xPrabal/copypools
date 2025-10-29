@@ -316,5 +316,5 @@ flowchart LR
 
 1. MVP target chain (Base, Arbitrum, or Polygon)?
 2. Curated vs custom pool creation?
-3. APR window default (7d/30d/90d) and preferred charting lib?
+3. APR window default and preferred charting lib?
 4. Prioritize Paymaster in V1 or defer to V1.5?
