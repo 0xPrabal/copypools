@@ -50,6 +50,9 @@ The architecture is designed to scale horizontally across **multiple protocols (
 * **Responsibilities:** periodic APR7/APR30 computation, tick snapshots, health scoring, pool scoring (APR·Depth·HookRisk), cache warmers.
 * **Reliability:** retries (exponential backoff), dead-letter queue, metrics.
 
+
+<img width="886" height="608" alt="Screenshot 2025-11-04 at 5 30 47 PM" src="https://github.com/user-attachments/assets/60f66324-0674-44fd-a2de-27f1f4b9cf70" />
+
 ### 5) Smart Contracts (UUPS)
 
 * **LPManager:** validates inputs, routes to adapters, emits canonical events; enforces minOut/TTL; integrates permit2; pausable per-pool; timelocked upgrades.
