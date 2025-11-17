@@ -14,6 +14,8 @@ import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {FixedPoint96} from "@uniswap/v4-core/src/libraries/FixedPoint96.sol";
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
@@ -1037,21 +1039,40 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
         uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(pos.tickLower);
         uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(pos.tickUpper);
 
-        // Calculate amounts based on price position
-        // This is a simplified estimation
+        // Calculate amounts using Uniswap V4 math (reverse of getLiquidityForAmounts)
+        // Based on official Uniswap formulas
         if (sqrtPriceX96 <= sqrtPriceAX96) {
             // Price below range - all token1
+            // amount1 = liquidity * (sqrtPriceA - sqrtPriceX96) / 2^96
             amount0 = 0;
-            amount1 = uint256(pos.liquidity) * uint256(sqrtPriceAX96 - sqrtPriceX96) / (1 << 96);
+            amount1 = FullMath.mulDiv(
+                pos.liquidity,
+                sqrtPriceAX96 - sqrtPriceX96,
+                FixedPoint96.Q96
+            );
         } else if (sqrtPriceX96 >= sqrtPriceBX96) {
             // Price above range - all token0
-            amount0 = uint256(pos.liquidity) / uint256(sqrtPriceX96 - sqrtPriceBX96) * (1 << 96);
+            // amount0 = liquidity * (sqrtPriceB - sqrtPriceX96) / (sqrtPriceX96 * sqrtPriceB / 2^96)
+            amount0 = FullMath.mulDiv(
+                pos.liquidity,
+                sqrtPriceBX96 - sqrtPriceAX96,
+                FullMath.mulDiv(sqrtPriceBX96, sqrtPriceAX96, FixedPoint96.Q96)
+            );
             amount1 = 0;
         } else {
             // Price in range - both tokens
-            // Simplified calculation (not exact, but close enough for display)
-            amount0 = uint256(pos.liquidity) * uint256(sqrtPriceBX96 - sqrtPriceX96) / (1 << 96);
-            amount1 = uint256(pos.liquidity) * uint256(sqrtPriceX96 - sqrtPriceAX96) / (1 << 96);
+            // amount0 = liquidity * (sqrtPriceB - sqrtPriceX96) / (sqrtPriceX96 * sqrtPriceB / 2^96)
+            amount0 = FullMath.mulDiv(
+                pos.liquidity,
+                sqrtPriceBX96 - sqrtPriceX96,
+                FullMath.mulDiv(sqrtPriceBX96, sqrtPriceX96, FixedPoint96.Q96)
+            );
+            // amount1 = liquidity * (sqrtPriceX96 - sqrtPriceA) / 2^96
+            amount1 = FullMath.mulDiv(
+                pos.liquidity,
+                sqrtPriceX96 - sqrtPriceAX96,
+                FixedPoint96.Q96
+            );
         }
     }
 
