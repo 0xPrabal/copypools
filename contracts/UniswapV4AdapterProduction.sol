@@ -9,7 +9,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -67,6 +67,33 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
     /// @notice Approved operators for each position (position => operator => approved)
     mapping(uint256 => mapping(address => bool)) public approvedOperators;
 
+    /// @notice Price observation for TWAP
+    struct PriceObservation {
+        uint160 sqrtPriceX96;
+        uint32 timestamp;
+    }
+
+    /// @notice Maximum observations to store per pool
+    uint8 public constant MAX_OBSERVATIONS = 10;
+
+    /// @notice Price observations per pool (poolId => observations array)
+    mapping(bytes32 => PriceObservation[MAX_OBSERVATIONS]) public priceObservations;
+
+    /// @notice Current observation index per pool (poolId => index)
+    mapping(bytes32 => uint8) public observationIndex;
+
+    /// @notice Number of observations stored per pool (poolId => count)
+    mapping(bytes32 => uint8) public observationCount;
+
+    /// @notice Maximum allowed price deviation in basis points (default 5% = 500 bps)
+    uint16 public maxPriceDeviationBps = 500;
+
+    /// @notice Minimum TWAP window in seconds (default 5 minutes)
+    uint32 public minTWAPWindow = 300;
+
+    /// @notice Enable/disable TWAP validation
+    bool public twapValidationEnabled = true;
+
     /// @notice Events
     event PositionCreated(uint256 indexed id, address indexed owner, uint128 liquidity);
     event LiquidityChanged(uint256 indexed id, int256 delta);
@@ -76,6 +103,8 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
     event AutoCompounded(uint256 indexed id, uint256 fee0, uint256 fee1, uint128 liquidityAdded);
     event OperatorApproved(uint256 indexed positionId, address indexed operator, bool approved);
     event RangeMoved(uint256 indexed oldPositionId, uint256 indexed newPositionId, int24 newTickLower, int24 newTickUpper, uint128 newLiquidity);
+    event PriceObservationRecorded(bytes32 indexed poolId, uint160 sqrtPriceX96, uint32 timestamp);
+    event TWAPConfigUpdated(uint16 maxDeviationBps, uint32 minWindow, bool enabled);
 
     /// @notice Errors
     error InvalidPoolManager();
@@ -86,6 +115,7 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
     error TakeFailed();
     error SlippageCheckFailed(uint256 amount, uint256 minAmount);
     error DeadlineExpired();
+    error PriceDeviationTooHigh(uint256 spotPrice, uint256 twapPrice, uint256 deviationBps);
 
     /**
      * @notice Constructor
@@ -505,6 +535,11 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
             sqrtPriceX96 = TickMath.getSqrtPriceAtTick(0);
         }
 
+        // TWAP validation: Check price manipulation (only if pool initialized)
+        if (sqrtPriceX96 != 0) {
+            _updateAndValidatePrice(PoolId.unwrap(key.toId()), sqrtPriceX96);
+        }
+
         uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(params.pool.tickLower);
         uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(params.pool.tickUpper);
 
@@ -734,6 +769,9 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
         // STEP 2: Calculate liquidity from collected fees
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, pos.key.toId());
 
+        // TWAP validation: Check price manipulation
+        _updateAndValidatePrice(PoolId.unwrap(pos.key.toId()), sqrtPriceX96);
+
         uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(pos.tickLower);
         uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(pos.tickUpper);
 
@@ -825,6 +863,10 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
 
         // STEP 2: Calculate optimal liquidity for new range
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, oldPos.key.toId());
+
+        // TWAP validation: Check price manipulation
+        _updateAndValidatePrice(PoolId.unwrap(oldPos.key.toId()), sqrtPriceX96);
+
         uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(newTickLower);
         uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(newTickUpper);
 
@@ -1243,5 +1285,174 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
     {
         PoolKey memory key = _buildPoolKey(poolData);
         liquidity = StateLibrary.getLiquidity(poolManager, key.toId());
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // TWAP / Oracle Functions
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * @notice Record a price observation for TWAP calculation
+     * @param poolId The pool ID to record observation for
+     * @param sqrtPriceX96 The current sqrt price
+     */
+    function _recordPriceObservation(bytes32 poolId, uint160 sqrtPriceX96) internal {
+        uint32 timestamp = uint32(block.timestamp);
+        uint8 index = observationIndex[poolId];
+        uint8 count = observationCount[poolId];
+
+        // Store observation in circular buffer
+        priceObservations[poolId][index] = PriceObservation({
+            sqrtPriceX96: sqrtPriceX96,
+            timestamp: timestamp
+        });
+
+        // Update index (circular)
+        observationIndex[poolId] = (index + 1) % MAX_OBSERVATIONS;
+
+        // Update count (max at MAX_OBSERVATIONS)
+        if (count < MAX_OBSERVATIONS) {
+            observationCount[poolId] = count + 1;
+        }
+
+        emit PriceObservationRecorded(poolId, sqrtPriceX96, timestamp);
+    }
+
+    /**
+     * @notice Calculate TWAP from stored observations
+     * @param poolId The pool ID to calculate TWAP for
+     * @return twapSqrtPriceX96 The time-weighted average sqrt price
+     * @return isValid Whether TWAP is valid (enough observations and time window)
+     */
+    function _calculateTWAP(bytes32 poolId) internal view returns (uint160 twapSqrtPriceX96, bool isValid) {
+        uint8 count = observationCount[poolId];
+
+        // Need at least 2 observations
+        if (count < 2) {
+            return (0, false);
+        }
+
+        uint8 index = observationIndex[poolId];
+        uint32 currentTime = uint32(block.timestamp);
+
+        // Calculate oldest observation index
+        uint8 oldestIndex = count < MAX_OBSERVATIONS ? 0 : index;
+        PriceObservation memory oldestObs = priceObservations[poolId][oldestIndex];
+
+        // Check if time window is sufficient
+        uint32 timeWindow = currentTime - oldestObs.timestamp;
+        if (timeWindow < minTWAPWindow) {
+            return (0, false);
+        }
+
+        // Calculate time-weighted average
+        uint256 sumWeightedPrice = 0;
+        uint256 totalWeight = 0;
+
+        for (uint8 i = 0; i < count; i++) {
+            PriceObservation memory obs = priceObservations[poolId][i];
+
+            // Calculate time weight (time until next observation or now)
+            uint32 nextTime;
+            if (i == count - 1) {
+                nextTime = currentTime;
+            } else {
+                uint8 nextIdx = (i + 1) % MAX_OBSERVATIONS;
+                nextTime = priceObservations[poolId][nextIdx].timestamp;
+            }
+
+            uint32 weight = nextTime - obs.timestamp;
+            sumWeightedPrice += uint256(obs.sqrtPriceX96) * weight;
+            totalWeight += weight;
+        }
+
+        if (totalWeight == 0) {
+            return (0, false);
+        }
+
+        twapSqrtPriceX96 = uint160(sumWeightedPrice / totalWeight);
+        isValid = true;
+    }
+
+    /**
+     * @notice Validate price against TWAP with deviation check
+     * @param poolId The pool ID to validate
+     * @param spotSqrtPriceX96 The current spot price
+     */
+    function _validatePriceDeviation(bytes32 poolId, uint160 spotSqrtPriceX96) internal view {
+        // Skip if TWAP validation is disabled
+        if (!twapValidationEnabled) {
+            return;
+        }
+
+        // Calculate TWAP
+        (uint160 twapSqrtPriceX96, bool isValid) = _calculateTWAP(poolId);
+
+        // Skip if not enough data yet
+        if (!isValid) {
+            return;
+        }
+
+        // Calculate deviation in basis points
+        uint256 spotPrice = uint256(spotSqrtPriceX96);
+        uint256 twapPrice = uint256(twapSqrtPriceX96);
+
+        uint256 deviation;
+        if (spotPrice > twapPrice) {
+            deviation = ((spotPrice - twapPrice) * 10000) / twapPrice;
+        } else {
+            deviation = ((twapPrice - spotPrice) * 10000) / twapPrice;
+        }
+
+        // Revert if deviation exceeds threshold
+        if (deviation > maxPriceDeviationBps) {
+            revert PriceDeviationTooHigh(spotPrice, twapPrice, deviation);
+        }
+    }
+
+    /**
+     * @notice Update price observation and validate (public helper)
+     * @param poolId The pool ID
+     * @param sqrtPriceX96 The current sqrt price
+     */
+    function _updateAndValidatePrice(bytes32 poolId, uint160 sqrtPriceX96) internal {
+        // Validate against existing TWAP
+        _validatePriceDeviation(poolId, sqrtPriceX96);
+
+        // Record new observation
+        _recordPriceObservation(poolId, sqrtPriceX96);
+    }
+
+    /**
+     * @notice Get TWAP for a pool (view function)
+     * @param poolId The pool ID
+     * @return sqrtPriceX96 The TWAP sqrt price
+     * @return isValid Whether TWAP is valid
+     */
+    function getTWAP(bytes32 poolId) external view returns (uint160 sqrtPriceX96, bool isValid) {
+        return _calculateTWAP(poolId);
+    }
+
+    /**
+     * @notice Configure TWAP parameters (only owner)
+     * @param _maxDeviationBps Maximum price deviation in basis points
+     * @param _minWindow Minimum TWAP window in seconds
+     * @param _enabled Enable/disable TWAP validation
+     */
+    function setTWAPConfig(uint16 _maxDeviationBps, uint32 _minWindow, bool _enabled) external onlyOwner {
+        maxPriceDeviationBps = _maxDeviationBps;
+        minTWAPWindow = _minWindow;
+        twapValidationEnabled = _enabled;
+        emit TWAPConfigUpdated(_maxDeviationBps, _minWindow, _enabled);
+    }
+
+    /**
+     * @notice Manually record price observation (only owner, for initialization)
+     * @param poolData Pool configuration
+     */
+    function recordPriceObservation(IAdapter.PoolData calldata poolData) external onlyOwner {
+        PoolKey memory key = _buildPoolKey(poolData);
+        (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
+        _recordPriceObservation(PoolId.unwrap(key.toId()), sqrtPriceX96);
     }
 }
