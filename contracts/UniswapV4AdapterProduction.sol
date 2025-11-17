@@ -48,7 +48,8 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
         COLLECT,
         BURN,
         SWAP,
-        AUTO_COMPOUND
+        AUTO_COMPOUND,
+        MOVE_RANGE
     }
 
     /// @notice Position information
@@ -74,6 +75,7 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
     event SwapExecuted(address indexed pool, bool zeroForOne, int256 amount0, int256 amount1);
     event AutoCompounded(uint256 indexed id, uint256 fee0, uint256 fee1, uint128 liquidityAdded);
     event OperatorApproved(uint256 indexed positionId, address indexed operator, bool approved);
+    event RangeMoved(uint256 indexed oldPositionId, uint256 indexed newPositionId, int24 newTickLower, int24 newTickUpper, uint128 newLiquidity);
 
     /// @notice Errors
     error InvalidPoolManager();
@@ -280,6 +282,51 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
     }
 
     /**
+     * @notice Move position to a new range (like Revert Finance)
+     * @dev Withdraws from old position, swaps if needed, creates new position at new range
+     * @param oldTokenId The position to move
+     * @param newTickLower New lower tick
+     * @param newTickUpper New upper tick
+     * @param amount0Min Minimum amount0 for slippage protection
+     * @param amount1Min Minimum amount1 for slippage protection
+     * @param deadline Timestamp after which the transaction will revert
+     * @return newTokenId The new position ID
+     * @return liquidity Liquidity of new position
+     */
+    function moveRange(
+        uint256 oldTokenId,
+        int24 newTickLower,
+        int24 newTickUpper,
+        uint256 amount0Min,
+        uint256 amount1Min,
+        uint256 deadline
+    )
+        external
+        checkDeadline(deadline)
+        returns (uint256 newTokenId, uint128 liquidity)
+    {
+        // Check authorization
+        if (!isAuthorized(oldTokenId, msg.sender)) revert Unauthorized();
+
+        // Validate new range
+        if (newTickLower >= newTickUpper) revert InvalidPosition();
+
+        // Execute move via unlock callback
+        bytes memory data = abi.encode(
+            Action.MOVE_RANGE,
+            oldTokenId,
+            newTickLower,
+            newTickUpper,
+            amount0Min,
+            amount1Min
+        );
+        bytes memory result = poolManager.unlock(data);
+        (newTokenId, liquidity) = abi.decode(result, (uint256, uint128));
+
+        emit RangeMoved(oldTokenId, newTokenId, newTickLower, newTickUpper, liquidity);
+    }
+
+    /**
      * @inheritdoc IAdapter
      * @notice Burns a position by removing all liquidity and collecting all fees
      */
@@ -436,6 +483,7 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
         if (action == Action.BURN) return _handleBurn(data);
         if (action == Action.SWAP) return _handleSwap(data);
         if (action == Action.AUTO_COMPOUND) return _handleAutoCompound(data);
+        if (action == Action.MOVE_RANGE) return _handleMoveRange(data);
 
         revert();
     }
@@ -735,6 +783,113 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
         }
 
         return abi.encode(fee0, fee1, liquidityToAdd);
+    }
+
+    /**
+     * @dev Handle move range - withdraw from old position and create new position
+     */
+    function _handleMoveRange(bytes calldata data) internal returns (bytes memory) {
+        (
+            ,
+            uint256 oldId,
+            int24 newTickLower,
+            int24 newTickUpper,
+            uint256 amount0Min,
+            uint256 amount1Min
+        ) = abi.decode(data, (Action, uint256, int24, int24, uint256, uint256));
+
+        Position storage oldPos = positions[oldId];
+
+        // STEP 1: Withdraw all liquidity from old position
+        ModifyLiquidityParams memory withdrawParams = ModifyLiquidityParams({
+            tickLower: oldPos.tickLower,
+            tickUpper: oldPos.tickUpper,
+            liquidityDelta: -int256(uint256(oldPos.liquidity)),
+            salt: bytes32(0)
+        });
+
+        (BalanceDelta withdrawDelta,) = poolManager.modifyLiquidity(oldPos.key, withdrawParams, "");
+
+        // Take withdrawn tokens from PoolManager
+        uint256 amount0;
+        uint256 amount1;
+
+        if (withdrawDelta.amount0() > 0) {
+            amount0 = uint256(int256(withdrawDelta.amount0()));
+            _take(oldPos.key.currency0, address(this), amount0);
+        }
+        if (withdrawDelta.amount1() > 0) {
+            amount1 = uint256(int256(withdrawDelta.amount1()));
+            _take(oldPos.key.currency1, address(this), amount1);
+        }
+
+        // STEP 2: Calculate optimal liquidity for new range
+        (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, oldPos.key.toId());
+        uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(newTickLower);
+        uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(newTickUpper);
+
+        uint128 newLiquidity = LiquidityAmounts.getLiquidityForAmounts(
+            sqrtPriceX96,
+            sqrtPriceAX96,
+            sqrtPriceBX96,
+            amount0,
+            amount1
+        );
+
+        // STEP 3: Create new position at new range
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: newTickLower,
+            tickUpper: newTickUpper,
+            liquidityDelta: int256(uint256(newLiquidity)),
+            salt: bytes32(0)
+        });
+
+        (BalanceDelta addDelta,) = poolManager.modifyLiquidity(oldPos.key, addParams, "");
+
+        // Settle tokens with PoolManager
+        uint256 used0;
+        uint256 used1;
+
+        if (addDelta.amount0() < 0) {
+            used0 = uint256(uint128(-addDelta.amount0()));
+            _settle(oldPos.key.currency0, used0);
+        }
+        if (addDelta.amount1() < 0) {
+            used1 = uint256(uint128(-addDelta.amount1()));
+            _settle(oldPos.key.currency1, used1);
+        }
+
+        // Slippage check
+        if (used0 < amount0Min || used1 < amount1Min) {
+            revert SlippageCheckFailed(used0 < amount0Min ? used0 : used1, used0 < amount0Min ? amount0Min : amount1Min);
+        }
+
+        // STEP 4: Create new position record
+        uint256 newId = _nextTokenId++;
+
+        positions[newId] = Position({
+            key: oldPos.key,
+            owner: oldPos.owner,
+            tickLower: newTickLower,
+            tickUpper: newTickUpper,
+            liquidity: newLiquidity
+        });
+
+        // STEP 5: Refund leftover tokens to user
+        uint256 leftover0 = amount0 > used0 ? amount0 - used0 : 0;
+        uint256 leftover1 = amount1 > used1 ? amount1 - used1 : 0;
+
+        if (leftover0 > 0) {
+            _transferOut(oldPos.key.currency0, oldPos.owner, leftover0);
+        }
+        if (leftover1 > 0) {
+            _transferOut(oldPos.key.currency1, oldPos.owner, leftover1);
+        }
+
+        // STEP 6: Delete old position
+        delete positions[oldId];
+
+        return abi.encode(newId, newLiquidity);
     }
 
     /**
