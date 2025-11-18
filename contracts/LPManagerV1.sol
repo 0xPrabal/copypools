@@ -219,6 +219,7 @@ contract LPManagerV1 is UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgr
         // Step 3: Optional swap for rebalancing
         if (doSwap && swapData.length > 0) {
             (remaining0, remaining1) = _performSwap(
+                positionId,
                 position.token0,
                 position.token1,
                 remaining0,
@@ -263,6 +264,7 @@ contract LPManagerV1 is UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgr
         address adapter = adapters[protocolHash];
 
         // Remove liquidity (deadline: 1 hour from now)
+        // Note: decreaseLiquidity automatically includes accumulated fees in the returned amounts
         (uint256 amount0, uint256 amount1) = IAdapter(adapter).decreaseLiquidity(
             position.dexTokenId,
             liquidity,
@@ -271,8 +273,8 @@ contract LPManagerV1 is UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgr
             block.timestamp + 3600
         );
 
-        // Collect any remaining fees (deadline: 1 hour from now)
-        IAdapter(adapter).collectFees(position.dexTokenId, block.timestamp + 3600);
+        // No need to call collectFees separately - fees are already included in amount0/amount1
+        // Calling collectFees on a zero-liquidity position would revert with CannotUpdateEmptyPosition
 
         // Transfer tokens to user
         if (amount0 > 0) {
@@ -320,6 +322,7 @@ contract LPManagerV1 is UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgr
 
     /**
      * @dev Internal function to perform token swaps for rebalancing
+     * @param positionId The position ID
      * @param token0 First token address
      * @param token1 Second token address
      * @param amount0 Current amount of token0
@@ -329,6 +332,7 @@ contract LPManagerV1 is UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgr
      * @return newAmount1 Amount of token1 after swap
      */
     function _performSwap(
+        uint256 positionId,
         address token0,
         address token1,
         uint256 amount0,
@@ -339,14 +343,23 @@ contract LPManagerV1 is UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgr
         (IAdapter.PoolData memory poolData, bool zeroForOne, uint256 amountToSwap) =
             abi.decode(swapData, (IAdapter.PoolData, bool, uint256));
 
-        // Get adapter for this position's protocol
-        Position storage position = positions[_nextPositionId - 1];
+        // Get adapter for this position's protocol using the correct position ID
+        Position storage position = positions[positionId];
+        if (!position.active) revert PositionNotFound();
+
         bytes32 protocolHash = keccak256(bytes(position.protocol));
         address adapter = adapters[protocolHash];
 
         if (adapter == address(0) || amountToSwap == 0) {
             // No swap needed or adapter not found
             return (amount0, amount1);
+        }
+
+        // Validate swap amount doesn't exceed available balance
+        if (zeroForOne) {
+            if (amountToSwap > amount0) revert("Swap amount exceeds balance");
+        } else {
+            if (amountToSwap > amount1) revert("Swap amount exceeds balance");
         }
 
         // Approve adapter to spend the input token
@@ -368,14 +381,26 @@ contract LPManagerV1 is UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgr
             // Swapped token0 for token1
             // delta0 should be negative (we paid token0)
             // delta1 should be positive (we received token1)
-            newAmount0 = amount0 - (delta0 < 0 ? uint256(-delta0) : 0);
-            newAmount1 = amount1 + (delta1 > 0 ? uint256(delta1) : 0);
+            uint256 paid0 = delta0 < 0 ? uint256(-delta0) : 0;
+            uint256 received1 = delta1 > 0 ? uint256(delta1) : 0;
+
+            // Ensure we didn't pay more than we intended
+            if (paid0 > amountToSwap) revert("Swap consumed more than expected");
+
+            newAmount0 = amount0 - paid0;
+            newAmount1 = amount1 + received1;
         } else {
             // Swapped token1 for token0
             // delta1 should be negative (we paid token1)
             // delta0 should be positive (we received token0)
-            newAmount0 = amount0 + (delta0 > 0 ? uint256(delta0) : 0);
-            newAmount1 = amount1 - (delta1 < 0 ? uint256(-delta1) : 0);
+            uint256 received0 = delta0 > 0 ? uint256(delta0) : 0;
+            uint256 paid1 = delta1 < 0 ? uint256(-delta1) : 0;
+
+            // Ensure we didn't pay more than we intended
+            if (paid1 > amountToSwap) revert("Swap consumed more than expected");
+
+            newAmount0 = amount0 + received0;
+            newAmount1 = amount1 - paid1;
         }
     }
 
@@ -435,6 +460,7 @@ contract LPManagerV1 is UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgr
         // Step 2: Swap to optimal ratio for new range if requested
         if (doSwap && swapData.length > 0) {
             (amount0, amount1) = _performSwap(
+                oldPositionId,
                 oldPos.token0,
                 oldPos.token1,
                 amount0,
