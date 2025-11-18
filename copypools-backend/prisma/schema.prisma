@@ -1,0 +1,102 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Position {
+  id            String        @id @default(uuid())
+  positionId    String        @unique @map("position_id")
+  protocol      String
+  dexTokenId    String        @map("dex_token_id")
+  owner         String
+  token0        String
+  token1        String
+  active        Boolean       @default(true)
+  tickLower     Int?          @map("tick_lower")
+  tickUpper     Int?          @map("tick_upper")
+  liquidity     String?
+
+  // Compound tracking
+  lastCompoundTxHash String?   @map("last_compound_tx_hash")
+  lastCompoundAt     DateTime? @map("last_compound_at")
+  compoundCount      Int       @default(0) @map("compound_count")
+
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  transactions  Transaction[]
+
+  @@map("positions")
+  @@index([owner])
+  @@index([active])
+}
+
+model Transaction {
+  id          String            @id @default(uuid())
+  positionId  String            @map("position_id")
+  type        TransactionType
+  status      TransactionStatus @default(PENDING)
+  txHash      String?           @map("tx_hash")
+  blockNumber Int?              @map("block_number")
+  gasUsed     String?           @map("gas_used")
+  metadata    Json?
+  errorMessage String?          @map("error_message") @db.Text
+
+  createdAt   DateTime          @default(now()) @map("created_at")
+
+  position    Position          @relation(fields: [positionId], references: [positionId])
+
+  @@map("transactions")
+  @@index([positionId])
+  @@index([type])
+  @@index([status])
+}
+
+model BlockchainEvent {
+  id          String    @id @default(uuid())
+  eventType   EventType @map("event_type")
+  positionId  String?   @map("position_id")
+  txHash      String    @map("tx_hash")
+  blockNumber Int       @map("block_number")
+  logIndex    Int       @map("log_index")
+  eventData   Json      @map("event_data")
+  processed   Boolean   @default(false)
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@map("blockchain_events")
+  @@index([eventType, blockNumber])
+  @@index([positionId])
+  @@index([processed])
+}
+
+enum TransactionType {
+  OPEN_POSITION
+  CLOSE_POSITION
+  MOVE_RANGE
+  COMPOUND
+  ADD_LIQUIDITY
+  REMOVE_LIQUIDITY
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum EventType {
+  POSITION_OPENED
+  POSITION_CLOSED
+  RANGE_MOVED
+  LIQUIDITY_ADDED
+  LIQUIDITY_REMOVED
+  FEES_COLLECTED
+}
