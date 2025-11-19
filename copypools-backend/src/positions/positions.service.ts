@@ -362,7 +362,7 @@ export class PositionsService {
 
   async getAllPositions(owner?: string) {
     return await this.prisma.position.findMany({
-      where: owner ? { owner } : undefined,
+      where: owner ? { owner: { equals: owner, mode: 'insensitive' } } : undefined,
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -450,7 +450,7 @@ export class PositionsService {
    */
   async getIndexedPositionsByOwner(owner: string) {
     return await this.prisma.ponderPosition.findMany({
-      where: { owner },
+      where: { owner: { equals: owner, mode: 'insensitive' } },
       orderBy: { createdAt: 'desc' },
     });
   }
