@@ -345,8 +345,8 @@ export class PositionsService {
       token0: blockchainPosition.token0,
       token1: blockchainPosition.token1,
       active: blockchainPosition.active,
-      tickLower: adapterPosition.tickLower,
-      tickUpper: adapterPosition.tickUpper,
+      tickLower: Number(adapterPosition.tickLower),
+      tickUpper: Number(adapterPosition.tickUpper),
       liquidity: adapterPosition.liquidity.toString(),
     };
 
@@ -372,5 +372,107 @@ export class PositionsService {
       where: { positionId },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  // ========================================
+  // Ponder Data Query Methods
+  // Query historical indexed data from Ponder
+  // ========================================
+
+  /**
+   * Get position history from Ponder indexed data
+   * Returns all range move events for a position
+   */
+  async getPositionHistory(positionId: string) {
+    const rangeMoves = await this.prisma.ponderRangeMoveEvent.findMany({
+      where: {
+        OR: [
+          { oldPositionId: positionId },
+          { newPositionId: positionId },
+        ],
+      },
+      orderBy: { timestamp: 'desc' },
+    });
+
+    return rangeMoves.map(event => ({
+      oldPositionId: event.oldPositionId,
+      newPositionId: event.newPositionId,
+      newTickLower: event.newTickLower,
+      newTickUpper: event.newTickUpper,
+      txHash: event.txHash,
+      blockNumber: Number(event.blockNumber),
+      timestamp: new Date(Number(event.timestamp) * 1000),
+    }));
+  }
+
+  /**
+   * Get compound events for a position from Ponder
+   */
+  async getPositionCompoundEvents(positionId: string) {
+    const compounds = await this.prisma.ponderCompoundEvent.findMany({
+      where: { positionId },
+      orderBy: { timestamp: 'desc' },
+    });
+
+    return compounds.map(event => ({
+      positionId: event.positionId,
+      addedLiquidity: event.addedLiquidity,
+      txHash: event.txHash,
+      blockNumber: Number(event.blockNumber),
+      timestamp: new Date(Number(event.timestamp) * 1000),
+    }));
+  }
+
+  /**
+   * Get close event for a position from Ponder
+   */
+  async getPositionCloseEvent(positionId: string) {
+    const closeEvent = await this.prisma.ponderCloseEvent.findFirst({
+      where: { positionId },
+    });
+
+    if (!closeEvent) {
+      return null;
+    }
+
+    return {
+      positionId: closeEvent.positionId,
+      amount0: closeEvent.amount0,
+      amount1: closeEvent.amount1,
+      txHash: closeEvent.txHash,
+      blockNumber: Number(closeEvent.blockNumber),
+      timestamp: new Date(Number(closeEvent.timestamp) * 1000),
+    };
+  }
+
+  /**
+   * Get all indexed positions for an owner from Ponder
+   */
+  async getIndexedPositionsByOwner(owner: string) {
+    return await this.prisma.ponderPosition.findMany({
+      where: { owner },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Get complete position timeline with all events
+   * Combines range moves, compounds, and close events
+   */
+  async getPositionTimeline(positionId: string) {
+    const [rangeMoves, compounds, closeEvent] = await Promise.all([
+      this.getPositionHistory(positionId),
+      this.getPositionCompoundEvents(positionId),
+      this.getPositionCloseEvent(positionId),
+    ]);
+
+    // Combine all events and sort by timestamp
+    const timeline = [
+      ...rangeMoves.map(e => ({ ...e, type: 'RANGE_MOVE' })),
+      ...compounds.map(e => ({ ...e, type: 'COMPOUND' })),
+      ...(closeEvent ? [{ ...closeEvent, type: 'CLOSE' }] : []),
+    ].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+
+    return timeline;
   }
 }

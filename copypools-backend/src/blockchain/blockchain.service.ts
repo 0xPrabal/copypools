@@ -37,6 +37,10 @@ export class BlockchainService implements OnModuleInit {
     const lpManagerAddress = this.configService.get<string>('LP_MANAGER_ADDRESS');
     const adapterAddress = this.configService.get<string>('ADAPTER_ADDRESS');
 
+    if (!lpManagerAddress || !adapterAddress) {
+      throw new Error('Contract addresses not configured in environment');
+    }
+
     const signer = this.wallet || this.provider;
 
     this.lpManagerContract = new ethers.Contract(

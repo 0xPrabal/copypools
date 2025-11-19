@@ -100,3 +100,69 @@ enum EventType {
   LIQUIDITY_REMOVED
   FEES_COLLECTED
 }
+
+// ========================================
+// Ponder-managed tables (read-only)
+// These tables are populated by the Ponder indexer
+// ========================================
+
+model PonderPosition {
+  id                 String  @id
+  protocol           String
+  dexTokenId         String  @map("dexTokenId")
+  owner              String
+  token0             String
+  token1             String
+  active             Boolean @default(true)
+  tickLower          Int?
+  tickUpper          Int?
+  liquidity          String?
+  createdAt          BigInt
+  createdTxHash      String
+  createdBlockNumber BigInt
+  updatedAt          BigInt
+
+  @@map("ponder_position")
+  @@index([owner])
+  @@index([active])
+}
+
+model PonderRangeMoveEvent {
+  id            String @id
+  oldPositionId String
+  newPositionId String
+  newTickLower  Int
+  newTickUpper  Int
+  txHash        String
+  blockNumber   BigInt
+  timestamp     BigInt
+
+  @@map("ponder_range_move_event")
+  @@index([oldPositionId])
+  @@index([newPositionId])
+}
+
+model PonderCloseEvent {
+  id          String @id
+  positionId  String
+  amount0     String
+  amount1     String
+  txHash      String
+  blockNumber BigInt
+  timestamp   BigInt
+
+  @@map("ponder_close_event")
+  @@index([positionId])
+}
+
+model PonderCompoundEvent {
+  id             String @id
+  positionId     String
+  addedLiquidity String
+  txHash         String
+  blockNumber    BigInt
+  timestamp      BigInt
+
+  @@map("ponder_compound_event")
+  @@index([positionId])
+}

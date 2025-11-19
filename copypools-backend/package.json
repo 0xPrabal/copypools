@@ -22,10 +22,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:prod": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "prisma:seed": "ts-node prisma/seed.ts",
-    "ponder:dev": "ponder dev",
-    "ponder:start": "ponder start",
-    "ponder:codegen": "ponder codegen"
+    "prisma:seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -34,7 +31,6 @@
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/schedule": "^6.0.1",
     "@nestjs/typeorm": "^11.0.0",
-    "@ponder/core": "^0.7.17",
     "@prisma/client": "^6.19.0",
     "dotenv": "^17.2.3",
     "ethers": "^6.15.0",
