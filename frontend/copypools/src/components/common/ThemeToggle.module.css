@@ -1,0 +1,19 @@
+.toggleBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.7);
+  background: transparent;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.icon {
+  font-size: 0.9rem;
+}
+
+.label {
+  opacity: 0.85;
+}

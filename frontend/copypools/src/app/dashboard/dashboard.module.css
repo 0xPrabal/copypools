@@ -1,0 +1,113 @@
+.dashboardRoot {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+/* Themes */
+.dark {
+  background: #050608;
+  color: #f4f4f5;
+}
+
+.light {
+  background: #f7f7f9;
+  color: #111827;
+}
+
+.main {
+  padding: 1.5rem 3.5rem 2rem;
+  flex: 1;
+}
+
+/* Top bar */
+.topBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.2rem;
+}
+
+.leftTop {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.pageTitle {
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+.betaBadge {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  opacity: 0.75;
+}
+
+.rightTop {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.createBtn {
+  background: transparent;
+  border-radius: 8px;
+  border: 1px dashed rgba(148, 163, 184, 0.7);
+  padding: 0.45rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.connectBtn {
+  background: linear-gradient(90deg, #16ff9b, #20c997);
+  border-radius: 8px;
+  border: none;
+  padding: 0.55rem 1.4rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #020617;
+  cursor: pointer;
+}
+
+/* Filters + content layout */
+.contentSection {
+  margin-top: 0.8rem;
+  display: grid;
+  grid-template-columns: minmax(0, 3.5fr) minmax(260px, 1.3fr);
+  gap: 1.5rem;
+}
+
+/* Table/container */
+.tableWrapper {
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(15, 23, 42, 0.8);
+  overflow: hidden;
+}
+
+.light .tableWrapper {
+  background: #ffffff;
+  border-color: rgba(148, 163, 184, 0.4);
+}
+
+/* Sidebar */
+.sidebarWrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+@media (max-width: 1024px) {
+  .main {
+    padding: 1.25rem 1.25rem 1.5rem;
+  }
+
+  .contentSection {
+    grid-template-columns: 1fr;
+  }
+}

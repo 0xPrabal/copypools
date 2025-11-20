@@ -1,0 +1,29 @@
+/* src/components/common/Button.module.css */
+
+.primary {
+  background: linear-gradient(90deg, #16ff9b, #20c997);
+  padding: 12px 28px;
+  border-radius: 8px;
+  color: #000;
+  font-weight: 600;
+  text-decoration: none;
+  transition: 0.25s ease;
+}
+
+.primary:hover {
+  opacity: 0.85;
+}
+
+.secondary {
+  border: 1px solid #20c997;
+  padding: 12px 28px;
+  border-radius: 8px;
+  color: #20c997;
+  font-weight: 600;
+  text-decoration: none;
+  transition: 0.25s ease;
+}
+
+.secondary:hover {
+  background: rgba(32, 201, 151, 0.1);
+}

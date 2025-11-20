@@ -1,0 +1,148 @@
+/* src/app/landing.module.css */
+
+.container {
+  position: relative;
+  min-height: 100vh;
+  width: 100%;
+  background: url("/assets/illustrations/background_img.png") center / cover no-repeat;
+  color: #e7f5ff;
+  padding: 0 1.5rem 4rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: hidden;
+}
+
+/* removed overlay so the background artwork shows in its original colors */
+
+.heroSection {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  padding-top: 3rem;
+}
+
+.heroInner {
+  width: min(1200px, 100%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4rem;
+}
+
+.copyBlock {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(226, 254, 248, 0.8);
+}
+
+.heading {
+  font-size: clamp(2.4rem, 5vw, 4rem);
+  line-height: 1.1;
+  font-weight: 700;
+  color: #1ef3c7;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.subText {
+  font-size: 1.2rem;
+  line-height: 1.7;
+  color: rgba(226, 236, 255, 0.85);
+  max-width: 520px;
+}
+
+.badgeRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.badge {
+  padding: 0.35rem 0.95rem;
+  border-radius: 999px;
+  border: 1px solid rgba(226, 254, 248, 0.25);
+  background: rgba(15, 23, 42, 0.6);
+  font-size: 0.82rem;
+  color: #c7d2fe;
+}
+
+.buttonRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.heroArtwork {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.glowOrb {
+  position: absolute;
+  width: 340px;
+  height: 340px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(30, 243, 199, 0.4), transparent 60%);
+  filter: blur(6px);
+  animation: pulse 6s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    transform: scale(0.95);
+    opacity: 0.65;
+  }
+
+  50% {
+    transform: scale(1.05);
+    opacity: 1;
+  }
+}
+
+@media (max-width: 1024px) {
+  .heroInner {
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .heading {
+    white-space: normal;
+    line-height: 1.15;
+  }
+
+  .copyBlock,
+  .subText,
+  .buttonRow,
+  .badgeRow {
+    justify-content: center;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
+@media (max-width: 600px) {
+  .badgeRow {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .heroSection {
+    padding-top: 2rem;
+  }
+}
