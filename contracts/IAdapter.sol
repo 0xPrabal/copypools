@@ -120,6 +120,26 @@ interface IAdapter {
     ) external returns (uint256 amount0, uint256 amount1);
 
     /**
+     * @notice Moves a position to a new tick range (preserves pool/fee)
+     * @param oldTokenId The current position ID
+     * @param newTickLower New lower price bound
+     * @param newTickUpper New upper price bound
+     * @param amount0Min Minimum amount of token0 (slippage protection)
+     * @param amount1Min Minimum amount of token1 (slippage protection)
+     * @param deadline Timestamp after which the transaction will revert
+     * @return newTokenId The new position ID
+     * @return liquidity The amount of liquidity in the new position
+     */
+    function moveRange(
+        uint256 oldTokenId,
+        int24 newTickLower,
+        int24 newTickUpper,
+        uint256 amount0Min,
+        uint256 amount1Min,
+        uint256 deadline
+    ) external returns (uint256 newTokenId, uint128 liquidity);
+
+    /**
      * @notice Gets the pool tokens for a position
      * @param tokenId The position ID
      * @return token0 First token address

@@ -250,6 +250,126 @@ contract LPManagerV1 is UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgr
     }
 
     /**
+     * @notice Increase liquidity in an existing position
+     * @param positionId The position ID
+     * @param amount0 Amount of token0 to add
+     * @param amount1 Amount of token1 to add
+     * @param amount0Min Minimum amount of token0 (slippage protection)
+     * @param amount1Min Minimum amount of token1 (slippage protection)
+     */
+    function increaseLiquidity(
+        uint256 positionId,
+        uint256 amount0,
+        uint256 amount1,
+        uint256 amount0Min,
+        uint256 amount1Min
+    ) external nonReentrant {
+        Position storage position = positions[positionId];
+        if (!position.active) revert PositionNotFound();
+        if (position.owner != msg.sender) revert Unauthorized();
+
+        // Get adapter
+        bytes32 protocolHash = keccak256(bytes(position.protocol));
+        address adapter = adapters[protocolHash];
+
+        // Transfer tokens from user to this contract
+        if (amount0 > 0) {
+            IERC20(position.token0).safeTransferFrom(msg.sender, address(this), amount0);
+            IERC20(position.token0).forceApprove(adapter, amount0);
+        }
+        if (amount1 > 0) {
+            IERC20(position.token1).safeTransferFrom(msg.sender, address(this), amount1);
+            IERC20(position.token1).forceApprove(adapter, amount1);
+        }
+
+        // Call adapter to increase liquidity
+        IAdapter(adapter).increaseLiquidity(
+            position.dexTokenId,
+            amount0,
+            amount1,
+            amount0Min,
+            amount1Min,
+            block.timestamp + 3600
+        );
+
+        // Refund any unused tokens
+        _refundDust(position.token0, position.token1, msg.sender);
+    }
+
+    /**
+     * @notice Decrease liquidity from a position
+     * @param positionId The position ID
+     * @param liquidity Amount of liquidity to remove
+     * @param amount0Min Minimum amount of token0 (slippage protection)
+     * @param amount1Min Minimum amount of token1 (slippage protection)
+     */
+    function decreaseLiquidity(
+        uint256 positionId,
+        uint128 liquidity,
+        uint256 amount0Min,
+        uint256 amount1Min
+    ) external nonReentrant {
+        Position storage position = positions[positionId];
+        if (!position.active) revert PositionNotFound();
+        if (position.owner != msg.sender) revert Unauthorized();
+
+        // Get adapter
+        bytes32 protocolHash = keccak256(bytes(position.protocol));
+        address adapter = adapters[protocolHash];
+
+        // Remove liquidity
+        (uint256 amount0, uint256 amount1) = IAdapter(adapter).decreaseLiquidity(
+            position.dexTokenId,
+            liquidity,
+            amount0Min,
+            amount1Min,
+            block.timestamp + 3600
+        );
+
+        // Transfer tokens to user
+        if (amount0 > 0) {
+            IERC20(position.token0).safeTransfer(msg.sender, amount0);
+        }
+        if (amount1 > 0) {
+            IERC20(position.token1).safeTransfer(msg.sender, amount1);
+        }
+
+        // Refund any dust
+        _refundDust(position.token0, position.token1, msg.sender);
+    }
+
+    /**
+     * @notice Collect accumulated fees from a position
+     * @param positionId The position ID
+     */
+    function collectFees(uint256 positionId) external nonReentrant {
+        Position storage position = positions[positionId];
+        if (!position.active) revert PositionNotFound();
+        if (position.owner != msg.sender) revert Unauthorized();
+
+        // Get adapter
+        bytes32 protocolHash = keccak256(bytes(position.protocol));
+        address adapter = adapters[protocolHash];
+
+        // Collect fees
+        (uint256 amount0, uint256 amount1) = IAdapter(adapter).collectFees(
+            position.dexTokenId,
+            block.timestamp + 3600
+        );
+
+        // Transfer fees to user
+        if (amount0 > 0) {
+            IERC20(position.token0).safeTransfer(msg.sender, amount0);
+        }
+        if (amount1 > 0) {
+            IERC20(position.token1).safeTransfer(msg.sender, amount1);
+        }
+
+        // Refund any dust
+        _refundDust(position.token0, position.token1, msg.sender);
+    }
+
+    /**
      * @notice Close a position and withdraw all liquidity
      * @param positionId The position ID
      * @param liquidity Amount of liquidity to remove
@@ -443,73 +563,32 @@ contract LPManagerV1 is UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgr
         bytes32 protocolHash = keccak256(bytes(oldPos.protocol));
         address adapter = adapters[protocolHash];
 
-        // Step 1: Remove all liquidity from old position
-        // Note: We use burnPosition instead of decreaseLiquidity to get everything in one call
-        (uint256 amount0, uint256 amount1) = IAdapter(adapter).burnPosition(
+        // Use adapter's moveRange which preserves the pool's fee tier
+        (uint256 newDexTokenId, uint128 liquidity) = IAdapter(adapter).moveRange(
             oldPos.dexTokenId,
-            0, // No slippage protection - we're moving range
-            0,
+            newTickLower,
+            newTickUpper,
+            0, // amount0Min - no slippage protection for range moves
+            0, // amount1Min
             block.timestamp + 3600
         );
-
-        emit PositionClosed(oldPositionId, amount0, amount1);
 
         // Mark old position as inactive
         oldPos.active = false;
+        emit PositionClosed(oldPositionId, 0, 0);
 
-        // Step 2: Swap to optimal ratio for new range if requested
-        if (doSwap && swapData.length > 0) {
-            (amount0, amount1) = _performSwap(
-                oldPositionId,
-                oldPos.token0,
-                oldPos.token1,
-                amount0,
-                amount1,
-                swapData
-            );
-        }
-
-        // Step 3: Create new position in new range
-        IAdapter.PoolData memory poolData = IAdapter.PoolData({
-            token0: oldPos.token0,
-            token1: oldPos.token1,
-            fee: 3000, // Default fee tier - could be parameterized
-            tickLower: newTickLower,
-            tickUpper: newTickUpper,
-            extraData: "" // No hooks by default
-        });
-
-        IAdapter.LiquidityParams memory params = IAdapter.LiquidityParams({
-            pool: poolData,
-            amount0Desired: amount0,
-            amount1Desired: amount1,
-            amount0Min: 0, // Already swapped to optimal
-            amount1Min: 0,
-            recipient: address(this)
-        });
-
-        // Approve adapter
-        IERC20(oldPos.token0).forceApprove(adapter, amount0);
-        IERC20(oldPos.token1).forceApprove(adapter, amount1);
-
-        // Open new position
-        (uint256 dexTokenId, uint128 liquidity) = IAdapter(adapter).openPosition(
-            params,
-            block.timestamp + 3600
-        );
-
-        // Create new position record
+        // Create new position record with same pool (preserving fee tier)
         newPositionId = _nextPositionId++;
         positions[newPositionId] = Position({
             protocol: oldPos.protocol,
-            dexTokenId: dexTokenId,
+            dexTokenId: newDexTokenId,
             owner: msg.sender,
             token0: oldPos.token0,
             token1: oldPos.token1,
             active: true
         });
 
-        emit PositionOpened(newPositionId, msg.sender, oldPos.protocol, dexTokenId);
+        emit PositionOpened(newPositionId, msg.sender, oldPos.protocol, newDexTokenId);
         emit RangeMoved(oldPositionId, newPositionId, newTickLower, newTickUpper);
 
         // Refund any dust

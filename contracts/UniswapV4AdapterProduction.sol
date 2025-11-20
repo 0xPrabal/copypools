@@ -562,30 +562,45 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
 
         (BalanceDelta delta,) = poolManager.modifyLiquidity(key, modifyParams, "");
 
-        // FLASH ACCOUNTING: Settle tokens with PoolManager
-        // Note: delta amounts are negative when we owe the pool
-        uint256 actualAmount0;
-        uint256 actualAmount1;
+        // FLASH ACCOUNTING: Handle deltas with proper V4 pattern
+        // Use ACTUAL deltas from modifyLiquidity, not precalculated amounts!
+        uint256 actualAmount0 = 0;
+        uint256 actualAmount1 = 0;
 
+        // Handle token0 delta
         if (delta.amount0() < 0) {
+            // We owe token0 to the pool (negative delta)
             actualAmount0 = uint256(uint128(-delta.amount0()));
             _settle(key.currency0, actualAmount0);
-        }
-        if (delta.amount1() < 0) {
-            actualAmount1 = uint256(uint128(-delta.amount1()));
-            _settle(key.currency1, actualAmount1);
+        } else if (delta.amount0() > 0) {
+            // Pool owes us token0 (positive delta) - unlikely for add liquidity but handle it
+            actualAmount0 = uint256(uint128(delta.amount0()));
+            _take(key.currency0, owner, actualAmount0);
         }
 
-        // SLIPPAGE PROTECTION: Ensure we don't pay more than expected
-        if (actualAmount0 > params.amount0Desired || actualAmount1 > params.amount1Desired) {
-            revert SlippageCheckFailed(actualAmount0 > params.amount0Desired ? actualAmount0 : actualAmount1,
-                                      actualAmount0 > params.amount0Desired ? params.amount0Desired : params.amount1Desired);
+        // Handle token1 delta
+        if (delta.amount1() < 0) {
+            // We owe token1 to the pool (negative delta)
+            actualAmount1 = uint256(uint128(-delta.amount1()));
+            _settle(key.currency1, actualAmount1);
+        } else if (delta.amount1() > 0) {
+            // Pool owes us token1 (positive delta) - unlikely for add liquidity but handle it
+            actualAmount1 = uint256(uint128(delta.amount1()));
+            _take(key.currency1, owner, actualAmount1);
         }
-        // Ensure we get at least minimum amounts
-        if (actualAmount0 < params.amount0Min) {
+
+        // SLIPPAGE PROTECTION: Only check if we actually paid tokens (negative deltas)
+        if (delta.amount0() < 0 && actualAmount0 > params.amount0Desired) {
+            revert SlippageCheckFailed(actualAmount0, params.amount0Desired);
+        }
+        if (delta.amount1() < 0 && actualAmount1 > params.amount1Desired) {
+            revert SlippageCheckFailed(actualAmount1, params.amount1Desired);
+        }
+        // Ensure we paid at least minimum amounts (only check if delta was negative)
+        if (delta.amount0() < 0 && actualAmount0 < params.amount0Min) {
             revert SlippageCheckFailed(actualAmount0, params.amount0Min);
         }
-        if (actualAmount1 < params.amount1Min) {
+        if (delta.amount1() < 0 && actualAmount1 < params.amount1Min) {
             revert SlippageCheckFailed(actualAmount1, params.amount1Min);
         }
 
@@ -631,24 +646,33 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
 
         (BalanceDelta delta,) = poolManager.modifyLiquidity(pos.key, modifyParams, "");
 
-        // FLASH ACCOUNTING: Settle tokens with slippage protection
-        uint256 actualAmount0;
-        uint256 actualAmount1;
+        // FLASH ACCOUNTING: Handle deltas with proper V4 pattern
+        uint256 actualAmount0 = 0;
+        uint256 actualAmount1 = 0;
 
+        // Handle token0 delta
         if (delta.amount0() < 0) {
             actualAmount0 = uint256(uint128(-delta.amount0()));
             _settle(pos.key.currency0, actualAmount0);
+        } else if (delta.amount0() > 0) {
+            actualAmount0 = uint256(uint128(delta.amount0()));
+            _take(pos.key.currency0, pos.owner, actualAmount0);
         }
+
+        // Handle token1 delta
         if (delta.amount1() < 0) {
             actualAmount1 = uint256(uint128(-delta.amount1()));
             _settle(pos.key.currency1, actualAmount1);
+        } else if (delta.amount1() > 0) {
+            actualAmount1 = uint256(uint128(delta.amount1()));
+            _take(pos.key.currency1, pos.owner, actualAmount1);
         }
 
-        // SLIPPAGE PROTECTION: Ensure actual amounts meet minimum requirements
-        if (actualAmount0 < amt0Min) {
+        // SLIPPAGE PROTECTION: Only check minimums for amounts we paid (negative deltas)
+        if (delta.amount0() < 0 && actualAmount0 < amt0Min) {
             revert SlippageCheckFailed(actualAmount0, amt0Min);
         }
-        if (actualAmount1 < amt1Min) {
+        if (delta.amount1() < 0 && actualAmount1 < amt1Min) {
             revert SlippageCheckFailed(actualAmount1, amt1Min);
         }
 
@@ -1027,9 +1051,9 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
             // Settle native ETH
             poolManager.settle{value: amount}();
         } else {
-            // Sync, transfer, and settle ERC20
-            address token = Currency.unwrap(currency);
+            // CORRECT V4 PATTERN: sync -> transfer -> settle
             poolManager.sync(currency);
+            address token = Currency.unwrap(currency);
             IERC20(token).safeTransfer(address(poolManager), amount);
             poolManager.settle();
         }
