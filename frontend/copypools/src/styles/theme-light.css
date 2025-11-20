@@ -1,0 +1,22 @@
+:root[data-theme="light"] {
+  /* Background Colors */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fa;
+  --bg-tertiary: #e9ecef;
+  
+  /* Text Colors */
+  --text-primary: #212529;
+  --text-secondary: #6c757d;
+  --text-tertiary: #adb5bd;
+  
+  /* Border Colors */
+  --border-color: #dee2e6;
+  --border-light: #e9ecef;
+  
+  /* Navbar */
+  --navbar-bg: rgba(255, 255, 255, 0.8);
+  
+  /* Card */
+  --card-bg: #ffffff;
+  --card-border: #e9ecef;
+}

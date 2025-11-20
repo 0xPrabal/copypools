@@ -1,0 +1,27 @@
+.footer {
+  border-top: 1px solid rgba(148, 163, 184, 0.3);
+  padding: 0.65rem 3.5rem;
+  font-size: 0.75rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  opacity: 0.8;
+}
+
+.right {
+  display: flex;
+  gap: 0.9rem;
+}
+
+.right a {
+  text-decoration: none;
+  color: inherit;
+}
+
+@media (max-width: 768px) {
+  .footer {
+    padding: 0.6rem 1.25rem;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+}
