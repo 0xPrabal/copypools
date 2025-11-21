@@ -370,7 +370,7 @@ contract LPManagerV1 is UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgr
     }
 
     /**
-     * @notice Close a position and withdraw all liquidity
+     * @notice Close a position and withdraw liquidity
      * @param positionId The position ID
      * @param liquidity Amount of liquidity to remove
      */
@@ -404,11 +404,39 @@ contract LPManagerV1 is UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgr
             IERC20(position.token1).safeTransfer(msg.sender, amount1);
         }
 
-        // Mark position as inactive
-        position.active = false;
+        // Query remaining liquidity from adapter
+        (, , , , , uint128 remainingLiquidity) = IAdapter(adapter).getPositionInfo(position.dexTokenId);
+
+        // Only mark as inactive if position is fully closed (no remaining liquidity)
+        if (remainingLiquidity == 0) {
+            position.active = false;
+        }
+
+        emit PositionClosed(positionId, amount0, amount1);
 
         // Refund any dust
         _refundDust(position.token0, position.token1, msg.sender);
+    }
+
+    /**
+     * @notice Reactivate a position that was incorrectly marked as inactive
+     * @param positionId The position ID to reactivate
+     * @dev Owner-only function to fix positions that still have liquidity but were marked inactive
+     */
+    function reactivatePosition(uint256 positionId) external onlyOwner {
+        Position storage position = positions[positionId];
+
+        // Get adapter and check if position still has liquidity
+        bytes32 protocolHash = keccak256(bytes(position.protocol));
+        address adapter = adapters[protocolHash];
+
+        (, , , , , uint128 remainingLiquidity) = IAdapter(adapter).getPositionInfo(position.dexTokenId);
+
+        // Only reactivate if there's liquidity remaining
+        if (remainingLiquidity > 0) {
+            position.active = true;
+            emit PositionOpened(positionId, position.owner, position.protocol, position.dexTokenId);
+        }
     }
 
     /**
