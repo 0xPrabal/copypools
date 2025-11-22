@@ -73,8 +73,8 @@ export class PositionsService {
         },
         liquidity: {
           total: adapterPosition.liquidity.toString(),
-          tickLower: adapterPosition.tickLower,
-          tickUpper: adapterPosition.tickUpper,
+          tickLower: Number(adapterPosition.tickLower),
+          tickUpper: Number(adapterPosition.tickUpper),
         },
         dexTokenId: position.dexTokenId.toString(),
       };
@@ -304,17 +304,29 @@ export class PositionsService {
         where: { active: true },
       });
 
+      // Check Ponder indexer status
+      const ponderStatus = await this.checkPonderStatus();
+      
+      // Check database connection pool
+      const dbPoolStatus = await this.checkDatabasePool();
+
+      // Verify contract addresses
+      const contractsStatus = await this.checkContractsStatus();
+
       return {
         status: 'healthy',
         blockchain: {
           connected: true,
           blockNumber,
           gasPrice: gasPrice.toString(),
+          contracts: contractsStatus,
         },
         database: {
           totalPositions: positionCount,
           activePositions: activePositionCount,
+          pool: dbPoolStatus,
         },
+        ponder: ponderStatus,
         timestamp: new Date().toISOString(),
       };
     } catch (error) {
@@ -326,6 +338,97 @@ export class PositionsService {
         },
         error: error.message,
         timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  async createOrSyncPosition(positionId: bigint) {
+    try {
+      this.logger.log(`Creating/syncing position ${positionId}`);
+      
+      // Sync position from blockchain
+      const syncedPosition = await this.syncPositionFromBlockchain(positionId);
+      
+      return {
+        ...syncedPosition,
+        message: 'Position synced successfully',
+      };
+    } catch (error) {
+      this.logger.error(`Error creating/syncing position ${positionId}:`, error);
+      throw error;
+    }
+  }
+
+  private async checkPonderStatus() {
+    try {
+      // Check if Ponder tables exist and have recent data
+      const recentPosition = await this.prisma.ponderPosition.findFirst({
+        orderBy: { updatedAt: 'desc' },
+      });
+
+      const lastIndexedBlock = recentPosition 
+        ? Number(recentPosition.createdBlockNumber)
+        : null;
+
+      const ponderEventCount = await this.prisma.ponderRangeMoveEvent.count();
+
+      return {
+        active: true,
+        lastIndexedBlock,
+        totalEvents: ponderEventCount,
+        lastUpdate: recentPosition 
+          ? new Date(Number(recentPosition.updatedAt) * 1000).toISOString()
+          : null,
+      };
+    } catch (error) {
+      this.logger.warn('Ponder status check failed:', error);
+      return {
+        active: false,
+        error: error.message,
+      };
+    }
+  }
+
+  private async checkDatabasePool() {
+    try {
+      // Simple query to check connection
+      await this.prisma.$queryRaw`SELECT 1`;
+      return {
+        connected: true,
+        status: 'healthy',
+      };
+    } catch (error) {
+      return {
+        connected: false,
+        status: 'unhealthy',
+        error: error.message,
+      };
+    }
+  }
+
+  private async checkContractsStatus() {
+    try {
+      const lpManager = this.blockchainService.getLPManagerContract();
+      const adapter = this.blockchainService.getAdapterContract();
+      
+      // Try to read from contracts to verify they're accessible
+      const lpManagerAddress = await lpManager.getAddress();
+      const adapterAddress = await adapter.getAddress();
+
+      return {
+        lpManager: {
+          address: lpManagerAddress,
+          accessible: true,
+        },
+        adapter: {
+          address: adapterAddress,
+          accessible: true,
+        },
+      };
+    } catch (error) {
+      return {
+        lpManager: { accessible: false, error: error.message },
+        adapter: { accessible: false, error: error.message },
       };
     }
   }
@@ -362,7 +465,15 @@ export class PositionsService {
 
   async getAllPositions(owner?: string) {
     return await this.prisma.position.findMany({
-      where: owner ? { owner: { equals: owner, mode: 'insensitive' } } : undefined,
+      where: {
+        active: true,
+        ...(owner && {
+          owner: {
+            equals: owner,
+            mode: 'insensitive' as const,
+          },
+        }),
+      },
       orderBy: { createdAt: 'desc' },
     });
   }

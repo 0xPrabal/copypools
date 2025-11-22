@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { ContractService } from '@/lib/services/contracts'
 import { useWallet } from '@/lib/hooks/useWallet'
 import { parseUnits, formatUnits } from 'ethers'
+import { apiService } from '@/lib/services/api'
 
 // Token pair presets
 const TOKEN_PAIRS = [
@@ -18,18 +19,88 @@ const TOKEN_PAIRS = [
   }
 ]
 
-export const AddLiquidity = () => {
+const FEE_OPTIONS = [
+  { value: '500', label: '0.05%', description: 'Best for stable pairs', tickSpacing: 10 },
+  { value: '3000', label: '0.3%', description: 'Best for most pairs', tickSpacing: 60 },
+  { value: '10000', label: '1%', description: 'Best for exotic pairs', tickSpacing: 200 },
+]
+
+// Helper function to get tick spacing for a fee tier
+const getTickSpacing = (fee: string): number => {
+  const feeOption = FEE_OPTIONS.find(opt => opt.value === fee)
+  return feeOption?.tickSpacing || 60
+}
+
+// Helper function to round tick to nearest valid tick for given spacing
+const roundToTickSpacing = (tick: number, tickSpacing: number): number => {
+  return Math.round(tick / tickSpacing) * tickSpacing
+}
+
+// Generate price range presets dynamically based on fee tier
+const getPriceRangePresets = (fee: string) => {
+  const tickSpacing = getTickSpacing(fee)
+
+  return [
+    {
+      label: 'Full Range',
+      tickLower: roundToTickSpacing(-887220, tickSpacing).toString(),
+      tickUpper: roundToTickSpacing(887220, tickSpacing).toString(),
+      description: 'Maximum liquidity, lower fees'
+    },
+    {
+      label: 'Wide Range',
+      tickLower: roundToTickSpacing(-200000, tickSpacing).toString(),
+      tickUpper: roundToTickSpacing(200000, tickSpacing).toString(),
+      description: 'Good balance'
+    },
+    {
+      label: 'Medium Range',
+      tickLower: roundToTickSpacing(-100000, tickSpacing).toString(),
+      tickUpper: roundToTickSpacing(100000, tickSpacing).toString(),
+      description: 'More concentrated'
+    },
+    {
+      label: 'Narrow Range',
+      tickLower: roundToTickSpacing(-50000, tickSpacing).toString(),
+      tickUpper: roundToTickSpacing(50000, tickSpacing).toString(),
+      description: 'Maximum efficiency'
+    },
+    {
+      label: 'Custom',
+      tickLower: '',
+      tickUpper: '',
+      description: 'Set your own range'
+    },
+  ]
+}
+
+interface AddLiquidityProps {
+  preSelectedPool?: {
+    token0: string
+    token1: string
+    feeTier: string
+  }
+  onSuccess?: () => void
+}
+
+export const AddLiquidity: React.FC<AddLiquidityProps> = (props = {}) => {
+  const { preSelectedPool, onSuccess } = props
   const { provider, address } = useWallet()
 
   // Form state
   const [selectedPair, setSelectedPair] = useState(0)
-  const [token0, setToken0] = useState(TOKEN_PAIRS[0].token0)
-  const [token1, setToken1] = useState(TOKEN_PAIRS[0].token1)
+  const [token0, setToken0] = useState(preSelectedPool?.token0 || TOKEN_PAIRS[0].token0)
+  const [token1, setToken1] = useState(preSelectedPool?.token1 || TOKEN_PAIRS[0].token1)
   const [amount0, setAmount0] = useState('')
   const [amount1, setAmount1] = useState('')
   const [tickLower, setTickLower] = useState('-887220')
   const [tickUpper, setTickUpper] = useState('887220')
-  const [fee, setFee] = useState('500')
+  const [fee, setFee] = useState(
+    preSelectedPool?.feeTier === '0.05%' ? '500' :
+    preSelectedPool?.feeTier === '0.3%' ? '3000' :
+    preSelectedPool?.feeTier === '1%' ? '10000' : '500'
+  )
+  const [selectedRangePreset, setSelectedRangePreset] = useState(0)
 
   // UI state
   const [loading, setLoading] = useState(false)
@@ -72,6 +143,32 @@ export const AddLiquidity = () => {
     }
   }
 
+  const handleRangePreset = (index: number) => {
+    setSelectedRangePreset(index)
+    const presets = getPriceRangePresets(fee)
+    const preset = presets[index]
+    if (preset.tickLower && preset.tickUpper) {
+      setTickLower(preset.tickLower)
+      setTickUpper(preset.tickUpper)
+    }
+  }
+
+  // Update ticks when fee tier changes to ensure they're valid for new spacing
+  useEffect(() => {
+    if (tickLower && tickUpper) {
+      const tickSpacing = getTickSpacing(fee)
+      const validTickLower = roundToTickSpacing(parseInt(tickLower), tickSpacing)
+      const validTickUpper = roundToTickSpacing(parseInt(tickUpper), tickSpacing)
+
+      if (validTickLower.toString() !== tickLower) {
+        setTickLower(validTickLower.toString())
+      }
+      if (validTickUpper.toString() !== tickUpper) {
+        setTickUpper(validTickUpper.toString())
+      }
+    }
+  }, [fee])
+
   // Load token info on mount
   useEffect(() => {
     if (provider && address) {
@@ -83,12 +180,12 @@ export const AddLiquidity = () => {
 
   const handleAddLiquidity = async () => {
     if (!provider || !address) {
-      alert('Please connect your wallet')
+      setError('Please connect your wallet')
       return
     }
 
     if (!token0 || !token1 || !amount0 || !amount1) {
-      alert('Please fill in all fields')
+      setError('Please fill in all fields')
       return
     }
 
@@ -119,7 +216,20 @@ export const AddLiquidity = () => {
         parseInt(fee)
       )
 
-      setSuccess(`Liquidity added successfully! Transaction: ${receipt.hash}`)
+      setStep('Position will be indexed automatically...')
+      
+      // Position will be automatically indexed by Ponder indexer
+      // The backend will pick it up from blockchain events
+      // User can refresh the positions list to see it
+      setSuccess(`✅ Position created successfully! Transaction: ${receipt.hash}. The position will appear in your list shortly.`)
+      
+      // Call onSuccess callback if provided
+      if (onSuccess) {
+        setTimeout(() => {
+          onSuccess()
+        }, 2000)
+      }
+
       setStep('')
 
       // Reset form
@@ -134,142 +244,304 @@ export const AddLiquidity = () => {
     }
   }
 
-  const feeOptions = [
-    { value: '500', label: '0.05%' },
-    { value: '3000', label: '0.3%' },
-    { value: '10000', label: '1%' },
-  ]
+  const formatAddress = (addr: string) => {
+    return `${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}`
+  }
+
+  const handleMax = (tokenIndex: 0 | 1) => {
+    if (tokenIndex === 0 && balance0) {
+      setAmount0(balance0)
+    } else if (tokenIndex === 1 && balance1) {
+      setAmount1(balance1)
+    }
+  }
 
   return (
-    <div className="add-liquidity">
-      <h2>Add Liquidity (Create Position)</h2>
-
-      {error && <div className="error-message">{error}</div>}
-      {success && <div className="success-message">{success}</div>}
-      {step && <div className="info-message">{step}</div>}
-
-      <div className="form-section">
-        <h3>Token Pair</h3>
-
-        <div className="form-group">
-          <label>Select Trading Pair</label>
-          <select
-            value={selectedPair}
-            onChange={(e) => handlePairChange(Number(e.target.value))}
-            disabled={loading}
-            className="pair-selector"
-          >
-            {TOKEN_PAIRS.map((pair, index) => (
-              <option key={index} value={index}>
-                {pair.name} ({pair.symbol0}/{pair.symbol1})
-              </option>
-            ))}
-          </select>
+    <div className="create-position">
+      {!preSelectedPool && (
+        <div className="create-position-header">
+          <h2>Create New Position</h2>
+          <p className="create-subtitle">Provide liquidity to earn trading fees</p>
         </div>
+      )}
 
-        <div className="token-balances">
-          {token0Info && (
-            <div className="token-balance-item">
-              <strong>{token0Info.symbol}:</strong> Balance: {balance0 || '0'}
+      <div className="create-position-content">
+        {/* Token Pair Selection */}
+        <div className="create-section">
+          <div className="section-header">
+            <h3>Select Token Pair</h3>
+          </div>
+          <div className="token-pair-selector">
+            <div className="pair-card active">
+              <div className="pair-tokens">
+                <div className="token-display">
+                  <div className="token-avatar-large">{token0Info?.symbol?.[0] || 'T'}</div>
+                  <div className="token-info">
+                    <div className="token-symbol">{token0Info?.symbol || 'Token 0'}</div>
+                    <div className="token-address-small">{formatAddress(token0)}</div>
+                  </div>
+                </div>
+                <div className="pair-divider">/</div>
+                <div className="token-display">
+                  <div className="token-avatar-large">{token1Info?.symbol?.[0] || 'T'}</div>
+                  <div className="token-info">
+                    <div className="token-symbol">{token1Info?.symbol || 'Token 1'}</div>
+                    <div className="token-address-small">{formatAddress(token1)}</div>
+                  </div>
+                </div>
+              </div>
+              {address && (
+                <div className="token-balances-display">
+                  <div className="balance-item">
+                    <span className="balance-label">Balance:</span>
+                    <span className="balance-value">{balance0 || '0.00'} {token0Info?.symbol}</span>
+                  </div>
+                  <div className="balance-item">
+                    <span className="balance-label">Balance:</span>
+                    <span className="balance-value">{balance1 || '0.00'} {token1Info?.symbol}</span>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-          {token1Info && (
-            <div className="token-balance-item">
-              <strong>{token1Info.symbol}:</strong> Balance: {balance1 || '0'}
+          </div>
+        </div>
+
+        {/* Amount Input */}
+        <div className="create-section">
+          <div className="section-header">
+            <h3>Deposit Amounts</h3>
+          </div>
+          <div className="amount-inputs">
+            <div className="amount-input-card">
+              <div className="amount-input-header">
+                <div className="token-selector-display">
+                  <div className="token-avatar-small">{token0Info?.symbol?.[0] || 'T'}</div>
+                  <span className="token-symbol-small">{token0Info?.symbol || 'Token 0'}</span>
+                </div>
+                {address && (
+                  <button
+                    type="button"
+                    onClick={() => handleMax(0)}
+                    className="max-button"
+                    disabled={loading}
+                  >
+                    MAX
+                  </button>
+                )}
+              </div>
+              <input
+                type="number"
+                step="any"
+                placeholder="0.0"
+                value={amount0}
+                onChange={(e) => setAmount0(e.target.value)}
+                disabled={loading || !address}
+                className="amount-input"
+              />
+              {address && balance0 && (
+                <div className="balance-hint">
+                  Balance: {parseFloat(balance0).toLocaleString()} {token0Info?.symbol}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      </div>
 
-      <div className="form-section">
-        <h3>Amounts</h3>
-
-        <div className="form-group">
-          <label>Amount Token 0</label>
-          <input
-            type="number"
-            step="any"
-            placeholder="0.0"
-            value={amount0}
-            onChange={(e) => setAmount0(e.target.value)}
-            disabled={loading}
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Amount Token 1</label>
-          <input
-            type="number"
-            step="any"
-            placeholder="0.0"
-            value={amount1}
-            onChange={(e) => setAmount1(e.target.value)}
-            disabled={loading}
-          />
-        </div>
-      </div>
-
-      <div className="form-section">
-        <h3>Price Range</h3>
-
-        <div className="form-group">
-          <label>Tick Lower</label>
-          <input
-            type="number"
-            placeholder="-887220"
-            value={tickLower}
-            onChange={(e) => setTickLower(e.target.value)}
-            disabled={loading}
-          />
+            <div className="amount-input-card">
+              <div className="amount-input-header">
+                <div className="token-selector-display">
+                  <div className="token-avatar-small">{token1Info?.symbol?.[0] || 'T'}</div>
+                  <span className="token-symbol-small">{token1Info?.symbol || 'Token 1'}</span>
+                </div>
+                {address && (
+                  <button
+                    type="button"
+                    onClick={() => handleMax(1)}
+                    className="max-button"
+                    disabled={loading}
+                  >
+                    MAX
+                  </button>
+                )}
+              </div>
+              <input
+                type="number"
+                step="any"
+                placeholder="0.0"
+                value={amount1}
+                onChange={(e) => setAmount1(e.target.value)}
+                disabled={loading || !address}
+                className="amount-input"
+              />
+              {address && balance1 && (
+                <div className="balance-hint">
+                  Balance: {parseFloat(balance1).toLocaleString()} {token1Info?.symbol}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
-        <div className="form-group">
-          <label>Tick Upper</label>
-          <input
-            type="number"
-            placeholder="887220"
-            value={tickUpper}
-            onChange={(e) => setTickUpper(e.target.value)}
-            disabled={loading}
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Fee Tier</label>
-          <select value={fee} onChange={(e) => setFee(e.target.value)} disabled={loading}>
-            {feeOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
+        {/* Fee Tier */}
+        <div className="create-section">
+          <div className="section-header">
+            <h3>Fee Tier</h3>
+            <p className="section-description">Select the fee tier for this pool</p>
+          </div>
+          <div className="fee-tier-selector">
+            {FEE_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setFee(option.value)}
+                disabled={loading}
+                className={`fee-option ${fee === option.value ? 'active' : ''}`}
+              >
+                <div className="fee-option-content">
+                  <div className="fee-label">{option.label}</div>
+                  <div className="fee-description">{option.description}</div>
+                </div>
+                {fee === option.value && <div className="fee-check">✓</div>}
+              </button>
             ))}
-          </select>
+          </div>
         </div>
-      </div>
 
-      <div className="form-section">
-        <button
-          onClick={handleAddLiquidity}
-          disabled={loading || !address || !token0 || !token1 || !amount0 || !amount1}
-          className="submit-button"
-        >
-          {loading ? step || 'Processing...' : 'Add Liquidity'}
-        </button>
+        {/* Price Range */}
+        <div className="create-section">
+          <div className="section-header">
+            <h3>Price Range</h3>
+            <p className="section-description">
+              Set the price range for your liquidity position
+              <span style={{ marginLeft: '8px', fontSize: '0.85em', opacity: 0.7 }}>
+                (Tick spacing: {getTickSpacing(fee)})
+              </span>
+            </p>
+          </div>
+          <div className="range-presets">
+            {getPriceRangePresets(fee).map((preset, index) => (
+              <button
+                key={index}
+                type="button"
+                onClick={() => handleRangePreset(index)}
+                disabled={loading}
+                className={`range-preset ${selectedRangePreset === index ? 'active' : ''}`}
+              >
+                <div className="preset-label">{preset.label}</div>
+                <div className="preset-description">{preset.description}</div>
+              </button>
+            ))}
+          </div>
+          <div className="range-inputs">
+            <div className="range-input-group">
+              <label>Tick Lower</label>
+              <input
+                type="number"
+                placeholder="-887220"
+                value={tickLower}
+                onChange={(e) => {
+                  setTickLower(e.target.value)
+                  setSelectedRangePreset(getPriceRangePresets(fee).length - 1) // Custom
+                }}
+                onBlur={(e) => {
+                  // Auto-correct to valid tick spacing when user finishes editing
+                  if (e.target.value) {
+                    const tickSpacing = getTickSpacing(fee)
+                    const validTick = roundToTickSpacing(parseInt(e.target.value), tickSpacing)
+                    setTickLower(validTick.toString())
+                  }
+                }}
+                disabled={loading}
+                className="range-input"
+              />
+              <div style={{ fontSize: '0.75em', opacity: 0.6, marginTop: '4px' }}>
+                Must be divisible by {getTickSpacing(fee)}
+              </div>
+            </div>
+            <div className="range-input-group">
+              <label>Tick Upper</label>
+              <input
+                type="number"
+                placeholder="887220"
+                value={tickUpper}
+                onChange={(e) => {
+                  setTickUpper(e.target.value)
+                  setSelectedRangePreset(getPriceRangePresets(fee).length - 1) // Custom
+                }}
+                onBlur={(e) => {
+                  // Auto-correct to valid tick spacing when user finishes editing
+                  if (e.target.value) {
+                    const tickSpacing = getTickSpacing(fee)
+                    const validTick = roundToTickSpacing(parseInt(e.target.value), tickSpacing)
+                    setTickUpper(validTick.toString())
+                  }
+                }}
+                disabled={loading}
+                className="range-input"
+              />
+              <div style={{ fontSize: '0.75em', opacity: 0.6, marginTop: '4px' }}>
+                Must be divisible by {getTickSpacing(fee)}
+              </div>
+            </div>
+          </div>
+        </div>
 
-        {!address && (
-          <p className="warning-text">Please connect your wallet to add liquidity</p>
+        {/* Status Messages */}
+        {error && (
+          <div className="status-message error">
+            <span className="status-icon">⚠️</span>
+            <span>{error}</span>
+          </div>
         )}
-      </div>
+        {success && (
+          <div className="status-message success">
+            <span className="status-icon">✓</span>
+            <span>{success}</span>
+          </div>
+        )}
+        {step && (
+          <div className="status-message info">
+            <span className="status-icon">⏳</span>
+            <span>{step}</span>
+          </div>
+        )}
 
-      <div className="info-box">
-        <h4>ℹ️ Important Notes</h4>
-        <ul>
-          <li>Make sure you have both tokens in your wallet</li>
-          <li>Tokens will be automatically approved if needed</li>
-          <li>Slippage protection disabled (0%) - pool price determines actual ratio</li>
-          <li>Full range: Tick Lower = -887220, Tick Upper = 887220</li>
-          <li>Concentrated range: Use narrower tick ranges for better capital efficiency</li>
-          <li>Use fee tier 0.05% (500) - this pool is initialized and tested</li>
-        </ul>
+        {/* Action Button */}
+        <div className="create-action">
+          {!address ? (
+            <div className="wallet-prompt">
+              <p>Please connect your wallet to create a position</p>
+            </div>
+          ) : (
+            <button
+              onClick={handleAddLiquidity}
+              disabled={loading || !amount0 || !amount1}
+              className="create-button"
+            >
+              {loading ? (
+                <>
+                  <span className="button-spinner">⏳</span>
+                  {step || 'Processing...'}
+                </>
+              ) : (
+                'Create Position'
+              )}
+            </button>
+          )}
+        </div>
+
+        {/* Info Box */}
+        <div className="info-card">
+          <div className="info-header">
+            <span className="info-icon">ℹ️</span>
+            <h4>Important Information</h4>
+          </div>
+          <ul className="info-list">
+            <li>Ensure you have sufficient balance of both tokens</li>
+            <li>Token approvals will be handled automatically</li>
+            <li>Full range provides maximum liquidity coverage</li>
+            <li>Narrower ranges offer higher capital efficiency</li>
+            <li>Recommended fee tier: 0.05% for stable pairs</li>
+          </ul>
+        </div>
       </div>
     </div>
   )

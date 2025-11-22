@@ -1,0 +1,21 @@
+{
+  "name": "copypools-nextjs",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.6",
+    "axios": "^1.13.2",
+    "ethers": "^6.15.0",
+    "next": "^16.0.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "typescript": "^5.9.3"
+  }
+}

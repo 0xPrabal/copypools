@@ -8,16 +8,19 @@ import { ContractService } from '@/lib/services/contracts'
 
 interface PositionsListProps {
   onSelectPosition: (position: Position) => void
+  showAll?: boolean
 }
 
-export const PositionsList = ({ onSelectPosition }: PositionsListProps) => {
+export const PositionsList = ({ onSelectPosition, showAll = true }: PositionsListProps) => {
   const { address, provider } = useWallet()
   const [positions, setPositions] = useState<Position[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filterOwner, setFilterOwner] = useState('')
-  const [showMyPositions, setShowMyPositions] = useState(false)
+  const [showMyPositions, setShowMyPositions] = useState(!showAll)
   const [useDirectRead, setUseDirectRead] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [filterProtocol, setFilterProtocol] = useState<string>('all')
 
   // Direct contract reading
   const fetchPositionsFromContract = async () => {
@@ -37,6 +40,11 @@ export const PositionsList = ({ onSelectPosition }: PositionsListProps) => {
       for (let i = 1; i <= 20; i++) {
         try {
           const pos = await contractService.getPosition(BigInt(i))
+
+          // Skip inactive positions
+          if (!pos.active) {
+            continue
+          }
 
           // Filter by owner if needed
           if (showMyPositions && pos.owner.toLowerCase() !== address.toLowerCase()) {
@@ -132,10 +140,31 @@ export const PositionsList = ({ onSelectPosition }: PositionsListProps) => {
     return `${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}`
   }
 
+  // Get unique protocols for filter
+  const uniqueProtocols = [...new Set(positions.map(p => p.protocol))]
+
+  // Filter positions based on search and filters
+  const filteredPositions = positions.filter(position => {
+    const matchesSearch = !searchQuery || 
+      position.positionId.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      position.owner.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      position.token0.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      position.token1.toLowerCase().includes(searchQuery.toLowerCase())
+    
+    const matchesProtocol = filterProtocol === 'all' || position.protocol === filterProtocol
+    
+    return matchesSearch && matchesProtocol
+  })
+
   return (
     <div className="positions-list">
       <div className="list-header">
-        <h2>Positions</h2>
+        <div>
+          <h2>{showAll ? 'All Positions' : 'My Positions'}</h2>
+          <p className="list-subtitle">
+            {filteredPositions.length} {filteredPositions.length === 1 ? 'position' : 'positions'} found
+          </p>
+        </div>
         <div className="header-buttons">
           <button
             onClick={() => {
@@ -145,41 +174,71 @@ export const PositionsList = ({ onSelectPosition }: PositionsListProps) => {
             className="toggle-button"
             title={useDirectRead ? 'Switch to API' : 'Switch to Direct Contract Reading'}
           >
-            {useDirectRead ? '📡 Direct Read' : '🌐 API'}
+            {useDirectRead ? '📡 Direct' : '🌐 API'}
           </button>
           <button onClick={fetchPositions} className="refresh-button">
-            Refresh
+            🔄 Refresh
           </button>
         </div>
       </div>
 
-      <div className="filters">
-        <div className="filter-group">
-          <label>
-            <input
-              type="checkbox"
-              checked={showMyPositions}
-              onChange={(e) => {
-                setShowMyPositions(e.target.checked)
-                if (e.target.checked) setFilterOwner('')
-              }}
-              disabled={!address}
-            />
-            Show My Positions Only
-          </label>
-        </div>
-
-        <div className="filter-group">
+      <div className="filters-bar">
+        <div className="search-box">
+          <span className="search-icon">🔍</span>
           <input
             type="text"
-            placeholder="Filter by owner address"
-            value={filterOwner}
-            onChange={(e) => {
-              setFilterOwner(e.target.value)
-              setShowMyPositions(false)
-            }}
-            className="filter-input"
+            placeholder="Search by position ID, owner, or token address..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="search-input"
           />
+        </div>
+
+        <div className="filters">
+          {showAll && (
+            <div className="filter-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={showMyPositions}
+                  onChange={(e) => {
+                    setShowMyPositions(e.target.checked)
+                    if (e.target.checked) setFilterOwner('')
+                  }}
+                  disabled={!address}
+                />
+                My Positions Only
+              </label>
+            </div>
+          )}
+
+          <div className="filter-group">
+            <select
+              value={filterProtocol}
+              onChange={(e) => setFilterProtocol(e.target.value)}
+              className="filter-select"
+            >
+              <option value="all">All Protocols</option>
+              {uniqueProtocols.map(protocol => (
+                <option key={protocol} value={protocol}>{protocol}</option>
+              ))}
+            </select>
+          </div>
+
+          {!showMyPositions && (
+            <div className="filter-group">
+              <input
+                type="text"
+                placeholder="Filter by owner address"
+                value={filterOwner}
+                onChange={(e) => {
+                  setFilterOwner(e.target.value)
+                  setShowMyPositions(false)
+                }}
+                className="filter-input"
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -188,33 +247,69 @@ export const PositionsList = ({ onSelectPosition }: PositionsListProps) => {
 
       {!loading && !error && (
         <div className="positions-grid">
-          {positions.length === 0 ? (
-            <div className="empty-state">No positions found</div>
+          {filteredPositions.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-icon">📭</div>
+              <h3>No positions found</h3>
+              <p>Try adjusting your filters or create a new position</p>
+            </div>
           ) : (
-            positions.map((position) => (
+            filteredPositions.map((position) => (
               <div
                 key={position.positionId}
                 className={`position-card ${position.active ? 'active' : 'inactive'}`}
                 onClick={() => onSelectPosition(position)}
               >
-                <div className="position-header">
-                  <h3>Position #{position.positionId}</h3>
+                <div className="position-card-header">
+                  <div className="position-id-section">
+                    <span className="position-icon">💼</span>
+                    <div>
+                      <h3>Position #{position.positionId}</h3>
+                      <span className="protocol-badge">{position.protocol}</span>
+                    </div>
+                  </div>
                   <span className={`status-badge ${position.active ? 'active' : 'inactive'}`}>
-                    {position.active ? 'Active' : 'Inactive'}
+                    {position.active ? '● Active' : '○ Inactive'}
                   </span>
                 </div>
 
-                <div className="position-details">
-                  <p><strong>Protocol:</strong> {position.protocol}</p>
-                  <p><strong>Owner:</strong> {formatAddress(position.owner)}</p>
-                  <p><strong>Token0:</strong> {formatAddress(position.token0)}</p>
-                  <p><strong>Token1:</strong> {formatAddress(position.token1)}</p>
+                <div className="position-tokens">
+                  <div className="token-pair">
+                    <div className="token-item">
+                      <div className="token-avatar">T0</div>
+                      <span className="token-address">{formatAddress(position.token0)}</span>
+                    </div>
+                    <div className="token-divider">/</div>
+                    <div className="token-item">
+                      <div className="token-avatar">T1</div>
+                      <span className="token-address">{formatAddress(position.token1)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="position-metrics">
                   {position.tickLower !== undefined && (
-                    <p><strong>Tick Range:</strong> [{position.tickLower}, {position.tickUpper}]</p>
+                    <div className="metric-item">
+                      <span className="metric-label">Range</span>
+                      <span className="metric-value">
+                        [{position.tickLower}, {position.tickUpper}]
+                      </span>
+                    </div>
                   )}
                   {position.liquidity && (
-                    <p><strong>Liquidity:</strong> {position.liquidity}</p>
+                    <div className="metric-item">
+                      <span className="metric-label">Liquidity</span>
+                      <span className="metric-value">{position.liquidity}</span>
+                    </div>
                   )}
+                </div>
+
+                <div className="position-footer">
+                  <div className="owner-info">
+                    <span className="owner-label">Owner:</span>
+                    <span className="owner-address">{formatAddress(position.owner)}</span>
+                  </div>
+                  <div className="view-details">View Details →</div>
                 </div>
               </div>
             ))

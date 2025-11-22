@@ -151,6 +151,28 @@ interface IAdapter {
         returns (address token0, address token1);
 
     /**
+     * @notice Gets complete position information including liquidity
+     * @param tokenId The position ID
+     * @return owner Position owner address
+     * @return token0 First token address
+     * @return token1 Second token address
+     * @return tickLower Lower tick boundary
+     * @return tickUpper Upper tick boundary
+     * @return liquidity Current liquidity amount
+     */
+    function getPositionInfo(uint256 tokenId)
+        external
+        view
+        returns (
+            address owner,
+            address token0,
+            address token1,
+            int24 tickLower,
+            int24 tickUpper,
+            uint128 liquidity
+        );
+
+    /**
      * @notice Swaps tokens in a pool
      * @param poolData Pool configuration
      * @param zeroForOne Direction of swap (true = token0 to token1)

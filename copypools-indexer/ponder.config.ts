@@ -22,13 +22,13 @@ export default createConfig({
       abi: LPManagerABI.abi,
       address: process.env.LP_MANAGER_ADDRESS as `0x${string}`,
       network: "sepolia",
-      startBlock: 7363025,
+      startBlock: 9670540,
     },
     UniswapV4Adapter: {
       abi: AdapterABI.abi,
       address: process.env.ADAPTER_ADDRESS as `0x${string}`,
       network: "sepolia",
-      startBlock: 7363029,
+      startBlock: 9669058,
     },
   },
 });

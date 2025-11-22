@@ -18,7 +18,6 @@
     "verify:mainnet": "hardhat verify --network mainnet",
     "clean": "hardhat clean",
     "typechain": "hardhat typechain"
-
   },
   "repository": {
     "type": "git",
@@ -59,5 +58,8 @@
     "@uniswap/v4-core": "^1.0.2",
     "@uniswap/v4-periphery": "^1.0.3",
     "dotenv": "^17.2.3"
+  },
+  "directories": {
+    "test": "test"
   }
 }

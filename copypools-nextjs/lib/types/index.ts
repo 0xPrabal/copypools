@@ -47,3 +47,38 @@ export interface WalletState {
   isConnected: boolean
   isConnecting: boolean
 }
+
+export interface TimelineEvent {
+  type: 'RANGE_MOVE' | 'COMPOUND' | 'CLOSE'
+  timestamp: Date
+  txHash?: string
+  blockNumber?: number
+  [key: string]: any
+}
+
+export interface RangeMoveEvent {
+  oldPositionId: string
+  newPositionId: string
+  newTickLower: number
+  newTickUpper: number
+  txHash: string
+  blockNumber: number
+  timestamp: Date
+}
+
+export interface CompoundEvent {
+  positionId: string
+  addedLiquidity: string
+  txHash: string
+  blockNumber: number
+  timestamp: Date
+}
+
+export interface CloseEvent {
+  positionId: string
+  amount0: string
+  amount1: string
+  txHash: string
+  blockNumber: number
+  timestamp: Date
+}

@@ -7,6 +7,7 @@ import { apiService } from '@/lib/services/api'
 import { ContractService } from '@/lib/services/contracts'
 import { useWallet } from '@/lib/hooks/useWallet'
 import { EXPLORER_URLS } from '@/lib/config/constants'
+import { PositionTimeline } from './PositionTimeline'
 
 interface PositionDetailsProps {
   position: Position
@@ -18,6 +19,8 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<'operations' | 'timeline' | 'transactions'>('operations')
+  const [syncing, setSyncing] = useState(false)
 
   // Move Range
   const [tickLower, setTickLower] = useState('')
@@ -328,6 +331,21 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
 
   const explorerUrl = chainId ? EXPLORER_URLS[chainId] : ''
 
+  const handleSyncPosition = async () => {
+    try {
+      setSyncing(true)
+      setError(null)
+      await apiService.syncPosition(position.positionId)
+      // Refresh position data
+      fetchTransactions()
+      alert('Position synced successfully!')
+    } catch (err: any) {
+      setError(err.message || 'Failed to sync position')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   return (
     <div className="position-details-modal">
       <div className="modal-overlay" onClick={onClose}></div>
@@ -340,7 +358,17 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
         <div className="modal-body">
           {/* Position Info */}
           <div className="section">
-            <h3>Position Information</h3>
+            <div className="section-header-with-action">
+              <h3>Position Information</h3>
+              <button
+                onClick={handleSyncPosition}
+                disabled={syncing}
+                className="sync-button"
+                title="Sync position data from blockchain"
+              >
+                {syncing ? '⏳ Syncing...' : '🔄 Sync'}
+              </button>
+            </div>
             <div className="info-grid">
               <div><strong>Protocol:</strong> {position.protocol}</div>
               <div><strong>Status:</strong> {position.active ? '✅ Active' : '❌ Inactive'}</div>
@@ -360,8 +388,30 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
             </div>
           </div>
 
-          {/* Operations */}
-          {position.active && address && (
+          {/* Tabs */}
+          <div className="position-tabs">
+            <button
+              className={`position-tab ${activeTab === 'operations' ? 'active' : ''}`}
+              onClick={() => setActiveTab('operations')}
+            >
+              Operations
+            </button>
+            <button
+              className={`position-tab ${activeTab === 'timeline' ? 'active' : ''}`}
+              onClick={() => setActiveTab('timeline')}
+            >
+              Timeline
+            </button>
+            <button
+              className={`position-tab ${activeTab === 'transactions' ? 'active' : ''}`}
+              onClick={() => setActiveTab('transactions')}
+            >
+              Transactions
+            </button>
+          </div>
+
+          {/* Operations Tab */}
+          {activeTab === 'operations' && position.active && address && (
             <div className="section operations">
               <h3>Operations</h3>
 
@@ -531,38 +581,50 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
             </div>
           )}
 
-          {/* Transaction History */}
-          <div className="section">
-            <h3>Transaction History</h3>
-            {transactions.length === 0 ? (
-              <p>No transactions found</p>
-            ) : (
-              <div className="transactions-list">
-                {transactions.map((tx) => (
-                  <div key={tx.id} className={`transaction-item ${tx.status.toLowerCase()}`}>
-                    <div className="tx-header">
-                      <span className="tx-type">{tx.type}</span>
-                      <span className={`tx-status ${tx.status.toLowerCase()}`}>{tx.status}</span>
+          {/* Timeline Tab */}
+          {activeTab === 'timeline' && (
+            <div className="section">
+              <PositionTimeline positionId={position.positionId} />
+            </div>
+          )}
+
+          {/* Transactions Tab */}
+          {activeTab === 'transactions' && (
+            <div className="section">
+              <h3>Transaction History</h3>
+              {transactions.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-icon">📭</div>
+                  <p>No transactions found</p>
+                </div>
+              ) : (
+                <div className="transactions-list">
+                  {transactions.map((tx) => (
+                    <div key={tx.id} className={`transaction-item ${tx.status.toLowerCase()}`}>
+                      <div className="tx-header">
+                        <span className="tx-type">{tx.type}</span>
+                        <span className={`tx-status ${tx.status.toLowerCase()}`}>{tx.status}</span>
+                      </div>
+                      {tx.txHash && explorerUrl && (
+                        <a
+                          href={`${explorerUrl}/tx/${tx.txHash}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="tx-hash"
+                        >
+                          {tx.txHash.substring(0, 10)}...{tx.txHash.substring(tx.txHash.length - 8)}
+                        </a>
+                      )}
+                      {tx.blockNumber && <div>Block: {tx.blockNumber}</div>}
+                      {tx.gasUsed && <div>Gas: {tx.gasUsed}</div>}
+                      {tx.errorMessage && <div className="error-message">{tx.errorMessage}</div>}
+                      <div className="tx-date">{new Date(tx.createdAt).toLocaleString()}</div>
                     </div>
-                    {tx.txHash && explorerUrl && (
-                      <a
-                        href={`${explorerUrl}/tx/${tx.txHash}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="tx-hash"
-                      >
-                        {tx.txHash.substring(0, 10)}...{tx.txHash.substring(tx.txHash.length - 8)}
-                      </a>
-                    )}
-                    {tx.blockNumber && <div>Block: {tx.blockNumber}</div>}
-                    {tx.gasUsed && <div>Gas: {tx.gasUsed}</div>}
-                    {tx.errorMessage && <div className="error-message">{tx.errorMessage}</div>}
-                    <div className="tx-date">{new Date(tx.createdAt).toLocaleString()}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

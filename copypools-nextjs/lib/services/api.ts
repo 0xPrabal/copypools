@@ -1,13 +1,28 @@
-import axios from 'axios'
+import axios, { AxiosError } from 'axios'
 import { BACKEND_URL } from '@/lib/config/constants'
 import { Position, Transaction, HealthStatus } from '@/lib/types'
+import { parseError } from '@/lib/utils/errorHandler'
 
 const api = axios.create({
   baseURL: BACKEND_URL,
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 30000, // 30 second timeout
 })
+
+// Add response interceptor for better error handling
+api.interceptors.response.use(
+  (response) => response,
+  (error: AxiosError) => {
+    // Transform error to include parsed message
+    if (error.response) {
+      const parsedError = parseError(error)
+      error.message = parsedError
+    }
+    return Promise.reject(error)
+  }
+)
 
 export const apiService = {
   // Health check
@@ -65,6 +80,38 @@ export const apiService = {
     const { data } = await api.post(`/positions/${positionId}/close`, {
       liquidity,
     })
+    return data
+  },
+
+  // Ponder-indexed data endpoints
+  getPositionHistory: async (positionId: string): Promise<any[]> => {
+    const { data } = await api.get(`/positions/${positionId}/history`)
+    return data
+  },
+
+  getPositionCompounds: async (positionId: string): Promise<any[]> => {
+    const { data } = await api.get(`/positions/${positionId}/compounds`)
+    return data
+  },
+
+  getPositionTimeline: async (positionId: string): Promise<any[]> => {
+    const { data } = await api.get(`/positions/${positionId}/timeline`)
+    return data
+  },
+
+  getPositionCloseEvent: async (positionId: string): Promise<any | null> => {
+    const { data } = await api.get(`/positions/${positionId}/close-event`)
+    return data
+  },
+
+  syncPosition: async (positionId: string): Promise<any> => {
+    const { data } = await api.post(`/positions/${positionId}/sync`)
+    return data
+  },
+
+  // Create/Sync position endpoint
+  createOrSyncPosition: async (positionId: string): Promise<any> => {
+    const { data } = await api.post('/positions', { positionId })
     return data
   },
 }

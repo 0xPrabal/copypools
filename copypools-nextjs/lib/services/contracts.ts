@@ -371,18 +371,25 @@ export class ContractService {
     }
   }
 
-  // Burn position (removes all liquidity and closes position)
-  async burnPosition(
-    positionId: bigint,
-    liquidityAmount: bigint
-  ) {
+  // Burn position (removes ALL liquidity and closes position)
+  async burnPosition(positionId: bigint) {
     try {
       const signer = await this.provider.getSigner()
 
-      // Call LPManager's closePosition (does the same thing)
-      const lpManager = this.lpManagerContract.connect(signer) as any
+      // Get position details to find total liquidity
+      const position = await this.getPosition(positionId)
 
-      const tx = await lpManager.closePosition(positionId, liquidityAmount)
+      // Get adapter position to get liquidity amount
+      const adapterPosition = await this.getAdapterPosition(position.dexTokenId)
+      const totalLiquidity = adapterPosition.liquidity
+
+      if (totalLiquidity === 0n) {
+        throw new Error('Position has no liquidity to burn')
+      }
+
+      // Call LPManager's closePosition with ALL liquidity
+      const lpManager = this.lpManagerContract.connect(signer) as any
+      const tx = await lpManager.closePosition(positionId, totalLiquidity)
       return await tx.wait()
     } catch (error) {
       console.error('Error burning position:', error)
