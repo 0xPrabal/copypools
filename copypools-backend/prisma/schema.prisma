@@ -7,7 +7,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model ponder_close_event {
+model a94__ponder_close_event {
   id           String  @id
   position_id  String
   amount0      String
@@ -16,10 +16,11 @@ model ponder_close_event {
   block_number Decimal @db.Decimal(78, 0)
   timestamp    Decimal @db.Decimal(78, 0)
 
-  @@map("1750__ponder_close_event")
+  @@index([position_id], map: "6a94__ponder_close_event_position_id_index")
+  @@map("6a94__ponder_close_event")
 }
 
-model ponder_compound_event {
+model a94__ponder_compound_event {
   id              String  @id
   position_id     String
   added_liquidity String
@@ -27,10 +28,11 @@ model ponder_compound_event {
   block_number    Decimal @db.Decimal(78, 0)
   timestamp       Decimal @db.Decimal(78, 0)
 
-  @@map("1750__ponder_compound_event")
+  @@index([position_id], map: "6a94__ponder_compound_event_position_id_index")
+  @@map("6a94__ponder_compound_event")
 }
 
-model ponder_position {
+model a94__ponder_position {
   id                   String  @id
   protocol             String
   dex_token_id         String
@@ -46,10 +48,12 @@ model ponder_position {
   created_block_number Decimal @db.Decimal(78, 0)
   updated_at           Decimal @db.Decimal(78, 0)
 
-  @@map("1750__ponder_position")
+  @@index([active], map: "6a94__ponder_position_active_index")
+  @@index([owner], map: "6a94__ponder_position_owner_index")
+  @@map("6a94__ponder_position")
 }
 
-model ponder_range_move_event {
+model a94__ponder_range_move_event {
   id              String  @id
   old_position_id String
   new_position_id String
@@ -59,10 +63,12 @@ model ponder_range_move_event {
   block_number    Decimal @db.Decimal(78, 0)
   timestamp       Decimal @db.Decimal(78, 0)
 
-  @@map("1750__ponder_range_move_event")
+  @@index([new_position_id], map: "6a94__ponder_range_move_event_new_position_id_index")
+  @@index([old_position_id], map: "6a94__ponder_range_move_event_old_position_id_index")
+  @@map("6a94__ponder_range_move_event")
 }
 
-model reorg__ponder_close_event {
+model a94_reorg__ponder_close_event {
   id           String
   position_id  String
   amount0      String
@@ -74,10 +80,10 @@ model reorg__ponder_close_event {
   operation    Int
   checkpoint   String  @db.VarChar(75)
 
-  @@map("1750_reorg__ponder_close_event")
+  @@map("6a94_reorg__ponder_close_event")
 }
 
-model reorg__ponder_compound_event {
+model a94_reorg__ponder_compound_event {
   id              String
   position_id     String
   added_liquidity String
@@ -88,10 +94,10 @@ model reorg__ponder_compound_event {
   operation       Int
   checkpoint      String  @db.VarChar(75)
 
-  @@map("1750_reorg__ponder_compound_event")
+  @@map("6a94_reorg__ponder_compound_event")
 }
 
-model reorg__ponder_position {
+model a94_reorg__ponder_position {
   id                   String
   protocol             String
   dex_token_id         String
@@ -110,10 +116,10 @@ model reorg__ponder_position {
   operation            Int
   checkpoint           String  @db.VarChar(75)
 
-  @@map("1750_reorg__ponder_position")
+  @@map("6a94_reorg__ponder_position")
 }
 
-model reorg__ponder_range_move_event {
+model a94_reorg__ponder_range_move_event {
   id              String
   old_position_id String
   new_position_id String
@@ -126,7 +132,7 @@ model reorg__ponder_range_move_event {
   operation       Int
   checkpoint      String  @db.VarChar(75)
 
-  @@map("1750_reorg__ponder_range_move_event")
+  @@map("6a94_reorg__ponder_range_move_event")
 }
 
 model ponder_meta {

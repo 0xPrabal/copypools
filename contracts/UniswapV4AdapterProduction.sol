@@ -599,12 +599,15 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
             params.amount1Desired
         );
 
-        // REAL V4 OPERATION: Add liquidity via PoolManager
+        // Generate tokenId BEFORE calling modifyLiquidity to use as unique salt
+        uint256 id = _nextTokenId++;
+
+        // REAL V4 OPERATION: Add liquidity via PoolManager with unique salt
         ModifyLiquidityParams memory modifyParams = ModifyLiquidityParams({
             tickLower: params.pool.tickLower,
             tickUpper: params.pool.tickUpper,
             liquidityDelta: int256(uint256(liquidity)),
-            salt: bytes32(0)
+            salt: bytes32(id) // Use tokenId as unique salt
         });
 
         (BalanceDelta delta,) = poolManager.modifyLiquidity(key, modifyParams, "");
@@ -651,8 +654,7 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
             revert SlippageCheckFailed(actualAmount1, params.amount1Min);
         }
 
-        // Store position
-        uint256 id = _nextTokenId++;
+        // Store position (id was already generated earlier for salt)
         positions[id] = Position(key, owner, params.pool.tickLower, params.pool.tickUpper, liquidity);
 
         emit PositionCreated(id, owner, liquidity);
@@ -684,11 +686,12 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
         );
 
         // REAL V4 OPERATION: Increase liquidity
+        // CRITICAL: Use same salt as when position was created
         ModifyLiquidityParams memory modifyParams = ModifyLiquidityParams({
             tickLower: pos.tickLower,
             tickUpper: pos.tickUpper,
             liquidityDelta: int256(uint256(additionalLiquidity)),
-            salt: bytes32(0)
+            salt: bytes32(id)  // Use tokenId as salt (same as position creation)
         });
 
         (BalanceDelta delta,) = poolManager.modifyLiquidity(pos.key, modifyParams, "");
@@ -736,11 +739,12 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
         Position storage pos = positions[id];
 
         // REAL V4 OPERATION: Remove liquidity (negative delta)
+        // CRITICAL: Use same salt as when position was created
         ModifyLiquidityParams memory modifyParams = ModifyLiquidityParams({
             tickLower: pos.tickLower,
             tickUpper: pos.tickUpper,
             liquidityDelta: -int256(uint256(liquidityToRemove)),
-            salt: bytes32(0)
+            salt: bytes32(id)  // Use tokenId as salt (same as position creation)
         });
 
         (BalanceDelta delta,) = poolManager.modifyLiquidity(pos.key, modifyParams, "");
@@ -778,11 +782,12 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
         Position storage pos = positions[id];
 
         // REAL V4 OPERATION: Collect fees by calling modifyLiquidity with 0 delta
+        // CRITICAL: Use same salt as when position was created
         ModifyLiquidityParams memory modifyParams = ModifyLiquidityParams({
             tickLower: pos.tickLower,
             tickUpper: pos.tickUpper,
             liquidityDelta: 0, // Zero delta = collect fees only
-            salt: bytes32(0)
+            salt: bytes32(id)  // Use tokenId as salt (same as position creation)
         });
 
         (BalanceDelta delta,) = poolManager.modifyLiquidity(pos.key, modifyParams, "");
@@ -811,11 +816,12 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
         Position storage pos = positions[id];
 
         // STEP 1: Collect fees (modifyLiquidity with 0 delta)
+        // CRITICAL: Use same salt as when position was created
         ModifyLiquidityParams memory collectParams = ModifyLiquidityParams({
             tickLower: pos.tickLower,
             tickUpper: pos.tickUpper,
             liquidityDelta: 0, // Zero delta = collect fees only
-            salt: bytes32(0)
+            salt: bytes32(id)  // Use tokenId as salt (same as position creation)
         });
 
         (BalanceDelta feeDelta,) = poolManager.modifyLiquidity(pos.key, collectParams, "");
@@ -856,12 +862,13 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
         );
 
         // STEP 3: Add liquidity back to position (reinvest fees)
+        // CRITICAL: Use same salt as when position was created
         if (liquidityToAdd > 0) {
             ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
                 tickLower: pos.tickLower,
                 tickUpper: pos.tickUpper,
                 liquidityDelta: int256(uint256(liquidityToAdd)),
-                salt: bytes32(0)
+                salt: bytes32(id)  // Use tokenId as salt (same as position creation)
             });
 
             (BalanceDelta addDelta,) = poolManager.modifyLiquidity(pos.key, addParams, "");
@@ -910,11 +917,12 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
         Position storage oldPos = positions[oldId];
 
         // STEP 1: Withdraw all liquidity from old position
+        // IMPORTANT: Use the same salt that was used when creating the position
         ModifyLiquidityParams memory withdrawParams = ModifyLiquidityParams({
             tickLower: oldPos.tickLower,
             tickUpper: oldPos.tickUpper,
             liquidityDelta: -int256(uint256(oldPos.liquidity)),
-            salt: bytes32(0)
+            salt: bytes32(oldId)  // Use oldId as salt (same as when position was created)
         });
 
         (BalanceDelta withdrawDelta,) = poolManager.modifyLiquidity(oldPos.key, withdrawParams, "");
@@ -949,12 +957,15 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
             amount1
         );
 
-        // STEP 3: Create new position at new range
+        // STEP 3: Create new position at new range with unique salt
+        // Generate new tokenId for the new position
+        uint256 newId = _nextTokenId++;
+
         ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
             tickLower: newTickLower,
             tickUpper: newTickUpper,
             liquidityDelta: int256(uint256(newLiquidity)),
-            salt: bytes32(0)
+            salt: bytes32(newId)  // Use newId as unique salt
         });
 
         (BalanceDelta addDelta,) = poolManager.modifyLiquidity(oldPos.key, addParams, "");
@@ -977,9 +988,7 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
             revert SlippageCheckFailed(used0 < amount0Min ? used0 : used1, used0 < amount0Min ? amount0Min : amount1Min);
         }
 
-        // STEP 4: Create new position record
-        uint256 newId = _nextTokenId++;
-
+        // STEP 4: Create new position record (newId already generated above for salt)
         positions[newId] = Position({
             key: oldPos.key,
             owner: oldPos.owner,
@@ -1016,11 +1025,12 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
         Position storage pos = positions[id];
 
         // Step 1: Remove all liquidity (negative delta)
+        // CRITICAL: Use same salt as when position was created
         ModifyLiquidityParams memory modifyParams = ModifyLiquidityParams({
             tickLower: pos.tickLower,
             tickUpper: pos.tickUpper,
             liquidityDelta: -int256(uint256(pos.liquidity)),
-            salt: bytes32(0)
+            salt: bytes32(id)  // Use tokenId as salt (same as position creation)
         });
 
         (BalanceDelta delta,) = poolManager.modifyLiquidity(pos.key, modifyParams, "");
