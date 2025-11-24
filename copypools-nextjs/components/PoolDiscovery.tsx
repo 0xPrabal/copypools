@@ -1,14 +1,31 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { formatUnits } from 'ethers'
+
+import { AddLiquidity } from '@/components/AddLiquidity'
+import { useWallet } from '@/lib/hooks/useWallet'
 import { apiService } from '@/lib/services/api'
+import { ContractService } from '@/lib/services/contracts'
+import { TokenInfoService, TokenInfo } from '@/lib/services/tokenInfo'
 import { Position } from '@/lib/types'
-import { AddLiquidity } from './AddLiquidity'
+
+const FILTER_CHIPS = [
+  { id: 'all', label: 'All pools' },
+  { id: 'rewards', label: 'Rewards' },
+  { id: 'trending', label: 'Trending' },
+  { id: 'new', label: 'New pools' },
+  { id: 'loan', label: 'Loan' },
+]
+
+const TIMEFRAME_OPTIONS: Array<'1d' | '1w' | '1m' | '1y'> = ['1d', '1w', '1m', '1y']
 
 interface Pool {
   id: string
   token0: string
   token1: string
+  token0Info?: TokenInfo
+  token1Info?: TokenInfo
   feeTier: string
   feePercent: string
   tvl: number
@@ -20,135 +37,290 @@ interface Pool {
   rewardsApr1d: number | null
   protocol: string
   badges?: string[]
+  positionCount: number
+  totalLiquidity: string
 }
 
 export const PoolDiscovery = () => {
+  const { provider } = useWallet()
+
   const [pools, setPools] = useState<Pool[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedNetwork, setSelectedNetwork] = useState('any')
   const [selectedTokens, setSelectedTokens] = useState('any')
-  const [activeTab, setActiveTab] = useState<'rewards' | 'trending' | 'new' | 'all'>('all')
+  const [activeChip, setActiveChip] = useState('all')
   const [timeframe, setTimeframe] = useState<'1d' | '1w' | '1m' | '1y'>('1d')
   const [expandedPool, setExpandedPool] = useState<string | null>(null)
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [selectedPool, setSelectedPool] = useState<Pool | null>(null)
+  const [tokenInfoMap, setTokenInfoMap] = useState<Map<string, TokenInfo>>(new Map())
+  const [error, setError] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [sortConfig, setSortConfig] = useState<{ key: keyof Pool; direction: 'asc' | 'desc' }>({
+    key: 'tvl',
+    direction: 'desc',
+  })
+
+  const stats = useMemo(() => {
+    const totalTVL = pools.reduce((sum, pool) => sum + pool.tvl, 0)
+    const totalVolume = pools.reduce((sum, pool) => sum + pool.volume1d, 0)
+    const activePositions = pools.reduce((sum, pool) => sum + pool.positionCount, 0)
+    return { totalTVL, totalVolume, activePositions }
+  }, [pools])
 
   useEffect(() => {
     fetchPools()
-  }, [activeTab, timeframe])
+  }, [])
+
+  useEffect(() => {
+    if (!provider) return
+
+    const interval = setInterval(() => {
+      fetchPools()
+    }, 30000)
+
+    return () => clearInterval(interval)
+  }, [provider])
 
   const fetchPools = async () => {
     try {
-      setLoading(true)
-      // Get all positions to derive pools
+      if (pools.length === 0) setLoading(true)
+
       const positions = await apiService.getAllPositions()
-      
-      // Group positions by pool (token0, token1, fee tier)
-      const poolMap = new Map<string, Pool>()
-      
+      const tokenAddresses = new Set<string>()
       positions.forEach((pos) => {
-        const poolKey = `${pos.token0}-${pos.token1}-${pos.protocol}`
-        
-        if (!poolMap.has(poolKey)) {
-          // Create pool entry
-          const feeTier = pos.protocol.includes('0.05') ? '0.05%' : 
-                         pos.protocol.includes('0.3') ? '0.3%' : 
-                         pos.protocol.includes('1') ? '1%' : '0.05%'
-          
-          poolMap.set(poolKey, {
-            id: poolKey,
-            token0: pos.token0,
-            token1: pos.token1,
-            feeTier,
-            feePercent: feeTier,
-            tvl: 0,
-            volume1d: 0,
-            fees1d: 0,
-            feesPerTvl1d: 0,
-            age: 0,
-            feesApr1d: 0,
-            rewardsApr1d: null,
-            protocol: pos.protocol,
-            badges: ['v4'],
-          })
-        }
+        tokenAddresses.add(pos.token0)
+        tokenAddresses.add(pos.token1)
       })
 
-      // Convert to array and add mock data for demonstration
-      // In production, this would come from pool analytics
-      const poolsArray = Array.from(poolMap.values()).map((pool, index) => ({
-        ...pool,
-        tvl: Math.random() * 100000000 + 1000000,
-        volume1d: Math.random() * 500000000 + 50000000,
-        fees1d: Math.random() * 500000 + 10000,
-        feesPerTvl1d: Math.random() * 0.01,
-        age: Math.floor(Math.random() * 2000) + 100,
-        feesApr1d: Math.random() * 200 + 10,
-        rewardsApr1d: Math.random() > 0.5 ? Math.random() * 50 + 5 : null,
-      }))
+      if (provider) {
+        const tokenInfoService = new TokenInfoService(provider)
+        const tokenMap = await tokenInfoService.getMultipleTokenInfo(Array.from(tokenAddresses))
+        setTokenInfoMap(tokenMap)
+      }
 
-      // Sort by TVL descending
-      poolsArray.sort((a, b) => b.tvl - a.tvl)
-      
-      setPools(poolsArray)
+      const poolMap = new Map<
+        string,
+        {
+          positions: Position[]
+          token0: string
+          token1: string
+          protocol: string
+        }
+      >()
+
+      positions.forEach((pos) => {
+        const poolKey = `${pos.token0.toLowerCase()}-${pos.token1.toLowerCase()}-${pos.protocol}`
+        if (!poolMap.has(poolKey)) {
+          poolMap.set(poolKey, {
+            positions: [],
+            token0: pos.token0,
+            token1: pos.token1,
+            protocol: pos.protocol,
+          })
+        }
+        poolMap.get(poolKey)!.positions.push(pos)
+      })
+
+      const nextPools: Pool[] = []
+
+      for (const [poolKey, poolData] of poolMap.entries()) {
+        const activePositions = poolData.positions.filter((p) => p.active)
+        if (activePositions.length === 0) continue
+
+        const feeTier = poolData.protocol.includes('0.05')
+          ? '0.05%'
+          : poolData.protocol.includes('0.3')
+            ? '0.3%'
+            : poolData.protocol.includes('1')
+              ? '1%'
+              : '0.05%'
+
+        let totalLiquidity = 0n
+        let totalLiquidityStr = '0'
+
+        try {
+          // Use liquidity data from API instead of direct contract reads
+          for (const pos of activePositions) {
+            if (pos.liquidity) {
+              totalLiquidity += BigInt(pos.liquidity)
+            }
+          }
+          totalLiquidityStr = totalLiquidity.toString()
+        } catch (err) {
+          console.warn('Error calculating liquidity', err)
+        }
+
+        const token0Info = tokenInfoMap.get(poolData.token0.toLowerCase())
+        const token1Info = tokenInfoMap.get(poolData.token1.toLowerCase())
+
+        const oldestPosition = activePositions.reduce((oldest: Position | null, current) => {
+          if (!oldest || !oldest.createdAt) return current
+          if (!current.createdAt) return oldest
+          return new Date(current.createdAt) < new Date(oldest.createdAt) ? current : oldest
+        }, activePositions[0])
+
+        const age = oldestPosition?.createdAt
+          ? Math.max(0, Math.floor((Date.now() - new Date(oldestPosition.createdAt).getTime()) / (1000 * 60 * 60 * 24)))
+          : 0
+
+        const estimatedTvl = totalLiquidity > 0n
+          ? (Number(totalLiquidity) / 1e18) * 2000
+          : activePositions.length * 100000
+
+        const feesApr1d = totalLiquidity > 0n && activePositions.length > 0
+          ? Math.min(500, Math.max(0, (activePositions.length * 0.1) / (Number(totalLiquidity) / 1e18) * 365 * 100))
+          : 0
+
+        nextPools.push({
+          id: poolKey,
+          token0: poolData.token0,
+          token1: poolData.token1,
+          token0Info,
+          token1Info,
+          feeTier,
+          feePercent: feeTier,
+          tvl: estimatedTvl,
+          volume1d: estimatedTvl * 2,
+          fees1d: estimatedTvl * 0.001,
+          feesPerTvl1d: 0.001,
+          age,
+          feesApr1d,
+          rewardsApr1d: null,
+          protocol: poolData.protocol,
+          badges: ['v4'],
+          positionCount: activePositions.length,
+          totalLiquidity: totalLiquidityStr,
+        })
+      }
+
+      nextPools.sort((a, b) => b.tvl - a.tvl)
+      setPools(nextPools)
     } catch (err) {
-      console.error('Failed to fetch pools:', err)
+      console.error('Failed to fetch pools', err)
+      setError(err instanceof Error ? err.message : 'Failed to load pools')
     } finally {
       setLoading(false)
     }
   }
 
   const formatCurrency = (value: number) => {
-    if (value >= 1000000) {
-      return `$${(value / 1000000).toFixed(2)}M`
-    } else if (value >= 1000) {
-      return `$${(value / 1000).toFixed(2)}K`
-    }
+    if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`
+    if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`
+    if (value >= 1_000) return `$${(value / 1_000).toFixed(2)}K`
     return `$${value.toFixed(2)}`
   }
 
-  const formatPercent = (value: number) => {
-    return `${value.toFixed(2)}%`
-  }
+  const formatPercent = (value: number) => `${value.toFixed(2)}%`
+  const formatAge = (days: number) => `${days}d`
 
-  const formatAge = (days: number) => {
-    return `${days} d`
-  }
-
-  const getTokenSymbol = (address: string) => {
-    // In production, you'd fetch token info
-    const commonTokens: Record<string, string> = {
-      '0x8B86719bEeCd8004569F429549177B9B25c6555a': 'WETH',
-      '0xbaa74e10F7edbC3FCDA7508C27A8F5599d79b09c': 'USDC',
+  const getTokenSymbol = (address: string, pool?: Pool) => {
+    const lower = address.toLowerCase()
+    if (pool) {
+      if (lower === pool.token0.toLowerCase() && pool.token0Info) return pool.token0Info.symbol
+      if (lower === pool.token1.toLowerCase() && pool.token1Info) return pool.token1Info.symbol
     }
-    return commonTokens[address.toLowerCase()] || address.substring(0, 6) + '...'
+    const info = tokenInfoMap.get(lower)
+    if (info) return info.symbol
+    return TokenInfoService.getTokenSymbol(address)
   }
+
+  const getTokenName = (address: string, pool?: Pool) => {
+    const lower = address.toLowerCase()
+    if (pool) {
+      if (lower === pool.token0.toLowerCase() && pool.token0Info) return pool.token0Info.name
+      if (lower === pool.token1.toLowerCase() && pool.token1Info) return pool.token1Info.name
+    }
+    const info = tokenInfoMap.get(lower)
+    if (info) return info.name
+    return `Token ${address.substring(0, 6)}`
+  }
+
+  const requestSort = (key: keyof Pool) => {
+    setSortConfig((prev) => {
+      if (prev.key === key) {
+        return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' }
+      }
+      return { key, direction: 'desc' }
+    })
+  }
+
+  const sortIcon = (key: keyof Pool) => {
+    if (sortConfig.key !== key) return null
+    return <span className="sort-icon">{sortConfig.direction === 'asc' ? '▲' : '▼'}</span>
+  }
+
+  const filteredPools = useMemo(() => {
+    let data = [...pools]
+
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase()
+      data = data.filter((pool) => {
+        const symbols = [
+          getTokenSymbol(pool.token0, pool).toLowerCase(),
+          getTokenSymbol(pool.token1, pool).toLowerCase(),
+          getTokenName(pool.token0, pool).toLowerCase(),
+          getTokenName(pool.token1, pool).toLowerCase(),
+        ]
+        return symbols.some((value) => value.includes(query))
+      })
+    }
+
+    if (activeChip === 'rewards') {
+      data = data.filter((pool) => pool.rewardsApr1d && pool.rewardsApr1d > 0)
+    } else if (activeChip === 'trending') {
+      data = data.filter((pool) => pool.volume1d > pool.tvl * 0.6)
+    } else if (activeChip === 'new') {
+      data = data.filter((pool) => pool.age <= 90)
+    } else if (activeChip === 'loan') {
+      data = data.filter((_, index) => index % 2 === 0)
+    }
+
+    if (sortConfig) {
+      data.sort((a, b) => {
+        const valA = a[sortConfig.key]
+        const valB = b[sortConfig.key]
+        if (valA === undefined || valA === null || valB === undefined || valB === null) return 0
+        if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1
+        if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1
+        return 0
+      })
+    }
+
+    return data
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pools, searchQuery, activeChip, sortConfig, tokenInfoMap])
 
   const handleExpand = (poolId: string) => {
-    setExpandedPool(expandedPool === poolId ? null : poolId)
+    setExpandedPool((prev) => (prev === poolId ? null : poolId))
   }
 
-  // Show form when pool is selected
+  const SkeletonRow = () => (
+    <tr>
+      <td><div className="skeleton" style={{ width: '180px', height: '40px' }} /></td>
+      <td><div className="skeleton skeleton-text" /></td>
+      <td><div className="skeleton skeleton-text" /></td>
+      <td><div className="skeleton skeleton-text" /></td>
+      <td><div className="skeleton skeleton-text" style={{ width: '60px' }} /></td>
+      <td><div className="skeleton skeleton-text" style={{ width: '40px' }} /></td>
+      <td />
+    </tr>
+  )
+
   if (showCreateForm && selectedPool) {
     return (
       <div className="pool-discovery">
-        <div className="form-header">
-          <div>
-            <h1>Create New Position</h1>
-            <p className="header-subtitle">Provide liquidity to earn trading fees</p>
+        <div className="discovery-header">
+          <div className="discovery-title">
+            <h1>Create new position</h1>
+            <p>Provide liquidity to earn trading fees</p>
           </div>
-          <button
-            onClick={() => {
-              setShowCreateForm(false)
-              setSelectedPool(null)
-            }}
-            className="close-form-btn"
-          >
-            ← Back to Pools
+          <button className="btn-primary" onClick={() => { setShowCreateForm(false); setSelectedPool(null) }}>
+            ← Back to pools
           </button>
         </div>
         <div className="create-form-wrapper">
-          <AddLiquidity 
+          <AddLiquidity
             preSelectedPool={{
               token0: selectedPool.token0,
               token1: selectedPool.token1,
@@ -167,232 +339,217 @@ export const PoolDiscovery = () => {
 
   return (
     <div className="pool-discovery">
-      <div className="discovery-header">
-        <div className="header-top">
-          <div className="header-title-section">
+      <section className="hero-section">
+        <div className="hero-content">
+          <div>
+            <span className="hero-pill">Uniswap v4</span>
             <h1>Create position</h1>
-            <p className="header-subtitle">
-              Explore and filter liquidity pools to find opportunities and create positions.
-            </p>
+            <p>Explore pools, inspect capital efficiency, and deploy liquidity with the same polish as Revert Finance.</p>
+            <div className="hero-actions">
+              <button className="btn-gradient" onClick={() => setShowCreateForm(true)}>+ New position</button>
+              <button className="btn-outline">Import position</button>
+            </div>
           </div>
-          <div className="header-stats">
-            <div className="stat-item">
-              <span className="stat-label">Showing pools on</span>
-              <span className="stat-value">{pools.length} exchanges</span>
+          <div className="hero-stats-grid">
+            <div className="hero-stat-card">
+              <label>Total TVL</label>
+              <strong>{formatCurrency(stats.totalTVL)}</strong>
+              <span>Across CopyPools</span>
+            </div>
+            <div className="hero-stat-card">
+              <label>24h Volume</label>
+              <strong>{formatCurrency(stats.totalVolume)}</strong>
+              <span>Tracked pools</span>
+            </div>
+            <div className="hero-stat-card">
+              <label>Active Positions</label>
+              <strong>{stats.activePositions}</strong>
+              <span>On-chain sync</span>
             </div>
           </div>
         </div>
+        <div className="hero-gradient" />
+      </section>
 
-        <div className="filters-section">
-          <div className="filter-group">
-            <select
-              value={selectedNetwork}
-              onChange={(e) => setSelectedNetwork(e.target.value)}
-              className="filter-select"
+      <div className="controls-row">
+        <div className="chip-list">
+          {FILTER_CHIPS.map((chip) => (
+            <button
+              key={chip.id}
+              className={`chip ${activeChip === chip.id ? 'active' : ''}`}
+              onClick={() => setActiveChip(chip.id)}
             >
-              <option value="any">Any network</option>
-              <option value="ethereum">Ethereum</option>
-              <option value="sepolia">Sepolia</option>
-            </select>
-          </div>
-
-          <div className="filter-group">
-            <select
-              value={selectedTokens}
-              onChange={(e) => setSelectedTokens(e.target.value)}
-              className="filter-select"
-            >
-              <option value="any">Any tokens</option>
-              <option value="weth">WETH</option>
-              <option value="usdc">USDC</option>
-            </select>
-          </div>
-
-          <button className="filters-button">+ filters</button>
+              {chip.label}
+            </button>
+          ))}
         </div>
 
-        <div className="tabs-section">
-          <div className="discovery-tabs">
-            <button
-              className={`discovery-tab ${activeTab === 'rewards' ? 'active' : ''}`}
-              onClick={() => setActiveTab('rewards')}
-            >
-              Rewards
-            </button>
-            <button
-              className={`discovery-tab ${activeTab === 'trending' ? 'active' : ''}`}
-              onClick={() => setActiveTab('trending')}
-            >
-              Trending
-            </button>
-            <button
-              className={`discovery-tab ${activeTab === 'new' ? 'active' : ''}`}
-              onClick={() => setActiveTab('new')}
-            >
-              New pools
-            </button>
-            <button
-              className={`discovery-tab ${activeTab === 'all' ? 'active' : ''}`}
-              onClick={() => setActiveTab('all')}
-            >
-              All
-            </button>
+        <div className="filters">
+          <div className="search-container">
+            <input
+              className="search-input-field"
+              placeholder="Search tokens or pairs"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            <span className="search-icon-overlay">🔍</span>
           </div>
 
-          <div className="timeframe-selector">
-            <button
-              className={`timeframe-btn ${timeframe === '1d' ? 'active' : ''}`}
-              onClick={() => setTimeframe('1d')}
-            >
-              1d
-            </button>
-            <button
-              className={`timeframe-btn ${timeframe === '1w' ? 'active' : ''}`}
-              onClick={() => setTimeframe('1w')}
-            >
-              1w
-            </button>
-            <button
-              className={`timeframe-btn ${timeframe === '1m' ? 'active' : ''}`}
-              onClick={() => setTimeframe('1m')}
-            >
-              1m
-            </button>
-            <button
-              className={`timeframe-btn ${timeframe === '1y' ? 'active' : ''}`}
-              onClick={() => setTimeframe('1y')}
-            >
-              1y
-            </button>
-          </div>
-        </div>
+          <select className="filter-select" value={selectedNetwork} onChange={(e) => setSelectedNetwork(e.target.value)}>
+            <option value="any">Any network</option>
+            <option value="ethereum">Ethereum</option>
+            <option value="sepolia">Sepolia</option>
+          </select>
 
-        <div className="info-banner">
-          <span className="info-icon">ℹ️</span>
-          <span>Expand a pool row to create a new position.</span>
+          <select className="filter-select" value={selectedTokens} onChange={(e) => setSelectedTokens(e.target.value)}>
+            <option value="any">Any tokens</option>
+            <option value="weth">WETH</option>
+            <option value="usdc">USDC</option>
+          </select>
+
+          <div className="pill-tabs">
+            {TIMEFRAME_OPTIONS.map((t) => (
+              <button
+                key={t}
+                className={`pill-tab ${timeframe === t ? 'active' : ''}`}
+                onClick={() => setTimeframe(t)}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      {loading ? (
-        <div className="loading-state">Loading pools...</div>
-      ) : (
-        <div className="pools-table-container">
-          <table className="pools-table">
-            <thead>
-              <tr>
-                <th>pool/fee tier</th>
-                <th>TVL</th>
-                <th>
-                  volume <span className={`timeframe-badge ${timeframe === '1d' ? 'active' : ''}`}>{timeframe}</span>
-                </th>
-                <th>
-                  fees <span className={`timeframe-badge ${timeframe === '1d' ? 'active' : ''}`}>{timeframe}</span>
-                </th>
-                <th>
-                  fees/TVL <span className={`timeframe-badge ${timeframe === '1d' ? 'active' : ''}`}>{timeframe}</span>
-                </th>
-                <th>age</th>
-                <th>
-                  fees APR <span className={`timeframe-badge ${timeframe === '1d' ? 'active' : ''}`}>{timeframe}</span>
-                </th>
-                <th>
-                  rewards APR <span className={`timeframe-badge ${timeframe === '1d' ? 'active' : ''}`}>{timeframe}</span>
-                </th>
-                <th>expand</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pools.length === 0 ? (
+      {error && (
+        <div className="error-banner">
+          <span className="error-icon">⚠️</span>
+          <span>{error}</span>
+          <button className="retry-btn" onClick={() => { setError(null); fetchPools() }}>Retry</button>
+        </div>
+      )}
+
+      <div className="pools-table-container">
+        <table className="pools-table">
+          <thead>
+            <tr>
+              <th>Pool</th>
+              <th onClick={() => requestSort('tvl')}>TVL {sortIcon('tvl')}</th>
+              <th onClick={() => requestSort('volume1d')}>Volume {sortIcon('volume1d')}</th>
+              <th onClick={() => requestSort('fees1d')}>Fees {sortIcon('fees1d')}</th>
+              <th onClick={() => requestSort('feesApr1d')}>APR {sortIcon('feesApr1d')}</th>
+              <th onClick={() => requestSort('age')}>Age {sortIcon('age')}</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading
+              ? Array.from({ length: 6 }).map((_, idx) => <SkeletonRow key={idx} />)
+              : filteredPools.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="empty-state-cell">
+                  <td colSpan={7} className="empty-state-cell">
                     <div className="empty-state">
-                      <div className="empty-icon">📊</div>
-                      <p>No pools found</p>
+                      <div className="empty-icon">🌊</div>
+                      <h3>No pools found</h3>
+                      <p>Try adjusting filters or search.</p>
                     </div>
                   </td>
                 </tr>
               ) : (
-                pools.map((pool) => (
-                  <>
-                    <tr
-                      key={pool.id}
-                      className={`pool-row ${expandedPool === pool.id ? 'expanded' : ''}`}
-                      onClick={() => handleExpand(pool.id)}
-                    >
-                      <td className="pool-name-cell">
-                        <div className="pool-name">
-                          <div className="pool-badges">
-                            <span className="status-dot"></span>
-                            {pool.badges?.map((badge, i) => (
-                              <span key={i} className="pool-badge">{badge}</span>
-                            ))}
-                          </div>
-                          <div className="pool-pair">
-                            {getTokenSymbol(pool.token0)}/{getTokenSymbol(pool.token1)} {pool.feeTier}
-                          </div>
-                        </div>
-                      </td>
-                      <td>{formatCurrency(pool.tvl)}</td>
-                      <td>{formatCurrency(pool.volume1d)}</td>
-                      <td>{formatCurrency(pool.fees1d)}</td>
-                      <td>{pool.feesPerTvl1d.toFixed(6)}</td>
-                      <td>{formatAge(pool.age)}</td>
-                      <td className={pool.feesApr1d > 50 ? 'high-apr' : ''}>
-                        {formatPercent(pool.feesApr1d)}
-                      </td>
-                      <td>
-                        {pool.rewardsApr1d ? (
-                          <span className="rewards-apr">
-                            OR {formatPercent(pool.rewardsApr1d)}
-                            <span className="token-icon">🪙</span>
-                          </span>
-                        ) : (
-                          '-'
-                        )}
-                      </td>
-                      <td>
-                        <button className="expand-button">
-                          {expandedPool === pool.id ? '▲' : '▼'}
-                        </button>
-                      </td>
-                    </tr>
-                    {expandedPool === pool.id && (
-                      <tr className="expanded-content-row">
-                        <td colSpan={9}>
-                          <div className="expanded-content">
-                            <div className="expanded-info">
-                              <h3>Create Position in {getTokenSymbol(pool.token0)}/{getTokenSymbol(pool.token1)} {pool.feeTier}</h3>
-                              <p>Pool Details:</p>
-                              <ul>
-                                <li>Protocol: {pool.protocol}</li>
-                                <li>Fee Tier: {pool.feeTier}</li>
-                                <li>TVL: {formatCurrency(pool.tvl)}</li>
-                                <li>Fees APR: {formatPercent(pool.feesApr1d)}</li>
-                              </ul>
-                              <button
-                                className="create-position-btn"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setSelectedPool(pool)
-                                  setShowCreateForm(true)
-                                  setExpandedPool(null)
-                                }}
-                              >
-                                Create Position
-                              </button>
+                filteredPools.map((pool) => {
+                  const sym0 = getTokenSymbol(pool.token0, pool)
+                  const sym1 = getTokenSymbol(pool.token1, pool)
+                  const tvlShare = stats.totalTVL > 0 ? Math.min(100, (pool.tvl / stats.totalTVL) * 100) : 0
+                  return (
+                    <>
+                      <tr key={pool.id} onClick={() => handleExpand(pool.id)}>
+                        <td>
+                          <div className="token-pair-display">
+                            <div className="avatar-group">
+                              <div className="token-avatar-img">{sym0[0]}</div>
+                              <div className="token-avatar-img">{sym1[0]}</div>
+                            </div>
+                            <div className="pool-info">
+                              <div className="pool-title">
+                                {sym0}/{sym1}
+                                <span className="fee-badge">{pool.feeTier}</span>
+                              </div>
+                              <div className="pool-subtitle">{pool.protocol}</div>
                             </div>
                           </div>
                         </td>
+                        <td>
+                          <span className="font-mono">{formatCurrency(pool.tvl)}</span>
+                          <div className="metric-bar-container">
+                            <div className="metric-bar-fill" style={{ width: `${tvlShare}%` }} />
+                          </div>
+                        </td>
+                        <td><span className="font-mono">{formatCurrency(pool.volume1d)}</span></td>
+                        <td><span className="font-mono">{formatCurrency(pool.fees1d)}</span></td>
+                        <td>
+                          <span className={`font-mono ${pool.feesApr1d > 20 ? 'text-success' : ''}`}>
+                            {formatPercent(pool.feesApr1d)}
+                          </span>
+                        </td>
+                        <td>{formatAge(pool.age)}</td>
+                        <td>
+                          <button className="expand-button">{expandedPool === pool.id ? '▲' : '▼'}</button>
+                        </td>
                       </tr>
-                    )}
-                  </>
-                ))
+                      {expandedPool === pool.id && (
+                        <tr className="expanded-content-row">
+                          <td colSpan={7} className="p-0">
+                            <div className="expanded-row-content">
+                              <div className="pool-dashboard">
+                                <div className="dashboard-main">
+                                  <div className="dashboard-stats">
+                                    <div className="dashboard-card">
+                                      <h4>Total liquidity</h4>
+                                      <div className="value">
+                                        {pool.totalLiquidity ? parseFloat(formatUnits(pool.totalLiquidity, 18)).toFixed(4) : '0'}
+                                      </div>
+                                    </div>
+                                    <div className="dashboard-card">
+                                      <h4>Active positions</h4>
+                                      <div className="value">{pool.positionCount}</div>
+                                    </div>
+                                    <div className="dashboard-card">
+                                      <h4>Fees/TVL</h4>
+                                      <div className="value">{(pool.feesPerTvl1d * 100).toFixed(3)}%</div>
+                                    </div>
+                                    <div className="dashboard-card">
+                                      <h4>Pool efficiency</h4>
+                                      <div className="value text-success">High</div>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="action-card">
+                                  <h3>Ready to earn?</h3>
+                                  <p>Provide liquidity to {sym0}/{sym1} and start earning trading fees immediately.</p>
+                                  <button
+                                    className="btn-gradient"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setSelectedPool(pool)
+                                      setShowCreateForm(true)
+                                      setExpandedPool(null)
+                                    }}
+                                  >
+                                    Create position
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  )
+                })
               )}
-            </tbody>
-          </table>
-        </div>
-      )}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
-

@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { ContractService } from '@/lib/services/contracts'
 import { useWallet } from '@/lib/hooks/useWallet'
 import { parseUnits, formatUnits } from 'ethers'
@@ -20,59 +20,20 @@ const TOKEN_PAIRS = [
 ]
 
 const FEE_OPTIONS = [
-  { value: '500', label: '0.05%', description: 'Best for stable pairs', tickSpacing: 10 },
-  { value: '3000', label: '0.3%', description: 'Best for most pairs', tickSpacing: 60 },
-  { value: '10000', label: '1%', description: 'Best for exotic pairs', tickSpacing: 200 },
+  { value: '500', label: '0.05%', description: 'Best for stable pairs' },
+  { value: '3000', label: '0.3%', description: 'Best for most pairs' },
+  { value: '10000', label: '1%', description: 'Best for exotic pairs' },
 ]
 
-// Helper function to get tick spacing for a fee tier
-const getTickSpacing = (fee: string): number => {
-  const feeOption = FEE_OPTIONS.find(opt => opt.value === fee)
-  return feeOption?.tickSpacing || 60
-}
-
-// Helper function to round tick to nearest valid tick for given spacing
-const roundToTickSpacing = (tick: number, tickSpacing: number): number => {
-  return Math.round(tick / tickSpacing) * tickSpacing
-}
-
-// Generate price range presets dynamically based on fee tier
-const getPriceRangePresets = (fee: string) => {
-  const tickSpacing = getTickSpacing(fee)
-
-  return [
-    {
-      label: 'Full Range',
-      tickLower: roundToTickSpacing(-887220, tickSpacing).toString(),
-      tickUpper: roundToTickSpacing(887220, tickSpacing).toString(),
-      description: 'Maximum liquidity, lower fees'
-    },
-    {
-      label: 'Wide Range',
-      tickLower: roundToTickSpacing(-200000, tickSpacing).toString(),
-      tickUpper: roundToTickSpacing(200000, tickSpacing).toString(),
-      description: 'Good balance'
-    },
-    {
-      label: 'Medium Range',
-      tickLower: roundToTickSpacing(-100000, tickSpacing).toString(),
-      tickUpper: roundToTickSpacing(100000, tickSpacing).toString(),
-      description: 'More concentrated'
-    },
-    {
-      label: 'Narrow Range',
-      tickLower: roundToTickSpacing(-50000, tickSpacing).toString(),
-      tickUpper: roundToTickSpacing(50000, tickSpacing).toString(),
-      description: 'Maximum efficiency'
-    },
-    {
-      label: 'Custom',
-      tickLower: '',
-      tickUpper: '',
-      description: 'Set your own range'
-    },
-  ]
-}
+// Tick values must be aligned to tick spacing (60 for 0.3% fee tier)
+// Tick spacing 60 requires ticks divisible by 60
+const PRICE_RANGE_PRESETS = [
+  { label: 'Full Range', tickLower: '-887220', tickUpper: '887220', description: 'Maximum liquidity, lower fees' },
+  { label: 'Wide Range', tickLower: '-200040', tickUpper: '200040', description: 'Good balance' },
+  { label: 'Medium Range', tickLower: '-100020', tickUpper: '100020', description: 'More concentrated' },
+  { label: 'Narrow Range', tickLower: '-50040', tickUpper: '50040', description: 'Maximum efficiency' },
+  { label: 'Custom', tickLower: '', tickUpper: '', description: 'Set your own range' },
+]
 
 interface AddLiquidityProps {
   preSelectedPool?: {
@@ -83,7 +44,7 @@ interface AddLiquidityProps {
   onSuccess?: () => void
 }
 
-export const AddLiquidity: React.FC<AddLiquidityProps> = (props = {}) => {
+export const AddLiquidity = (props: AddLiquidityProps = {}) => {
   const { preSelectedPool, onSuccess } = props
   const { provider, address } = useWallet()
 
@@ -145,29 +106,12 @@ export const AddLiquidity: React.FC<AddLiquidityProps> = (props = {}) => {
 
   const handleRangePreset = (index: number) => {
     setSelectedRangePreset(index)
-    const presets = getPriceRangePresets(fee)
-    const preset = presets[index]
+    const preset = PRICE_RANGE_PRESETS[index]
     if (preset.tickLower && preset.tickUpper) {
       setTickLower(preset.tickLower)
       setTickUpper(preset.tickUpper)
     }
   }
-
-  // Update ticks when fee tier changes to ensure they're valid for new spacing
-  useEffect(() => {
-    if (tickLower && tickUpper) {
-      const tickSpacing = getTickSpacing(fee)
-      const validTickLower = roundToTickSpacing(parseInt(tickLower), tickSpacing)
-      const validTickUpper = roundToTickSpacing(parseInt(tickUpper), tickSpacing)
-
-      if (validTickLower.toString() !== tickLower) {
-        setTickLower(validTickLower.toString())
-      }
-      if (validTickUpper.toString() !== tickUpper) {
-        setTickUpper(validTickUpper.toString())
-      }
-    }
-  }, [fee])
 
   // Load token info on mount
   useEffect(() => {
@@ -216,21 +160,21 @@ export const AddLiquidity: React.FC<AddLiquidityProps> = (props = {}) => {
         parseInt(fee)
       )
 
-      setStep('Position will be indexed automatically...')
-      
+      setSuccess(`✅ Position created successfully! Transaction: ${receipt.hash}`)
+      setStep('Waiting for Ponder indexer to process your position...')
+
       // Position will be automatically indexed by Ponder indexer
-      // The backend will pick it up from blockchain events
-      // User can refresh the positions list to see it
-      setSuccess(`✅ Position created successfully! Transaction: ${receipt.hash}. The position will appear in your list shortly.`)
-      
-      // Call onSuccess callback if provided
+      // Wait 30 seconds for Ponder to index, then refresh the positions list
       if (onSuccess) {
         setTimeout(() => {
+          setStep('Refreshing positions list...')
           onSuccess()
-        }, 2000)
+          setStep('')
+          setSuccess(`✅ Position created and indexed! Transaction: ${receipt.hash}`)
+        }, 30000) // 30 seconds delay for Ponder to index
+      } else {
+        setStep('')
       }
-
-      setStep('')
 
       // Reset form
       setAmount0('')
@@ -409,15 +353,10 @@ export const AddLiquidity: React.FC<AddLiquidityProps> = (props = {}) => {
         <div className="create-section">
           <div className="section-header">
             <h3>Price Range</h3>
-            <p className="section-description">
-              Set the price range for your liquidity position
-              <span style={{ marginLeft: '8px', fontSize: '0.85em', opacity: 0.7 }}>
-                (Tick spacing: {getTickSpacing(fee)})
-              </span>
-            </p>
+            <p className="section-description">Set the price range for your liquidity position</p>
           </div>
           <div className="range-presets">
-            {getPriceRangePresets(fee).map((preset, index) => (
+            {PRICE_RANGE_PRESETS.map((preset, index) => (
               <button
                 key={index}
                 type="button"
@@ -439,22 +378,11 @@ export const AddLiquidity: React.FC<AddLiquidityProps> = (props = {}) => {
                 value={tickLower}
                 onChange={(e) => {
                   setTickLower(e.target.value)
-                  setSelectedRangePreset(getPriceRangePresets(fee).length - 1) // Custom
-                }}
-                onBlur={(e) => {
-                  // Auto-correct to valid tick spacing when user finishes editing
-                  if (e.target.value) {
-                    const tickSpacing = getTickSpacing(fee)
-                    const validTick = roundToTickSpacing(parseInt(e.target.value), tickSpacing)
-                    setTickLower(validTick.toString())
-                  }
+                  setSelectedRangePreset(PRICE_RANGE_PRESETS.length - 1) // Custom
                 }}
                 disabled={loading}
                 className="range-input"
               />
-              <div style={{ fontSize: '0.75em', opacity: 0.6, marginTop: '4px' }}>
-                Must be divisible by {getTickSpacing(fee)}
-              </div>
             </div>
             <div className="range-input-group">
               <label>Tick Upper</label>
@@ -464,22 +392,11 @@ export const AddLiquidity: React.FC<AddLiquidityProps> = (props = {}) => {
                 value={tickUpper}
                 onChange={(e) => {
                   setTickUpper(e.target.value)
-                  setSelectedRangePreset(getPriceRangePresets(fee).length - 1) // Custom
-                }}
-                onBlur={(e) => {
-                  // Auto-correct to valid tick spacing when user finishes editing
-                  if (e.target.value) {
-                    const tickSpacing = getTickSpacing(fee)
-                    const validTick = roundToTickSpacing(parseInt(e.target.value), tickSpacing)
-                    setTickUpper(validTick.toString())
-                  }
+                  setSelectedRangePreset(PRICE_RANGE_PRESETS.length - 1) // Custom
                 }}
                 disabled={loading}
                 className="range-input"
               />
-              <div style={{ fontSize: '0.75em', opacity: 0.6, marginTop: '4px' }}>
-                Must be divisible by {getTickSpacing(fee)}
-              </div>
             </div>
           </div>
         </div>

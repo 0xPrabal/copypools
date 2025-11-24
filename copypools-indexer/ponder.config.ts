@@ -28,7 +28,7 @@ export default createConfig({
       abi: AdapterABI.abi,
       address: process.env.ADAPTER_ADDRESS as `0x${string}`,
       network: "sepolia",
-      startBlock: 9669058,
+      startBlock: 9670540,
     },
   },
 });

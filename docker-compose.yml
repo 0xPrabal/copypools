@@ -1,0 +1,146 @@
+version: '3.9'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: copypools-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: copypools
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - copypools-network
+
+  # Ponder Indexer
+  ponder:
+    build:
+      context: ./copypools-indexer
+      dockerfile: Dockerfile
+    container_name: copypools-ponder
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - RPC_URL=${RPC_URL}
+      - LP_MANAGER_ADDRESS=${LP_MANAGER_ADDRESS}
+      - ADAPTER_ADDRESS=${ADAPTER_ADDRESS}
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD:-postgres}@postgres:5432/copypools?schema=public
+      - PONDER_DATABASE_URL=postgresql://postgres:${DB_PASSWORD:-postgres}@postgres:5432/copypools?schema=public
+      - PONDER_LOG_LEVEL=${PONDER_LOG_LEVEL:-info}
+    ports:
+      - "42069:42069"
+    networks:
+      - copypools-network
+    volumes:
+      - ponder_data:/app/.ponder
+
+  # Backend API
+  backend:
+    build:
+      context: ./copypools-backend
+      dockerfile: Dockerfile
+    container_name: copypools-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ponder:
+        condition: service_started
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD:-postgres}@postgres:5432/copypools?schema=public
+      - NETWORK=${NETWORK:-sepolia}
+      - RPC_URL=${RPC_URL}
+      - CHAIN_ID=${CHAIN_ID:-11155111}
+      - LP_MANAGER_ADDRESS=${LP_MANAGER_ADDRESS}
+      - ADAPTER_ADDRESS=${ADAPTER_ADDRESS}
+      - POOL_MANAGER_ADDRESS=${POOL_MANAGER_ADDRESS}
+      - OPERATOR_PRIVATE_KEY=${OPERATOR_PRIVATE_KEY}
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3001}
+      - RATE_LIMIT_TTL=60000
+      - RATE_LIMIT_MAX=100
+      - BLOCK_POLLING_INTERVAL=${BLOCK_POLLING_INTERVAL:-12000}
+      - AUTO_COMPOUND_CHECK_INTERVAL=${AUTO_COMPOUND_CHECK_INTERVAL:-3600000}
+      - ENABLE_AUTO_COMPOUND=${ENABLE_AUTO_COMPOUND:-true}
+      - ENABLE_MONITORING=${ENABLE_MONITORING:-true}
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - copypools-network
+
+  # Frontend
+  frontend:
+    build:
+      context: ./copypools-nextjs
+      dockerfile: Dockerfile
+    container_name: copypools-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=http://backend:3000
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:3000
+      - NEXT_PUBLIC_NETWORK=${NETWORK:-sepolia}
+      - NEXT_PUBLIC_CHAIN_ID=${CHAIN_ID:-11155111}
+      - NEXT_PUBLIC_LP_MANAGER_ADDRESS=${LP_MANAGER_ADDRESS}
+      - NEXT_PUBLIC_ADAPTER_ADDRESS=${ADAPTER_ADDRESS}
+      - NEXT_PUBLIC_POOL_MANAGER_ADDRESS=${POOL_MANAGER_ADDRESS}
+      - NEXT_PUBLIC_RPC_URL=${RPC_URL}
+    ports:
+      - "3001:3001"
+    networks:
+      - copypools-network
+
+  # Nginx Reverse Proxy (Optional - for production)
+  nginx:
+    image: nginx:alpine
+    container_name: copypools-nginx
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx_logs:/var/log/nginx
+    networks:
+      - copypools-network
+    profiles:
+      - production
+
+networks:
+  copypools-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  ponder_data:
+    driver: local
+  nginx_logs:
+    driver: local

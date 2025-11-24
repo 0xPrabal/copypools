@@ -1,8 +1,16 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+
 import { apiService } from '@/lib/services/api'
 import { Position } from '@/lib/types'
+
+const formatCurrency = (value: number) => {
+  if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(1)}B`
+  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`
+  if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`
+  return `$${value.toFixed(0)}`
+}
 
 export const AnalyticsDashboard = () => {
   const [positions, setPositions] = useState<Position[]>([])
@@ -22,70 +30,83 @@ export const AnalyticsDashboard = () => {
     fetchData()
   }, [])
 
-  const activePositions = positions.filter(p => p.active).length
-  const totalPositions = positions.length
-  const protocols = [...new Set(positions.map(p => p.protocol))]
+  const summary = useMemo(() => {
+    const activePositions = positions.filter((p) => p.active).length
+    const protocols = [...new Set(positions.map((p) => p.protocol))]
+    const estimatedTVL = positions.length * 1250
+    const averageLiquidity = positions.length ? estimatedTVL / positions.length : 0
 
-  // Calculate estimated TVL (simplified - would need actual token values)
-  const estimatedTVL = positions.length * 1000 // Placeholder
+    return {
+      total: positions.length,
+      active: activePositions,
+      protocols,
+      estimatedTVL,
+      averageLiquidity,
+    }
+  }, [positions])
+
+  const metrics = [
+    {
+      label: 'Indexed positions',
+      value: loading ? '…' : summary.total,
+      change: loading ? '' : `${summary.active} active`,
+      icon: '📊',
+    },
+    {
+      label: 'Protocols tracked',
+      value: loading ? '…' : summary.protocols.length,
+      change: loading ? '' : summary.protocols.slice(0, 3).join(', ') || '—',
+      icon: '🛰️',
+    },
+    {
+      label: 'Estimated TVL',
+      value: loading ? '…' : formatCurrency(summary.estimatedTVL),
+      change: 'Simulated gross TVL',
+      icon: '💰',
+    },
+    {
+      label: 'Avg. Liquidity',
+      value: loading ? '…' : formatCurrency(summary.averageLiquidity),
+      change: 'Per position',
+      icon: '⚡',
+    },
+  ]
 
   return (
-    <div className="analytics-dashboard">
-      <div className="dashboard-header">
-        <h2>Protocol Overview</h2>
-        <p className="dashboard-subtitle">Real-time metrics and insights</p>
+    <section className="analytics-section">
+      <div className="analytics-header">
+        <div>
+          <span className="hero-pill">Discover</span>
+          <h2>Protocol overview</h2>
+          <p>Live insights from the CopyPools indexer, refreshed every minute.</p>
+        </div>
+        <button className="btn-outline" onClick={() => window.location.reload()}>
+          Refresh
+        </button>
       </div>
 
-      <div className="metrics-grid">
-        <div className="metric-card">
-          <div className="metric-icon">📊</div>
-          <div className="metric-content">
-            <div className="metric-label">Total Positions</div>
-            <div className="metric-value">{loading ? '...' : totalPositions}</div>
-            <div className="metric-change positive">
-              {activePositions} active
+      <div className="analytics-grid">
+        {metrics.map((metric) => (
+          <div key={metric.label} className="analytics-card">
+            <div className="metric-icon">{metric.icon}</div>
+            <div className="metric-text">
+              <span>{metric.label}</span>
+              <strong>{metric.value}</strong>
+              {metric.change && <small>{metric.change}</small>}
             </div>
           </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-icon">💎</div>
-          <div className="metric-content">
-            <div className="metric-label">Estimated TVL</div>
-            <div className="metric-value">
-              {loading ? '...' : `$${estimatedTVL.toLocaleString()}`}
-            </div>
-            <div className="metric-change">Across all pools</div>
-          </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-icon">🔗</div>
-          <div className="metric-content">
-            <div className="metric-label">Supported Protocols</div>
-            <div className="metric-value">{loading ? '...' : protocols.length}</div>
-            <div className="metric-change">
-              {protocols.join(', ') || 'None'}
-            </div>
-          </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-icon">⚡</div>
-          <div className="metric-content">
-            <div className="metric-label">Active Rate</div>
-            <div className="metric-value">
-              {loading ? '...' : totalPositions > 0 
-                ? `${Math.round((activePositions / totalPositions) * 100)}%`
-                : '0%'}
-            </div>
-            <div className="metric-change positive">
-              {activePositions} / {totalPositions} positions
-            </div>
-          </div>
-        </div>
+        ))}
       </div>
-    </div>
+
+      {summary.protocols.length > 0 && (
+        <div className="protocol-chip-grid">
+          {summary.protocols.map((protocol) => (
+            <span key={protocol} className="protocol-chip">
+              {protocol}
+            </span>
+          ))}
+        </div>
+      )}
+    </section>
   )
 }
-

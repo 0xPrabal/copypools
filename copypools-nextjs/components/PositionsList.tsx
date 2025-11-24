@@ -1,10 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+
+import { useWallet } from '@/lib/hooks/useWallet'
 import { apiService } from '@/lib/services/api'
 import { Position } from '@/lib/types'
-import { useWallet } from '@/lib/hooks/useWallet'
-import { ContractService } from '@/lib/services/contracts'
 
 interface PositionsListProps {
   onSelectPosition: (position: Position) => void
@@ -12,310 +12,213 @@ interface PositionsListProps {
 }
 
 export const PositionsList = ({ onSelectPosition, showAll = true }: PositionsListProps) => {
-  const { address, provider } = useWallet()
+  const { address } = useWallet()
   const [positions, setPositions] = useState<Position[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filterOwner, setFilterOwner] = useState('')
   const [showMyPositions, setShowMyPositions] = useState(!showAll)
-  const [useDirectRead, setUseDirectRead] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [filterProtocol, setFilterProtocol] = useState<string>('all')
 
-  // Direct contract reading
-  const fetchPositionsFromContract = async () => {
-    if (!provider || !address) {
-      setPositions([])
-      return
-    }
+  const heroTitle = showAll ? 'Discover liquidity positions' : 'Your active strategies'
+  const heroSubtitle = showAll
+    ? 'Scan indexed Uniswap v4 positions or import an existing vault.'
+    : 'Track, manage, and compound all of your CopyPools positions from one place.'
 
+  const tokenBadge = (address: string) => address.slice(2, 6).toUpperCase()
+  const formatAddress = (addr: string) => `${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}`
+
+  const fetchPositions = async () => {
     try {
       setLoading(true)
       setError(null)
-
-      const contractService = new ContractService(provider)
-      const loadedPositions: Position[] = []
-
-      // Read positions 1-20 (you can adjust this range)
-      for (let i = 1; i <= 20; i++) {
-        try {
-          const pos = await contractService.getPosition(BigInt(i))
-
-          // Skip inactive positions
-          if (!pos.active) {
-            continue
-          }
-
-          // Filter by owner if needed
-          if (showMyPositions && pos.owner.toLowerCase() !== address.toLowerCase()) {
-            continue
-          }
-
-          // Get additional details from adapter
-          try {
-            const adapterPos = await contractService.getAdapterPosition(pos.dexTokenId)
-            loadedPositions.push({
-              id: `contract-${i}`,
-              positionId: i.toString(),
-              protocol: pos.protocol,
-              dexTokenId: pos.dexTokenId.toString(),
-              owner: pos.owner,
-              token0: pos.token0,
-              token1: pos.token1,
-              active: pos.active,
-              tickLower: Number(adapterPos.tickLower),
-              tickUpper: Number(adapterPos.tickUpper),
-              liquidity: adapterPos.liquidity.toString(),
-              lastCompoundTxHash: null,
-              lastCompoundAt: null,
-              compoundCount: 0,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString()
-            })
-          } catch {
-            // If adapter read fails, add basic position info
-            loadedPositions.push({
-              id: `contract-${i}`,
-              positionId: i.toString(),
-              protocol: pos.protocol,
-              dexTokenId: pos.dexTokenId.toString(),
-              owner: pos.owner,
-              token0: pos.token0,
-              token1: pos.token1,
-              active: pos.active,
-              tickLower: 0,
-              tickUpper: 0,
-              liquidity: '0',
-              lastCompoundTxHash: null,
-              lastCompoundAt: null,
-              compoundCount: 0,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString()
-            })
-          }
-        } catch {
-          // Position doesn't exist, continue
-          continue
-        }
-      }
-
-      setPositions(loadedPositions)
+      const owner = showMyPositions && address ? address : filterOwner || undefined
+      const data = await apiService.getAllPositions(owner)
+      setPositions(data)
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch positions from contract')
+      console.error('API failed:', err)
+      setError('Failed to load positions from backend API')
     } finally {
       setLoading(false)
     }
   }
 
-  const fetchPositions = async () => {
-    if (useDirectRead) {
-      await fetchPositionsFromContract()
-      return
-    }
-
-    try {
-      setLoading(true)
-      setError(null)
-      const owner = showMyPositions && address ? address : (filterOwner || undefined)
-      const data = await apiService.getAllPositions(owner)
-      setPositions(data)
-    } catch (err: any) {
-      // If API fails, fallback to direct contract reading
-      console.error('API failed, falling back to direct contract reading:', err)
-      setError('Backend unavailable - reading directly from contract...')
-      setUseDirectRead(true)
-      await fetchPositionsFromContract()
-    } finally {
-      if (!useDirectRead) {
-        setLoading(false)
-      }
-    }
-  }
-
   useEffect(() => {
     fetchPositions()
-  }, [filterOwner, showMyPositions, address, useDirectRead])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterOwner, showMyPositions, address])
 
-  const formatAddress = (addr: string) => {
-    return `${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}`
-  }
+  const uniqueProtocols = [...new Set(positions.map((p) => p.protocol))]
 
-  // Get unique protocols for filter
-  const uniqueProtocols = [...new Set(positions.map(p => p.protocol))]
-
-  // Filter positions based on search and filters
-  const filteredPositions = positions.filter(position => {
-    const matchesSearch = !searchQuery || 
+  const filteredPositions = positions.filter((position) => {
+    const matchesSearch =
+      !searchQuery ||
       position.positionId.toLowerCase().includes(searchQuery.toLowerCase()) ||
       position.owner.toLowerCase().includes(searchQuery.toLowerCase()) ||
       position.token0.toLowerCase().includes(searchQuery.toLowerCase()) ||
       position.token1.toLowerCase().includes(searchQuery.toLowerCase())
-    
+
     const matchesProtocol = filterProtocol === 'all' || position.protocol === filterProtocol
-    
     return matchesSearch && matchesProtocol
   })
 
+  const summary = useMemo(() => {
+    const total = filteredPositions.length
+    const active = filteredPositions.filter((p) => p.active).length
+    const inactive = total - active
+    const estimatedTVL = filteredPositions.length * 1250 // placeholder estimation
+    return { total, active, inactive, estimatedTVL }
+  }, [filteredPositions])
+
   return (
-    <div className="positions-list">
-      <div className="list-header">
-        <div>
-          <h2>{showAll ? 'All Positions' : 'My Positions'}</h2>
-          <p className="list-subtitle">
-            {filteredPositions.length} {filteredPositions.length === 1 ? 'position' : 'positions'} found
-          </p>
+    <section className="positions-section">
+      <div className="positions-hero">
+        <div className="positions-hero-text">
+          <span className="hero-pill">{showAll ? 'Discover' : 'Portfolio'}</span>
+          <h2>{heroTitle}</h2>
+          <p>{heroSubtitle}</p>
         </div>
-        <div className="header-buttons">
-          <button
-            onClick={() => {
-              setUseDirectRead(!useDirectRead)
-              fetchPositions()
-            }}
-            className="toggle-button"
-            title={useDirectRead ? 'Switch to API' : 'Switch to Direct Contract Reading'}
-          >
-            {useDirectRead ? '📡 Direct' : '🌐 API'}
-          </button>
-          <button onClick={fetchPositions} className="refresh-button">
+        <div className="positions-summary-grid">
+          <div className="summary-card">
+            <label>Total positions</label>
+            <strong>{summary.total}</strong>
+            <span>{summary.active} active</span>
+          </div>
+          <div className="summary-card">
+            <label>Estimated TVL</label>
+            <strong>{formatCurrency(summary.estimatedTVL)}</strong>
+            <span>Across filtered set</span>
+          </div>
+          <div className="summary-card">
+            <label>Status</label>
+            <strong>{summary.active} / {summary.total}</strong>
+            <span>{summary.inactive} inactive</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="positions-toolbar">
+        <div className="toolbar-left">
+          {showAll && address && (
+            <div className="toggle-pill">
+              <button
+                className={showMyPositions ? 'active' : ''}
+                onClick={() => setShowMyPositions(true)}
+              >
+                My positions
+              </button>
+              <button
+                className={!showMyPositions ? 'active' : ''}
+                onClick={() => {
+                  setShowMyPositions(false)
+                  setFilterOwner('')
+                }}
+              >
+                All indexed
+              </button>
+            </div>
+          )}
+        </div>
+        <div className="toolbar-actions">
+          <div className="search-input-wrapper">
+            <span>🔍</span>
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by owner, token or position id"
+            />
+          </div>
+          <select value={filterProtocol} onChange={(e) => setFilterProtocol(e.target.value)}>
+            <option value="all">All protocols</option>
+            {uniqueProtocols.map((protocol) => (
+              <option key={protocol} value={protocol}>
+                {protocol}
+              </option>
+            ))}
+          </select>
+          {!showMyPositions && (
+            <input
+              placeholder="Filter owner"
+              value={filterOwner}
+              onChange={(e) => setFilterOwner(e.target.value)}
+            />
+          )}
+          <button className="pill-action" onClick={fetchPositions}>
             🔄 Refresh
           </button>
         </div>
       </div>
 
-      <div className="filters-bar">
-        <div className="search-box">
-          <span className="search-icon">🔍</span>
-          <input
-            type="text"
-            placeholder="Search by position ID, owner, or token address..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="search-input"
-          />
+      {loading && (
+        <div className="positions-loading">
+          <div className="skeleton" style={{ width: '100%', height: '160px' }}></div>
         </div>
+      )}
 
-        <div className="filters">
-          {showAll && (
-            <div className="filter-group">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={showMyPositions}
-                  onChange={(e) => {
-                    setShowMyPositions(e.target.checked)
-                    if (e.target.checked) setFilterOwner('')
-                  }}
-                  disabled={!address}
-                />
-                My Positions Only
-              </label>
-            </div>
-          )}
-
-          <div className="filter-group">
-            <select
-              value={filterProtocol}
-              onChange={(e) => setFilterProtocol(e.target.value)}
-              className="filter-select"
-            >
-              <option value="all">All Protocols</option>
-              {uniqueProtocols.map(protocol => (
-                <option key={protocol} value={protocol}>{protocol}</option>
-              ))}
-            </select>
-          </div>
-
-          {!showMyPositions && (
-            <div className="filter-group">
-              <input
-                type="text"
-                placeholder="Filter by owner address"
-                value={filterOwner}
-                onChange={(e) => {
-                  setFilterOwner(e.target.value)
-                  setShowMyPositions(false)
-                }}
-                className="filter-input"
-              />
-            </div>
-          )}
-        </div>
-      </div>
-
-      {loading && <div className="loading">Loading positions...</div>}
-      {error && <div className="error">Error: {error}</div>}
+      {!loading && error && <div className="error-banner">{error}</div>}
 
       {!loading && !error && (
         <div className="positions-grid">
           {filteredPositions.length === 0 ? (
             <div className="empty-state">
               <div className="empty-icon">📭</div>
-              <h3>No positions found</h3>
-              <p>Try adjusting your filters or create a new position</p>
+              <h3>No positions</h3>
+              <p>Try adjusting filters or creating a new position.</p>
             </div>
           ) : (
             filteredPositions.map((position) => (
-              <div
+              <article
                 key={position.positionId}
                 className={`position-card ${position.active ? 'active' : 'inactive'}`}
                 onClick={() => onSelectPosition(position)}
               >
-                <div className="position-card-header">
-                  <div className="position-id-section">
-                    <span className="position-icon">💼</span>
-                    <div>
-                      <h3>Position #{position.positionId}</h3>
-                      <span className="protocol-badge">{position.protocol}</span>
-                    </div>
+                <header className="position-card-header">
+                  <div className="token-chips">
+                    <span>{tokenBadge(position.token0)}</span>
+                    <span>{tokenBadge(position.token1)}</span>
                   </div>
-                  <span className={`status-badge ${position.active ? 'active' : 'inactive'}`}>
-                    {position.active ? '● Active' : '○ Inactive'}
-                  </span>
-                </div>
+                  <div className={`status-dot ${position.active ? 'on' : 'off'}`}></div>
+                </header>
 
-                <div className="position-tokens">
-                  <div className="token-pair">
-                    <div className="token-item">
-                      <div className="token-avatar">T0</div>
-                      <span className="token-address">{formatAddress(position.token0)}</span>
-                    </div>
-                    <div className="token-divider">/</div>
-                    <div className="token-item">
-                      <div className="token-avatar">T1</div>
-                      <span className="token-address">{formatAddress(position.token1)}</span>
-                    </div>
+                <div className="position-card-body">
+                  <div>
+                    <p className="position-label">Position #{position.positionId}</p>
+                    <h3>{position.protocol}</h3>
+                    <p className="position-owner">Owner {formatAddress(position.owner)}</p>
+                  </div>
+                  <div className="range-pill">
+                    Range {position.tickLower ?? '-'} / {position.tickUpper ?? '-'}
                   </div>
                 </div>
 
-                <div className="position-metrics">
-                  {position.tickLower !== undefined && (
-                    <div className="metric-item">
-                      <span className="metric-label">Range</span>
-                      <span className="metric-value">
-                        [{position.tickLower}, {position.tickUpper}]
-                      </span>
-                    </div>
-                  )}
-                  {position.liquidity && (
-                    <div className="metric-item">
-                      <span className="metric-label">Liquidity</span>
-                      <span className="metric-value">{position.liquidity}</span>
-                    </div>
-                  )}
+                <div className="position-card-metrics">
+                  <div>
+                    <span>Liquidity</span>
+                    <strong>{position.liquidity || '—'}</strong>
+                  </div>
+                  <div>
+                    <span>DEX token</span>
+                    <strong>{position.dexTokenId}</strong>
+                  </div>
                 </div>
 
-                <div className="position-footer">
-                  <div className="owner-info">
-                    <span className="owner-label">Owner:</span>
-                    <span className="owner-address">{formatAddress(position.owner)}</span>
-                  </div>
-                  <div className="view-details">View Details →</div>
-                </div>
-              </div>
+                <footer className="position-card-footer">
+                  <button className="btn-outline">Manage</button>
+                  <span className="view-details">View details →</span>
+                </footer>
+              </article>
             ))
           )}
         </div>
       )}
-    </div>
+    </section>
   )
+}
+
+const formatCurrency = (value: number) => {
+  if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`
+  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`
+  if (value >= 1_000) return `$${(value / 1_000).toFixed(2)}K`
+  return `$${value.toFixed(2)}`
 }

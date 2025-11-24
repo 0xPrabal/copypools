@@ -1,0 +1,64 @@
+node_modules
+.env
+coverage
+coverage.json
+typechain
+typechain-types
+
+# Hardhat files
+cache
+artifacts
+
+# TypeScript
+dist
+*.tsbuildinfo
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Build files
+build/
+
+# Documentation files (exclude .md in root, but allow docs/ and backend/)
+*.md
+!README.md
+!docs/**/*.md
+!copypools-backend/**/*.md
+
+# Script files (but not backend scripts)
+scripts/
+!copypools-backend/
+
+# Backend specific
+copypools-backend/node_modules
+copypools-backend/.env
+copypools-backend/dist
+copypools-backend/.ponder
+copypools-backend/prisma/migrations
+*.typeorm.bak
+
+# Next.js
+copypools-nextjs/.next/
+copypools-nextjs/out/
+copypools-nextjs/.swc/
+copypools-nextjs/node_modules
+
+# Next.js build output
+.next/
+out/
+.swc/
+
+# Next.js cache
+.next/cache/
+.next/server/
+.next/static/
+.next/dev/
+
+# Vercel
+.vercel
