@@ -12,49 +12,66 @@ export class PositionsService {
     private readonly prisma: PrismaService,
   ) {}
 
-  async getPosition(positionId: bigint) {
+  async getPosition(position_id: bigint) {
     try {
-      // First check database
-      let dbPosition = await this.prisma.position.findUnique({
-        where: { positionId: positionId.toString() },
+      // Query from Ponder indexed data (automatically synced from blockchain)
+      const dbPosition = await this.prisma["ponder_position"].findUnique({
+        where: { id: position_id.toString() },
       });
 
-      // If not in database, fetch from blockchain and save
       if (!dbPosition) {
-        const blockchainPosition = await this.blockchainService.getPosition(positionId);
+        // Position not indexed yet or doesn't exist
+        // Fallback to blockchain query for real-time data
+        const blockchainPosition = await this.blockchainService.getPosition(position_id);
 
         if (!blockchainPosition.active && blockchainPosition.owner === '0x0000000000000000000000000000000000000000') {
-          throw new NotFoundException(`Position ${positionId} not found`);
+          throw new NotFoundException(`Position ${position_id} not found`);
         }
 
-        dbPosition = await this.syncPositionFromBlockchain(positionId);
+        // Return blockchain data directly (Ponder will index it eventually)
+        const adapterPosition = await this.blockchainService.getAdapterPosition(
+          blockchainPosition.dexTokenId,
+        );
+
+        return {
+          position_id: position_id.toString(),
+          protocol: blockchainPosition.protocol,
+          dexTokenId: blockchainPosition.dexTokenId.toString(),
+          owner: blockchainPosition.owner,
+          token0: blockchainPosition.token0,
+          token1: blockchainPosition.token1,
+          active: blockchainPosition.active,
+          tickLower: Number(adapterPosition.tickLower),
+          tickUpper: Number(adapterPosition.tickUpper),
+          liquidity: adapterPosition.liquidity.toString(),
+        };
       }
 
       return {
-        positionId: dbPosition.positionId,
+        position_id: dbPosition.id,
         protocol: dbPosition.protocol,
-        dexTokenId: dbPosition.dexTokenId,
+        dexTokenId: dbPosition.dex_token_id,
         owner: dbPosition.owner,
         token0: dbPosition.token0,
         token1: dbPosition.token1,
         active: dbPosition.active,
-        tickLower: dbPosition.tickLower,
-        tickUpper: dbPosition.tickUpper,
+        tickLower: dbPosition.tick_lower,
+        tickUpper: dbPosition.tick_upper,
         liquidity: dbPosition.liquidity,
       };
     } catch (error) {
-      this.logger.error(`Error getting position ${positionId}:`, error);
+      this.logger.error(`Error getting position ${position_id}:`, error);
       throw error;
     }
   }
 
-  async getPositionDetails(positionId: bigint) {
+  async getPositionDetails(position_id: bigint) {
     try {
       // Get position from LPManager
-      const position = await this.blockchainService.getPosition(positionId);
+      const position = await this.blockchainService.getPosition(position_id);
 
       if (!position.active && position.owner === '0x0000000000000000000000000000000000000000') {
-        throw new NotFoundException(`Position ${positionId} not found`);
+        throw new NotFoundException(`Position ${position_id} not found`);
       }
 
       // Get adapter position details
@@ -63,7 +80,7 @@ export class PositionsService {
       );
 
       return {
-        positionId: positionId.toString(),
+        position_id: position_id.toString(),
         protocol: position.protocol,
         owner: position.owner,
         active: position.active,
@@ -79,13 +96,13 @@ export class PositionsService {
         dexTokenId: position.dexTokenId.toString(),
       };
     } catch (error) {
-      this.logger.error(`Error getting position details ${positionId}:`, error);
+      this.logger.error(`Error getting position details ${position_id}:`, error);
       throw error;
     }
   }
 
   async moveRange(
-    positionId: bigint,
+    position_id: bigint,
     newTickLower: number,
     newTickUpper: number,
     doSwap: boolean,
@@ -94,15 +111,16 @@ export class PositionsService {
 
     try {
       // Validate position exists and is active
-      const position = await this.blockchainService.getPosition(positionId);
+      const position = await this.blockchainService.getPosition(position_id);
       if (!position.active) {
-        throw new NotFoundException(`Position ${positionId} is not active`);
+        throw new NotFoundException(`Position ${position_id} is not active`);
       }
 
       // Create transaction record
-      transaction = await this.prisma.transaction.create({
+      transaction = await this.prisma.transactions.create({
         data: {
-          positionId: positionId.toString(),
+          id: crypto.randomUUID(),
+          position_id: position_id.toString(),
           type: TransactionType.MOVE_RANGE,
           status: TransactionStatus.PENDING,
           metadata: { newTickLower, newTickUpper, doSwap },
@@ -111,29 +129,29 @@ export class PositionsService {
 
       // Execute move range
       const result = await this.blockchainService.moveRange(
-        positionId,
+        position_id,
         newTickLower,
         newTickUpper,
         doSwap,
       );
 
       // Update transaction with success
-      await this.prisma.transaction.update({
+      await this.prisma.transactions.update({
         where: { id: transaction.id },
         data: {
           status: TransactionStatus.SUCCESS,
-          txHash: result.transactionHash,
-          blockNumber: result.blockNumber,
-          gasUsed: result.gasUsed,
+          tx_hash: result.transactionHash,
+          block_number: result.blockNumber,
+          gas_used: result.gasUsed,
         },
       });
 
-      // Update position in database
-      await this.syncPositionFromBlockchain(positionId);
+      // Position will be automatically updated by Ponder indexer
+      // No need to manually sync - Ponder watches for RangeMoved events
 
       return {
         success: true,
-        positionId: positionId.toString(),
+        position_id: position_id.toString(),
         newRange: {
           tickLower: newTickLower,
           tickUpper: newTickUpper,
@@ -141,15 +159,15 @@ export class PositionsService {
         ...result,
       };
     } catch (error) {
-      this.logger.error(`Error moving range for position ${positionId}:`, error);
+      this.logger.error(`Error moving range for position ${position_id}:`, error);
 
       // Update transaction with failure
       if (transaction) {
-        await this.prisma.transaction.update({
+        await this.prisma.transactions.update({
           where: { id: transaction.id },
           data: {
             status: TransactionStatus.FAILED,
-            errorMessage: error.message,
+            error_message: error.message,
           },
         });
       }
@@ -158,20 +176,21 @@ export class PositionsService {
     }
   }
 
-  async closePosition(positionId: bigint, liquidity: bigint) {
+  async closePosition(position_id: bigint, liquidity: bigint) {
     let transaction;
 
     try {
       // Validate position exists and is active
-      const position = await this.blockchainService.getPosition(positionId);
+      const position = await this.blockchainService.getPosition(position_id);
       if (!position.active) {
-        throw new NotFoundException(`Position ${positionId} is not active`);
+        throw new NotFoundException(`Position ${position_id} is not active`);
       }
 
       // Create transaction record
-      transaction = await this.prisma.transaction.create({
+      transaction = await this.prisma.transactions.create({
         data: {
-          positionId: positionId.toString(),
+          id: crypto.randomUUID(),
+          position_id: position_id.toString(),
           type: TransactionType.CLOSE_POSITION,
           status: TransactionStatus.PENDING,
           metadata: { liquidity: liquidity.toString() },
@@ -180,43 +199,40 @@ export class PositionsService {
 
       // Execute close position
       const result = await this.blockchainService.closePosition(
-        positionId,
+        position_id,
         liquidity,
       );
 
       // Update transaction with success
-      await this.prisma.transaction.update({
+      await this.prisma.transactions.update({
         where: { id: transaction.id },
         data: {
           status: TransactionStatus.SUCCESS,
-          txHash: result.transactionHash,
-          blockNumber: result.blockNumber,
-          gasUsed: result.gasUsed,
+          tx_hash: result.transactionHash,
+          block_number: result.blockNumber,
+          gas_used: result.gasUsed,
         },
       });
 
-      // Update position in database
-      await this.prisma.position.update({
-        where: { positionId: positionId.toString() },
-        data: { active: false },
-      });
+      // Position will be automatically updated by Ponder indexer
+      // Ponder watches for PositionClosed events and updates active status
 
       return {
         success: true,
-        positionId: positionId.toString(),
+        position_id: position_id.toString(),
         liquidity: liquidity.toString(),
         ...result,
       };
     } catch (error) {
-      this.logger.error(`Error closing position ${positionId}:`, error);
+      this.logger.error(`Error closing position ${position_id}:`, error);
 
       // Update transaction with failure
       if (transaction) {
-        await this.prisma.transaction.update({
+        await this.prisma.transactions.update({
           where: { id: transaction.id },
           data: {
             status: TransactionStatus.FAILED,
-            errorMessage: error.message,
+            error_message: error.message,
           },
         });
       }
@@ -225,20 +241,21 @@ export class PositionsService {
     }
   }
 
-  async compound(positionId: bigint, doSwap: boolean) {
+  async compound(position_id: bigint, doSwap: boolean) {
     let transaction;
 
     try {
       // Validate position exists and is active
-      const position = await this.blockchainService.getPosition(positionId);
+      const position = await this.blockchainService.getPosition(position_id);
       if (!position.active) {
-        throw new NotFoundException(`Position ${positionId} is not active`);
+        throw new NotFoundException(`Position ${position_id} is not active`);
       }
 
       // Create transaction record
-      transaction = await this.prisma.transaction.create({
+      transaction = await this.prisma.transactions.create({
         data: {
-          positionId: positionId.toString(),
+          id: crypto.randomUUID(),
+          position_id: position_id.toString(),
           type: TransactionType.COMPOUND,
           status: TransactionStatus.PENDING,
           metadata: { doSwap },
@@ -247,46 +264,39 @@ export class PositionsService {
 
       // Execute compound
       const result = await this.blockchainService.compound(
-        positionId,
+        position_id,
         doSwap,
       );
 
       // Update transaction with success
-      await this.prisma.transaction.update({
+      await this.prisma.transactions.update({
         where: { id: transaction.id },
         data: {
           status: TransactionStatus.SUCCESS,
-          txHash: result.transactionHash,
-          blockNumber: result.blockNumber,
-          gasUsed: result.gasUsed,
+          tx_hash: result.transactionHash,
+          block_number: result.blockNumber,
+          gas_used: result.gasUsed,
         },
       });
 
-      // Update position in database
-      await this.prisma.position.update({
-        where: { positionId: positionId.toString() },
-        data: {
-          lastCompoundTxHash: result.transactionHash,
-          lastCompoundAt: new Date(),
-          compoundCount: { increment: 1 },
-        },
-      });
+      // Position will be automatically updated by Ponder indexer
+      // Ponder watches for Compounded events and stores them in ponder_compound_event table
 
       return {
         success: true,
-        positionId: positionId.toString(),
+        position_id: position_id.toString(),
         ...result,
       };
     } catch (error) {
-      this.logger.error(`Error compounding position ${positionId}:`, error);
+      this.logger.error(`Error compounding position ${position_id}:`, error);
 
       // Update transaction with failure
       if (transaction) {
-        await this.prisma.transaction.update({
+        await this.prisma.transactions.update({
           where: { id: transaction.id },
           data: {
             status: TransactionStatus.FAILED,
-            errorMessage: error.message,
+            error_message: error.message,
           },
         });
       }
@@ -299,8 +309,9 @@ export class PositionsService {
     try {
       const blockNumber = await this.blockchainService.getCurrentBlock();
       const gasPrice = await this.blockchainService.getGasPrice();
-      const positionCount = await this.prisma.position.count();
-      const activePositionCount = await this.prisma.position.count({
+      // Query Ponder indexed positions
+      const positionCount = await this.prisma["ponder_position"].count();
+      const activePositionCount = await this.prisma["ponder_position"].count({
         where: { active: true },
       });
 
@@ -342,19 +353,36 @@ export class PositionsService {
     }
   }
 
-  async createOrSyncPosition(positionId: bigint) {
+  /**
+   * @deprecated This method is deprecated. Ponder indexer automatically syncs positions.
+   * Use getPosition() instead - it will query from Ponder's indexed data.
+   * This method is kept for backward compatibility only.
+   */
+  async createOrSyncPosition(position_id: bigint) {
     try {
-      this.logger.log(`Creating/syncing position ${positionId}`);
-      
-      // Sync position from blockchain
-      const syncedPosition = await this.syncPositionFromBlockchain(positionId);
-      
+      this.logger.warn(`[DEPRECATED] Manual sync called for position ${position_id}. Use Ponder indexer instead.`);
+
+      // Fallback: check if position is already indexed by Ponder
+      const ponderPosition = await this.prisma["ponder_position"].findUnique({
+        where: { id: position_id.toString() },
+      });
+
+      if (ponderPosition) {
+        return {
+          ...ponderPosition,
+          message: 'Position already indexed by Ponder',
+        };
+      }
+
+      // If not indexed yet, sync from blockchain as fallback
+      const syncedPosition = await this.syncPositionFromBlockchain(position_id);
+
       return {
         ...syncedPosition,
-        message: 'Position synced successfully',
+        message: 'Position synced successfully (will be indexed by Ponder soon)',
       };
     } catch (error) {
-      this.logger.error(`Error creating/syncing position ${positionId}:`, error);
+      this.logger.error(`Error creating/syncing position ${position_id}:`, error);
       throw error;
     }
   }
@@ -362,22 +390,22 @@ export class PositionsService {
   private async checkPonderStatus() {
     try {
       // Check if Ponder tables exist and have recent data
-      const recentPosition = await this.prisma.ponderPosition.findFirst({
-        orderBy: { updatedAt: 'desc' },
+      const recentPosition = await this.prisma["ponder_position"].findFirst({
+        orderBy: { updated_at: 'desc' },
       });
 
-      const lastIndexedBlock = recentPosition 
-        ? Number(recentPosition.createdBlockNumber)
+      const lastIndexedBlock = recentPosition
+        ? Number(recentPosition.created_block_number)
         : null;
 
-      const ponderEventCount = await this.prisma.ponderRangeMoveEvent.count();
+      const ponderEventCount = await this.prisma["ponder_range_move_event"].count();
 
       return {
         active: true,
         lastIndexedBlock,
         totalEvents: ponderEventCount,
-        lastUpdate: recentPosition 
-          ? new Date(Number(recentPosition.updatedAt) * 1000).toISOString()
+        lastUpdate: recentPosition
+          ? new Date(Number(recentPosition.updated_at) * 1000).toISOString()
           : null,
       };
     } catch (error) {
@@ -435,36 +463,46 @@ export class PositionsService {
 
   // Helper Methods
 
-  private async syncPositionFromBlockchain(positionId: bigint) {
-    const blockchainPosition = await this.blockchainService.getPosition(positionId);
+  /**
+   * @deprecated This method is deprecated. Ponder indexer automatically syncs positions.
+   * This method is kept for backward compatibility and fallback scenarios only.
+   */
+  private async syncPositionFromBlockchain(position_id: bigint) {
+    const blockchainPosition = await this.blockchainService.getPosition(position_id);
     const adapterPosition = await this.blockchainService.getAdapterPosition(
       blockchainPosition.dexTokenId,
     );
 
     const positionData = {
       protocol: blockchainPosition.protocol,
-      dexTokenId: blockchainPosition.dexTokenId.toString(),
+      dex_token_id: blockchainPosition.dexTokenId.toString(),
       owner: blockchainPosition.owner,
       token0: blockchainPosition.token0,
       token1: blockchainPosition.token1,
       active: blockchainPosition.active,
-      tickLower: Number(adapterPosition.tickLower),
-      tickUpper: Number(adapterPosition.tickUpper),
+      tick_lower: Number(adapterPosition.tickLower),
+      tick_upper: Number(adapterPosition.tickUpper),
       liquidity: adapterPosition.liquidity.toString(),
     };
 
-    return await this.prisma.position.upsert({
-      where: { positionId: positionId.toString() },
+    return await this.prisma.positions.upsert({
+      where: { position_id: position_id.toString() },
       create: {
-        positionId: positionId.toString(),
+        id: crypto.randomUUID(),
+        position_id: position_id.toString(),
+        updated_at: new Date(),
         ...positionData,
       },
-      update: positionData,
+      update: {
+        ...positionData,
+        updated_at: new Date(),
+      },
     });
   }
 
   async getAllPositions(owner?: string) {
-    return await this.prisma.position.findMany({
+    // Query from Ponder indexed data
+    const positions = await this.prisma["ponder_position"].findMany({
       where: {
         active: true,
         ...(owner && {
@@ -474,14 +512,30 @@ export class PositionsService {
           },
         }),
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { created_at: 'desc' },
     });
+
+    // Convert PonderPosition format to expected Position format
+    return positions.map(pos => ({
+      position_id: pos.id,
+      protocol: pos.protocol,
+      dexTokenId: pos.dex_token_id,
+      owner: pos.owner,
+      token0: pos.token0,
+      token1: pos.token1,
+      active: pos.active,
+      tickLower: pos.tick_lower,
+      tickUpper: pos.tick_upper,
+      liquidity: pos.liquidity,
+      createdAt: new Date(Number(pos.created_at) * 1000), // Convert BigInt timestamp to Date
+      updatedAt: new Date(Number(pos.updated_at) * 1000),
+    }));
   }
 
-  async getPositionTransactions(positionId: string) {
-    return await this.prisma.transaction.findMany({
-      where: { positionId },
-      orderBy: { createdAt: 'desc' },
+  async getPositionTransactions(position_id: string) {
+    return await this.prisma.transactions.findMany({
+      where: { position_id },
+      orderBy: { created_at: 'desc' },
     });
   }
 
@@ -494,24 +548,24 @@ export class PositionsService {
    * Get position history from Ponder indexed data
    * Returns all range move events for a position
    */
-  async getPositionHistory(positionId: string) {
-    const rangeMoves = await this.prisma.ponderRangeMoveEvent.findMany({
+  async getPositionHistory(position_id: string) {
+    const rangeMoves = await this.prisma["ponder_range_move_event"].findMany({
       where: {
         OR: [
-          { oldPositionId: positionId },
-          { newPositionId: positionId },
+          { old_position_id: position_id },
+          { new_position_id: position_id },
         ],
       },
       orderBy: { timestamp: 'desc' },
     });
 
     return rangeMoves.map(event => ({
-      oldPositionId: event.oldPositionId,
-      newPositionId: event.newPositionId,
-      newTickLower: event.newTickLower,
-      newTickUpper: event.newTickUpper,
-      txHash: event.txHash,
-      blockNumber: Number(event.blockNumber),
+      oldPositionId: event.old_position_id,
+      newPositionId: event.new_position_id,
+      newTickLower: event.new_tick_lower,
+      newTickUpper: event.new_tick_upper,
+      tx_hash: event.tx_hash,
+      block_number: Number(event.block_number),
       timestamp: new Date(Number(event.timestamp) * 1000),
     }));
   }
@@ -519,17 +573,17 @@ export class PositionsService {
   /**
    * Get compound events for a position from Ponder
    */
-  async getPositionCompoundEvents(positionId: string) {
-    const compounds = await this.prisma.ponderCompoundEvent.findMany({
-      where: { positionId },
+  async getPositionCompoundEvents(position_id: string) {
+    const compounds = await this.prisma["ponder_compound_event"].findMany({
+      where: { position_id },
       orderBy: { timestamp: 'desc' },
     });
 
     return compounds.map(event => ({
-      positionId: event.positionId,
-      addedLiquidity: event.addedLiquidity,
-      txHash: event.txHash,
-      blockNumber: Number(event.blockNumber),
+      position_id: event.position_id,
+      addedLiquidity: event.added_liquidity,
+      tx_hash: event.tx_hash,
+      block_number: Number(event.block_number),
       timestamp: new Date(Number(event.timestamp) * 1000),
     }));
   }
@@ -537,9 +591,9 @@ export class PositionsService {
   /**
    * Get close event for a position from Ponder
    */
-  async getPositionCloseEvent(positionId: string) {
-    const closeEvent = await this.prisma.ponderCloseEvent.findFirst({
-      where: { positionId },
+  async getPositionCloseEvent(position_id: string) {
+    const closeEvent = await this.prisma["ponder_close_event"].findFirst({
+      where: { position_id },
     });
 
     if (!closeEvent) {
@@ -547,11 +601,11 @@ export class PositionsService {
     }
 
     return {
-      positionId: closeEvent.positionId,
+      position_id: closeEvent.position_id,
       amount0: closeEvent.amount0,
       amount1: closeEvent.amount1,
-      txHash: closeEvent.txHash,
-      blockNumber: Number(closeEvent.blockNumber),
+      tx_hash: closeEvent.tx_hash,
+      block_number: Number(closeEvent.block_number),
       timestamp: new Date(Number(closeEvent.timestamp) * 1000),
     };
   }
@@ -560,9 +614,9 @@ export class PositionsService {
    * Get all indexed positions for an owner from Ponder
    */
   async getIndexedPositionsByOwner(owner: string) {
-    return await this.prisma.ponderPosition.findMany({
+    return await this.prisma["ponder_position"].findMany({
       where: { owner: { equals: owner, mode: 'insensitive' } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { created_at: 'desc' },
     });
   }
 
@@ -570,11 +624,11 @@ export class PositionsService {
    * Get complete position timeline with all events
    * Combines range moves, compounds, and close events
    */
-  async getPositionTimeline(positionId: string) {
+  async getPositionTimeline(position_id: string) {
     const [rangeMoves, compounds, closeEvent] = await Promise.all([
-      this.getPositionHistory(positionId),
-      this.getPositionCompoundEvents(positionId),
-      this.getPositionCloseEvent(positionId),
+      this.getPositionHistory(position_id),
+      this.getPositionCompoundEvents(position_id),
+      this.getPositionCloseEvent(position_id),
     ]);
 
     // Combine all events and sort by timestamp

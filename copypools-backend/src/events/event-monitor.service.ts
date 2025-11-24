@@ -13,26 +13,49 @@ export class EventMonitorService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
+    // Initialize in background to not block app startup
     this.logger.log('Initializing event listeners...');
-    await this.setupEventListeners();
-    this.logger.log('Event listeners initialized');
+    // Delay event listener setup to ensure blockchain service is ready
+    setTimeout(() => {
+      this.setupEventListeners().catch((error) => {
+        this.logger.error('Failed to setup event listeners:', error);
+      });
+    }, 2000);
+    this.logger.log('Event listeners initialization scheduled');
   }
 
   private async setupEventListeners() {
+    try {
+      // Check if blockchain service is ready
+      const lpManager = this.blockchainService.getLPManagerContract();
+      if (!lpManager) {
+        this.logger.warn('Blockchain service not ready, retrying in 5s...');
+        setTimeout(() => this.setupEventListeners(), 5000);
+        return;
+      }
+
+      this.logger.log('Setting up event listeners...');
+    } catch (error) {
+      this.logger.warn('Blockchain not ready yet, retrying in 5s...');
+      setTimeout(() => this.setupEventListeners(), 5000);
+      return;
+    }
+
     // Listen to PositionOpened events
     await this.blockchainService.listenToPositionCreated(async (event) => {
       try {
         this.logger.log(`Position opened: ${event.positionId}`);
 
         // Save event to database
-        await this.prisma.blockchainEvent.create({
+        await this.prisma.blockchain_events.create({
           data: {
-            eventType: EventType.POSITION_OPENED,
-            positionId: event.positionId,
-            txHash: event.transactionHash,
-            blockNumber: event.blockNumber,
-            logIndex: 0,
-            eventData: {
+            id: crypto.randomUUID(),
+            event_type: EventType.POSITION_OPENED,
+            position_id: event.positionId,
+            tx_hash: event.transactionHash,
+            block_number: event.blockNumber,
+            log_index: 0,
+            event_data: {
               owner: event.owner,
               protocol: event.protocol,
             },
@@ -44,10 +67,10 @@ export class EventMonitorService implements OnModuleInit {
         await this.syncPositionFromBlockchain(BigInt(event.positionId));
 
         // Mark event as processed
-        await this.prisma.blockchainEvent.updateMany({
+        await this.prisma.blockchain_events.updateMany({
           where: {
-            txHash: event.transactionHash,
-            eventType: EventType.POSITION_OPENED,
+            tx_hash: event.transactionHash,
+            event_type: EventType.POSITION_OPENED,
           },
           data: { processed: true },
         });
@@ -64,14 +87,15 @@ export class EventMonitorService implements OnModuleInit {
         );
 
         // Save event to database
-        await this.prisma.blockchainEvent.create({
+        await this.prisma.blockchain_events.create({
           data: {
-            eventType: EventType.RANGE_MOVED,
-            positionId: event.newPositionId,
-            txHash: event.transactionHash,
-            blockNumber: event.blockNumber,
-            logIndex: 0,
-            eventData: {
+            id: crypto.randomUUID(),
+            event_type: EventType.RANGE_MOVED,
+            position_id: event.newPositionId,
+            tx_hash: event.transactionHash,
+            block_number: event.blockNumber,
+            log_index: 0,
+            event_data: {
               oldPositionId: event.oldPositionId,
               newPositionId: event.newPositionId,
               newTickLower: event.newTickLower,
@@ -82,8 +106,8 @@ export class EventMonitorService implements OnModuleInit {
         });
 
         // Deactivate old position
-        await this.prisma.position.updateMany({
-          where: { positionId: event.oldPositionId },
+        await this.prisma.positions.updateMany({
+          where: { position_id: event.oldPositionId },
           data: { active: false },
         });
 
@@ -91,10 +115,10 @@ export class EventMonitorService implements OnModuleInit {
         await this.syncPositionFromBlockchain(BigInt(event.newPositionId));
 
         // Mark event as processed
-        await this.prisma.blockchainEvent.updateMany({
+        await this.prisma.blockchain_events.updateMany({
           where: {
-            txHash: event.transactionHash,
-            eventType: EventType.RANGE_MOVED,
+            tx_hash: event.transactionHash,
+            event_type: EventType.RANGE_MOVED,
           },
           data: { processed: true },
         });
@@ -109,14 +133,15 @@ export class EventMonitorService implements OnModuleInit {
         this.logger.log(`Position closed: ${event.positionId}`);
 
         // Save event to database
-        await this.prisma.blockchainEvent.create({
+        await this.prisma.blockchain_events.create({
           data: {
-            eventType: EventType.POSITION_CLOSED,
-            positionId: event.positionId,
-            txHash: event.transactionHash,
-            blockNumber: event.blockNumber,
-            logIndex: 0,
-            eventData: {
+            id: crypto.randomUUID(),
+            event_type: EventType.POSITION_CLOSED,
+            position_id: event.positionId,
+            tx_hash: event.transactionHash,
+            block_number: event.blockNumber,
+            log_index: 0,
+            event_data: {
               amount0: event.amount0,
               amount1: event.amount1,
             },
@@ -125,16 +150,16 @@ export class EventMonitorService implements OnModuleInit {
         });
 
         // Deactivate position
-        await this.prisma.position.updateMany({
-          where: { positionId: event.positionId },
+        await this.prisma.positions.updateMany({
+          where: { position_id: event.positionId },
           data: { active: false },
         });
 
         // Mark event as processed
-        await this.prisma.blockchainEvent.updateMany({
+        await this.prisma.blockchain_events.updateMany({
           where: {
-            txHash: event.transactionHash,
-            eventType: EventType.POSITION_CLOSED,
+            tx_hash: event.transactionHash,
+            event_type: EventType.POSITION_CLOSED,
           },
           data: { processed: true },
         });
@@ -144,48 +169,53 @@ export class EventMonitorService implements OnModuleInit {
     });
   }
 
-  private async syncPositionFromBlockchain(positionId: bigint) {
-    const blockchainPosition = await this.blockchainService.getPosition(positionId);
+  private async syncPositionFromBlockchain(position_id: bigint) {
+    const blockchainPosition = await this.blockchainService.getPosition(position_id);
     const adapterPosition = await this.blockchainService.getAdapterPosition(
       blockchainPosition.dexTokenId,
     );
 
     const positionData = {
       protocol: blockchainPosition.protocol,
-      dexTokenId: blockchainPosition.dexTokenId.toString(),
+      dex_token_id: blockchainPosition.dexTokenId.toString(),
       owner: blockchainPosition.owner,
       token0: blockchainPosition.token0,
       token1: blockchainPosition.token1,
       active: blockchainPosition.active,
-      tickLower: adapterPosition.tickLower,
-      tickUpper: adapterPosition.tickUpper,
+      tick_lower: adapterPosition.tickLower,
+      tick_upper: adapterPosition.tickUpper,
       liquidity: adapterPosition.liquidity.toString(),
     };
 
-    return await this.prisma.position.upsert({
-      where: { positionId: positionId.toString() },
+    return await this.prisma.positions.upsert({
+      where: { position_id: position_id.toString() },
       create: {
-        positionId: positionId.toString(),
+        id: crypto.randomUUID(),
+        position_id: position_id.toString(),
+        updated_at: new Date(),
         ...positionData,
       },
-      update: positionData,
+      update: {
+        ...positionData,
+        updated_at: new Date(),
+      },
     });
   }
 
   async getEvents(positionId?: string, eventType?: EventType) {
-    return await this.prisma.blockchainEvent.findMany({
+    return await this.prisma.blockchain_events.findMany({
       where: {
-        ...(positionId && { positionId }),
-        ...(eventType && { eventType }),
+        ...(positionId && { position_id: positionId }),
+        ...(eventType && { event_type: eventType }),
       },
-      orderBy: [{ blockNumber: 'desc' }, { logIndex: 'desc' }],
+      orderBy: [{ block_number: 'desc' }, { log_index: 'desc' }],
     });
   }
 
   async getUnprocessedEvents() {
-    return await this.prisma.blockchainEvent.findMany({
+    return await this.prisma.blockchain_events.findMany({
       where: { processed: false },
-      orderBy: [{ blockNumber: 'asc' }, { logIndex: 'asc' }],
+      orderBy: [{ block_number: 'asc' }, { log_index: 'asc' }],
     });
   }
 }

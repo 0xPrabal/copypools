@@ -1,21 +1,41 @@
 import { ponder } from "@/generated";
 import { position, rangeMoveEvent, closeEvent, compoundEvent } from "../ponder.schema";
+import AdapterABI from "../abis/UniswapV4AdapterProduction.json";
 
 // PositionOpened event handler
 ponder.on("LPManager:PositionOpened", async ({ event, context }) => {
-  const { positionId, owner, protocol } = event.args;
+  const { positionId, owner, protocol, dexTokenId } = event.args;
+
+  // Fetch real position data from LPManager contract (positions mapping)
+  const lpManagerPosition = await context.client.readContract({
+    abi: context.contracts.LPManager.abi,
+    address: context.contracts.LPManager.address,
+    functionName: "positions",
+    args: [positionId],
+  });
+
+  // Fetch adapter position data from UniswapV4Adapter contract (positions mapping)
+  const adapterPosition = await context.client.readContract({
+    abi: AdapterABI.abi,
+    address: process.env.ADAPTER_ADDRESS as `0x${string}`,
+    functionName: "positions",
+    args: [dexTokenId],
+  });
+
+  // AdapterPosition is returned as: [key, owner, tickLower, tickUpper, liquidity]
+  const [, , tickLower, tickUpper, liquidity] = adapterPosition as readonly [any, string, number, number, bigint];
 
   await context.db.insert(position).values({
     id: positionId.toString(),
     protocol,
-    dexTokenId: positionId.toString(), // Will be updated when we get actual dexTokenId
+    dexTokenId: dexTokenId.toString(),
     owner,
-    token0: "0x0000000000000000000000000000000000000000", // Placeholder
-    token1: "0x0000000000000000000000000000000000000000", // Placeholder
-    active: true,
-    tickLower: null,
-    tickUpper: null,
-    liquidity: "0",
+    token0: lpManagerPosition[3], // token0 is index 3 in the positions mapping
+    token1: lpManagerPosition[4], // token1 is index 4
+    active: lpManagerPosition[5], // active is index 5
+    tickLower: Number(tickLower),
+    tickUpper: Number(tickUpper),
+    liquidity: liquidity.toString(),
     createdAt: BigInt(event.block.timestamp),
     createdTxHash: event.transaction.hash,
     createdBlockNumber: BigInt(event.block.number),
