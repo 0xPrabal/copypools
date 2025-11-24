@@ -16,7 +16,7 @@ model ponder_close_event {
   block_number Decimal @db.Decimal(78, 0)
   timestamp    Decimal @db.Decimal(78, 0)
 
-  @@map("3502__ponder_close_event")
+  @@map("1750__ponder_close_event")
 }
 
 model ponder_compound_event {
@@ -27,7 +27,7 @@ model ponder_compound_event {
   block_number    Decimal @db.Decimal(78, 0)
   timestamp       Decimal @db.Decimal(78, 0)
 
-  @@map("3502__ponder_compound_event")
+  @@map("1750__ponder_compound_event")
 }
 
 model ponder_position {
@@ -46,7 +46,7 @@ model ponder_position {
   created_block_number Decimal @db.Decimal(78, 0)
   updated_at           Decimal @db.Decimal(78, 0)
 
-  @@map("3502__ponder_position")
+  @@map("1750__ponder_position")
 }
 
 model ponder_range_move_event {
@@ -59,7 +59,7 @@ model ponder_range_move_event {
   block_number    Decimal @db.Decimal(78, 0)
   timestamp       Decimal @db.Decimal(78, 0)
 
-  @@map("3502__ponder_range_move_event")
+  @@map("1750__ponder_range_move_event")
 }
 
 model reorg__ponder_close_event {
@@ -74,7 +74,7 @@ model reorg__ponder_close_event {
   operation    Int
   checkpoint   String  @db.VarChar(75)
 
-  @@map("3502_reorg__ponder_close_event")
+  @@map("1750_reorg__ponder_close_event")
 }
 
 model reorg__ponder_compound_event {
@@ -88,7 +88,7 @@ model reorg__ponder_compound_event {
   operation       Int
   checkpoint      String  @db.VarChar(75)
 
-  @@map("3502_reorg__ponder_compound_event")
+  @@map("1750_reorg__ponder_compound_event")
 }
 
 model reorg__ponder_position {
@@ -110,7 +110,7 @@ model reorg__ponder_position {
   operation            Int
   checkpoint           String  @db.VarChar(75)
 
-  @@map("3502_reorg__ponder_position")
+  @@map("1750_reorg__ponder_position")
 }
 
 model reorg__ponder_range_move_event {
@@ -126,7 +126,7 @@ model reorg__ponder_range_move_event {
   operation       Int
   checkpoint      String  @db.VarChar(75)
 
-  @@map("3502_reorg__ponder_range_move_event")
+  @@map("1750_reorg__ponder_range_move_event")
 }
 
 model ponder_meta {

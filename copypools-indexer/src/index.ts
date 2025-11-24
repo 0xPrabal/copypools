@@ -14,16 +14,36 @@ ponder.on("LPManager:PositionOpened", async ({ event, context }) => {
     args: [positionId],
   });
 
-  // Fetch adapter position data from UniswapV4Adapter contract (positions mapping)
-  const adapterPosition = await context.client.readContract({
-    abi: AdapterABI.abi,
-    address: process.env.ADAPTER_ADDRESS as `0x${string}`,
-    functionName: "positions",
-    args: [dexTokenId],
-  });
+  // Try to fetch adapter position data using the new getPosition() function
+  // Note: Old positions from previous adapter won't exist in new adapter
+  let tickLower = 0;
+  let tickUpper = 0;
+  let liquidity = BigInt(0);
 
-  // AdapterPosition is returned as: [key, owner, tickLower, tickUpper, liquidity]
-  const [, , tickLower, tickUpper, liquidity] = adapterPosition as readonly [any, string, number, number, bigint];
+  try {
+    const adapterPosition = await context.client.readContract({
+      abi: AdapterABI.abi,
+      address: process.env.ADAPTER_ADDRESS as `0x${string}`,
+      functionName: "getPosition",
+      args: [dexTokenId],
+    });
+
+    // getPosition returns: [PoolKey, owner, tickLower, tickUpper, liquidity]
+    const posData = adapterPosition as readonly [any, string, number, number, bigint];
+    tickLower = posData[2];
+    tickUpper = posData[3];
+    liquidity = posData[4];
+  } catch (error) {
+    // Position doesn't exist in new adapter (likely from old adapter)
+    console.log(`⚠️  Position ${positionId} (dexTokenId ${dexTokenId}) not found in NEW adapter - SKIPPING`);
+    return; // Skip positions that don't exist in the new adapter
+  }
+
+  // Skip positions with no liquidity (from old adapters)
+  if (liquidity === BigInt(0)) {
+    console.log(`⚠️  Position ${positionId} has zero liquidity in NEW adapter - SKIPPING`);
+    return;
+  }
 
   // Use upsert to handle reorgs and duplicate position IDs gracefully
   await context.db.insert(position).values({

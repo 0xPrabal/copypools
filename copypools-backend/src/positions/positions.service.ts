@@ -15,7 +15,7 @@ export class PositionsService {
   async getPosition(position_id: bigint) {
     try {
       // Query from Ponder indexed data (automatically synced from blockchain)
-      const dbPosition = await this.prisma["ee__ponder_position"].findUnique({
+      const dbPosition = await this.prisma["ponder_position"].findUnique({
         where: { id: position_id.toString() },
       });
 
@@ -310,8 +310,8 @@ export class PositionsService {
       const blockNumber = await this.blockchainService.getCurrentBlock();
       const gasPrice = await this.blockchainService.getGasPrice();
       // Query Ponder indexed positions
-      const positionCount = await this.prisma["ee__ponder_position"].count();
-      const activePositionCount = await this.prisma["ee__ponder_position"].count({
+      const positionCount = await this.prisma["ponder_position"].count();
+      const activePositionCount = await this.prisma["ponder_position"].count({
         where: { active: true },
       });
 
@@ -363,7 +363,7 @@ export class PositionsService {
       this.logger.warn(`[DEPRECATED] Manual sync called for position ${position_id}. Use Ponder indexer instead.`);
 
       // Fallback: check if position is already indexed by Ponder
-      const ponderPosition = await this.prisma["ee__ponder_position"].findUnique({
+      const ponderPosition = await this.prisma["ponder_position"].findUnique({
         where: { id: position_id.toString() },
       });
 
@@ -390,7 +390,7 @@ export class PositionsService {
   private async checkPonderStatus() {
     try {
       // Check if Ponder tables exist and have recent data
-      const recentPosition = await this.prisma["ee__ponder_position"].findFirst({
+      const recentPosition = await this.prisma["ponder_position"].findFirst({
         orderBy: { updated_at: 'desc' },
       });
 
@@ -506,15 +506,17 @@ export class PositionsService {
       // Note: Ponder tables will be created once the indexer processes blockchain events
       const ownerFilter = owner ? `AND LOWER(owner) = LOWER('${owner}')` : '';
       const positions: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT * FROM "3502__ponder_position"
+        `SELECT * FROM "ponder_position"
          WHERE active = true
          ${ownerFilter}
-         ORDER BY updated_at DESC`
+         ORDER BY updated_at DESC
+         LIMIT 100`
       );
 
       // Convert PonderPosition format to expected Position format
+      // Prisma schema columns are snake_case
       return positions.map(pos => ({
-        position_id: pos.id,
+        positionId: pos.id,
         protocol: pos.protocol,
         dexTokenId: pos.dex_token_id,
         owner: pos.owner,
@@ -619,7 +621,7 @@ export class PositionsService {
    * Get all indexed positions for an owner from Ponder
    */
   async getIndexedPositionsByOwner(owner: string) {
-    return await this.prisma["ee__ponder_position"].findMany({
+    return await this.prisma["ponder_position"].findMany({
       where: { owner: { equals: owner, mode: 'insensitive' } },
       orderBy: { created_at: 'desc' },
     });

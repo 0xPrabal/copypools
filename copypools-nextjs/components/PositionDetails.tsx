@@ -82,6 +82,11 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
       return
     }
 
+    if (!position.positionId) {
+      alert('Invalid position ID')
+      return
+    }
+
     try {
       setLoading(true)
       setError(null)
@@ -92,6 +97,21 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
       const tickSpacing = 60 // Fee tier 3000
       const inputTickLower = parseInt(tickLower)
       const inputTickUpper = parseInt(tickUpper)
+
+      // Validate parsed tick values
+      if (isNaN(inputTickLower) || isNaN(inputTickUpper)) {
+        alert('Invalid tick values. Please enter valid numbers.')
+        setLoading(false)
+        setOperationType(null)
+        return
+      }
+
+      if (inputTickLower >= inputTickUpper) {
+        alert('Tick lower must be less than tick upper')
+        setLoading(false)
+        setOperationType(null)
+        return
+      }
 
       const alignedTickLower = alignTickToSpacing(inputTickLower, tickSpacing)
       const alignedTickUpper = alignTickToSpacing(inputTickUpper, tickSpacing)
@@ -139,6 +159,11 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
       return
     }
 
+    if (!position.positionId) {
+      alert('Invalid position ID')
+      return
+    }
+
     try {
       setLoading(true)
       setError(null)
@@ -172,6 +197,17 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
       return
     }
 
+    // Validate amounts are valid numbers
+    if (isNaN(parseFloat(increaseAmount0)) || isNaN(parseFloat(increaseAmount1))) {
+      alert('Please enter valid amounts')
+      return
+    }
+
+    if (!position.positionId) {
+      alert('Invalid position ID')
+      return
+    }
+
     try {
       setLoading(true)
       setError(null)
@@ -179,9 +215,13 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
 
       const contractService = new ContractService(provider)
 
-      // Parse amounts with proper decimals (assuming 18 for WETH, 6 for USDC)
-      const amount0 = parseUnits(increaseAmount0, 18)
-      const amount1 = parseUnits(increaseAmount1, 6)
+      // Get token decimals from contract
+      const token0Info = await contractService.getTokenInfo(position.token0)
+      const token1Info = await contractService.getTokenInfo(position.token1)
+
+      // Parse amounts with actual token decimals
+      const amount0 = parseUnits(increaseAmount0, token0Info.decimals)
+      const amount1 = parseUnits(increaseAmount1, token1Info.decimals)
 
       const tx = await contractService.increaseLiquidity(
         BigInt(position.positionId),
@@ -210,6 +250,19 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
 
     if (!decreaseLiquidityAmount) {
       alert('Please enter liquidity amount to decrease')
+      return
+    }
+
+    if (!position.positionId) {
+      alert('Invalid position ID')
+      return
+    }
+
+    // Validate that decreaseLiquidityAmount is a valid number that can be converted to BigInt
+    try {
+      BigInt(decreaseLiquidityAmount)
+    } catch {
+      alert('Invalid liquidity amount. Please enter a valid whole number.')
       return
     }
 
@@ -242,6 +295,11 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
       return
     }
 
+    if (!position.positionId) {
+      alert('Invalid position ID')
+      return
+    }
+
     try {
       setLoading(true)
       setError(null)
@@ -264,6 +322,11 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
   const handleBurnPosition = async () => {
     if (!provider || !address) {
       alert('Please connect your wallet')
+      return
+    }
+
+    if (!position.positionId) {
+      alert('Invalid position ID')
       return
     }
 
@@ -299,6 +362,19 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
 
     if (!closeLiquidity) {
       alert('Please enter liquidity amount')
+      return
+    }
+
+    if (!position.positionId) {
+      alert('Invalid position ID')
+      return
+    }
+
+    // Validate that closeLiquidity is a valid number that can be converted to BigInt
+    try {
+      BigInt(closeLiquidity)
+    } catch {
+      alert('Invalid liquidity amount. Please enter a valid whole number.')
       return
     }
 

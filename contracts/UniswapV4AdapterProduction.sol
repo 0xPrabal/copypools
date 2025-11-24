@@ -133,6 +133,30 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
     receive() external payable {}
 
     /**
+     * @notice Get complete position data
+     * @param tokenId The position token ID
+     * @return key The pool key
+     * @return owner The position owner
+     * @return tickLower The lower tick
+     * @return tickUpper The upper tick
+     * @return liquidity The position liquidity
+     */
+    function getPosition(uint256 tokenId)
+        external
+        view
+        returns (
+            PoolKey memory key,
+            address owner,
+            int24 tickLower,
+            int24 tickUpper,
+            uint128 liquidity
+        )
+    {
+        Position memory pos = positions[tokenId];
+        return (pos.key, pos.owner, pos.tickLower, pos.tickUpper, pos.liquidity);
+    }
+
+    /**
      * @notice Ensures transaction is executed before deadline
      * @param deadline The timestamp after which the transaction should revert
      */
@@ -530,9 +554,32 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
         // Get current pool price using StateLibrary
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
 
-        // If pool not initialized, use default price
+        // If pool not initialized, initialize it with a realistic starting price
         if (sqrtPriceX96 == 0) {
-            sqrtPriceX96 = TickMath.getSqrtPriceAtTick(0);
+            // Calculate initial price from the desired amounts
+            // sqrtPriceX96 = sqrt(price) * 2^96 where price = amount1/amount0 (in token terms)
+            // For WETH/USDC: if providing equal $ value, price ~= amount1Desired/amount0Desired
+
+            // Get decimals-adjusted ratio
+            uint256 amount0Adjusted = params.amount0Desired;
+            uint256 amount1Adjusted = params.amount1Desired;
+
+            // Calculate price ratio (with fixed point math)
+            // price = amount1 / amount0, but we need sqrt(price) * 2^96
+            // Use a reasonable default if amounts are imbalanced
+            uint256 priceRatio;
+            if (amount0Adjusted > 0 && amount1Adjusted > 0) {
+                // Calculate sqrt(amount1/amount0) * 2^96
+                // This gives us an approximate initial price based on deposit amounts
+                priceRatio = (amount1Adjusted * (2**96)) / amount0Adjusted;
+                sqrtPriceX96 = uint160(sqrt(priceRatio));
+            } else {
+                // Fallback to 1:1 if amounts are zero
+                sqrtPriceX96 = TickMath.getSqrtPriceAtTick(0);
+            }
+
+            // CRITICAL: Initialize the pool in PoolManager
+            poolManager.initialize(key, sqrtPriceX96);
         }
 
         // TWAP validation: Check price manipulation (only if pool initialized)
@@ -1478,5 +1525,23 @@ contract UniswapV4AdapterProduction is IAdapter, IUnlockCallback, Ownable {
         PoolKey memory key = _buildPoolKey(poolData);
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
         _recordPriceObservation(PoolId.unwrap(key.toId()), sqrtPriceX96);
+    }
+
+    /**
+     * @dev Babylonian method for computing square root
+     * @param y The number to compute square root of
+     * @return z The square root of y
+     */
+    function sqrt(uint256 y) internal pure returns (uint256 z) {
+        if (y > 3) {
+            z = y;
+            uint256 x = y / 2 + 1;
+            while (x < z) {
+                z = x;
+                x = (y / x + x) / 2;
+            }
+        } else if (y != 0) {
+            z = 1;
+        }
     }
 }

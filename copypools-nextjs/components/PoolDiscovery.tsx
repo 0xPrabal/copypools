@@ -142,8 +142,13 @@ export const PoolDiscovery = () => {
         try {
           // Use liquidity data from API instead of direct contract reads
           for (const pos of activePositions) {
-            if (pos.liquidity) {
-              totalLiquidity += BigInt(pos.liquidity)
+            // Check if liquidity exists and is a valid non-zero value
+            if (pos.liquidity && pos.liquidity !== '0' && pos.liquidity !== 'null' && pos.liquidity !== 'undefined') {
+              try {
+                totalLiquidity += BigInt(pos.liquidity)
+              } catch (e) {
+                console.warn(`Invalid liquidity value for position ${pos.position_id}:`, pos.liquidity)
+              }
             }
           }
           totalLiquidityStr = totalLiquidity.toString()

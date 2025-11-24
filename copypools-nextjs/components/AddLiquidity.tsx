@@ -7,11 +7,12 @@ import { parseUnits, formatUnits } from 'ethers'
 import { apiService } from '@/lib/services/api'
 
 // Token pair presets
+// WORKING TOKEN ADDRESSES - These have balance and pool is initialized!
 const TOKEN_PAIRS = [
   {
     name: 'WETH/USDC',
-    token0: '0x8B86719bEeCd8004569F429549177B9B25c6555a',
-    token1: '0xbaa74e10F7edbC3FCDA7508C27A8F5599d79b09c',
+    token0: '0x8B86719bEeCd8004569F429549177B9B25c6555a', // WETH with balance
+    token1: '0xbaa74e10F7edbC3FCDA7508C27A8F5599d79b09c', // USDC with balance
     symbol0: 'WETH',
     symbol1: 'USDC',
     decimals0: 18,
@@ -133,6 +134,24 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
       return
     }
 
+    if (!tickLower || !tickUpper || !fee) {
+      setError('Please set price range and fee tier')
+      return
+    }
+
+    // Validate tick values
+    const tickLowerNum = parseInt(tickLower)
+    const tickUpperNum = parseInt(tickUpper)
+    if (isNaN(tickLowerNum) || isNaN(tickUpperNum)) {
+      setError('Invalid tick range values')
+      return
+    }
+
+    if (tickLowerNum >= tickUpperNum) {
+      setError('Tick lower must be less than tick upper')
+      return
+    }
+
     try {
       setLoading(true)
       setError(null)
@@ -155,8 +174,8 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
         token1,
         amount0Wei,
         amount1Wei,
-        parseInt(tickLower),
-        parseInt(tickUpper),
+        tickLowerNum,
+        tickUpperNum,
         parseInt(fee)
       )
 
