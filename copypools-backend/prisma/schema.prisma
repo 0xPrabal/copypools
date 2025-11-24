@@ -7,6 +7,128 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model ponder_close_event {
+  id           String  @id
+  position_id  String
+  amount0      String
+  amount1      String
+  tx_hash      String
+  block_number Decimal @db.Decimal(78, 0)
+  timestamp    Decimal @db.Decimal(78, 0)
+
+  @@map("3502__ponder_close_event")
+}
+
+model ponder_compound_event {
+  id              String  @id
+  position_id     String
+  added_liquidity String
+  tx_hash         String
+  block_number    Decimal @db.Decimal(78, 0)
+  timestamp       Decimal @db.Decimal(78, 0)
+
+  @@map("3502__ponder_compound_event")
+}
+
+model ponder_position {
+  id                   String  @id
+  protocol             String
+  dex_token_id         String
+  owner                String
+  token0               String
+  token1               String
+  active               Boolean @default(true)
+  tick_lower           Int?
+  tick_upper           Int?
+  liquidity            String?
+  created_at           Decimal @db.Decimal(78, 0)
+  created_tx_hash      String
+  created_block_number Decimal @db.Decimal(78, 0)
+  updated_at           Decimal @db.Decimal(78, 0)
+
+  @@map("3502__ponder_position")
+}
+
+model ponder_range_move_event {
+  id              String  @id
+  old_position_id String
+  new_position_id String
+  new_tick_lower  Int
+  new_tick_upper  Int
+  tx_hash         String
+  block_number    Decimal @db.Decimal(78, 0)
+  timestamp       Decimal @db.Decimal(78, 0)
+
+  @@map("3502__ponder_range_move_event")
+}
+
+model reorg__ponder_close_event {
+  id           String
+  position_id  String
+  amount0      String
+  amount1      String
+  tx_hash      String
+  block_number Decimal @db.Decimal(78, 0)
+  timestamp    Decimal @db.Decimal(78, 0)
+  operation_id Int     @id @default(autoincrement())
+  operation    Int
+  checkpoint   String  @db.VarChar(75)
+
+  @@map("3502_reorg__ponder_close_event")
+}
+
+model reorg__ponder_compound_event {
+  id              String
+  position_id     String
+  added_liquidity String
+  tx_hash         String
+  block_number    Decimal @db.Decimal(78, 0)
+  timestamp       Decimal @db.Decimal(78, 0)
+  operation_id    Int     @id @default(autoincrement())
+  operation       Int
+  checkpoint      String  @db.VarChar(75)
+
+  @@map("3502_reorg__ponder_compound_event")
+}
+
+model reorg__ponder_position {
+  id                   String
+  protocol             String
+  dex_token_id         String
+  owner                String
+  token0               String
+  token1               String
+  active               Boolean @default(true)
+  tick_lower           Int?
+  tick_upper           Int?
+  liquidity            String?
+  created_at           Decimal @db.Decimal(78, 0)
+  created_tx_hash      String
+  created_block_number Decimal @db.Decimal(78, 0)
+  updated_at           Decimal @db.Decimal(78, 0)
+  operation_id         Int     @id @default(autoincrement())
+  operation            Int
+  checkpoint           String  @db.VarChar(75)
+
+  @@map("3502_reorg__ponder_position")
+}
+
+model reorg__ponder_range_move_event {
+  id              String
+  old_position_id String
+  new_position_id String
+  new_tick_lower  Int
+  new_tick_upper  Int
+  tx_hash         String
+  block_number    Decimal @db.Decimal(78, 0)
+  timestamp       Decimal @db.Decimal(78, 0)
+  operation_id    Int     @id @default(autoincrement())
+  operation       Int
+  checkpoint      String  @db.VarChar(75)
+
+  @@map("3502_reorg__ponder_range_move_event")
+}
+
 model ponder_meta {
   key   String @id
   value Json?
@@ -69,250 +191,6 @@ model transactions {
   @@index([position_id])
   @@index([status])
   @@index([type])
-}
-
-model e5__ponder_close_event {
-  id           String  @id
-  position_id  String
-  amount0      String
-  amount1      String
-  tx_hash      String
-  block_number Decimal @db.Decimal(78, 0)
-  timestamp    Decimal @db.Decimal(78, 0)
-
-  @@index([position_id], map: "92e5__ponder_close_event_position_id_index")
-  @@map("92e5__ponder_close_event")
-}
-
-model e5__ponder_compound_event {
-  id              String  @id
-  position_id     String
-  added_liquidity String
-  tx_hash         String
-  block_number    Decimal @db.Decimal(78, 0)
-  timestamp       Decimal @db.Decimal(78, 0)
-
-  @@index([position_id], map: "92e5__ponder_compound_event_position_id_index")
-  @@map("92e5__ponder_compound_event")
-}
-
-model e5__ponder_position {
-  id                   String  @id
-  protocol             String
-  dex_token_id         String
-  owner                String
-  token0               String
-  token1               String
-  active               Boolean @default(true)
-  tick_lower           Int?
-  tick_upper           Int?
-  liquidity            String?
-  created_at           Decimal @db.Decimal(78, 0)
-  created_tx_hash      String
-  created_block_number Decimal @db.Decimal(78, 0)
-  updated_at           Decimal @db.Decimal(78, 0)
-
-  @@index([active], map: "92e5__ponder_position_active_index")
-  @@index([owner], map: "92e5__ponder_position_owner_index")
-  @@map("92e5__ponder_position")
-}
-
-model e5__ponder_range_move_event {
-  id              String  @id
-  old_position_id String
-  new_position_id String
-  new_tick_lower  Int
-  new_tick_upper  Int
-  tx_hash         String
-  block_number    Decimal @db.Decimal(78, 0)
-  timestamp       Decimal @db.Decimal(78, 0)
-
-  @@index([new_position_id], map: "92e5__ponder_range_move_event_new_position_id_index")
-  @@index([old_position_id], map: "92e5__ponder_range_move_event_old_position_id_index")
-  @@map("92e5__ponder_range_move_event")
-}
-
-model e5_reorg__ponder_close_event {
-  id           String
-  position_id  String
-  amount0      String
-  amount1      String
-  tx_hash      String
-  block_number Decimal @db.Decimal(78, 0)
-  timestamp    Decimal @db.Decimal(78, 0)
-  operation_id Int     @id @default(autoincrement())
-  operation    Int
-  checkpoint   String  @db.VarChar(75)
-
-  @@map("92e5_reorg__ponder_close_event")
-}
-
-model e5_reorg__ponder_compound_event {
-  id              String
-  position_id     String
-  added_liquidity String
-  tx_hash         String
-  block_number    Decimal @db.Decimal(78, 0)
-  timestamp       Decimal @db.Decimal(78, 0)
-  operation_id    Int     @id @default(autoincrement())
-  operation       Int
-  checkpoint      String  @db.VarChar(75)
-
-  @@map("92e5_reorg__ponder_compound_event")
-}
-
-model e5_reorg__ponder_position {
-  id                   String
-  protocol             String
-  dex_token_id         String
-  owner                String
-  token0               String
-  token1               String
-  active               Boolean @default(true)
-  tick_lower           Int?
-  tick_upper           Int?
-  liquidity            String?
-  created_at           Decimal @db.Decimal(78, 0)
-  created_tx_hash      String
-  created_block_number Decimal @db.Decimal(78, 0)
-  updated_at           Decimal @db.Decimal(78, 0)
-  operation_id         Int     @id @default(autoincrement())
-  operation            Int
-  checkpoint           String  @db.VarChar(75)
-
-  @@map("92e5_reorg__ponder_position")
-}
-
-model e5_reorg__ponder_range_move_event {
-  id              String
-  old_position_id String
-  new_position_id String
-  new_tick_lower  Int
-  new_tick_upper  Int
-  tx_hash         String
-  block_number    Decimal @db.Decimal(78, 0)
-  timestamp       Decimal @db.Decimal(78, 0)
-  operation_id    Int     @id @default(autoincrement())
-  operation       Int
-  checkpoint      String  @db.VarChar(75)
-
-  @@map("92e5_reorg__ponder_range_move_event")
-}
-
-model f07d__ponder_close_event {
-  id           String  @id
-  position_id  String
-  amount0      String
-  amount1      String
-  tx_hash      String
-  block_number Decimal @db.Decimal(78, 0)
-  timestamp    Decimal @db.Decimal(78, 0)
-
-  @@index([position_id], map: "f07d__ponder_close_event_position_id_index")
-}
-
-model f07d__ponder_compound_event {
-  id              String  @id
-  position_id     String
-  added_liquidity String
-  tx_hash         String
-  block_number    Decimal @db.Decimal(78, 0)
-  timestamp       Decimal @db.Decimal(78, 0)
-
-  @@index([position_id], map: "f07d__ponder_compound_event_position_id_index")
-}
-
-model f07d__ponder_position {
-  id                   String  @id
-  protocol             String
-  dex_token_id         String
-  owner                String
-  token0               String
-  token1               String
-  active               Boolean @default(true)
-  tick_lower           Int?
-  tick_upper           Int?
-  liquidity            String?
-  created_at           Decimal @db.Decimal(78, 0)
-  created_tx_hash      String
-  created_block_number Decimal @db.Decimal(78, 0)
-  updated_at           Decimal @db.Decimal(78, 0)
-
-  @@index([active], map: "f07d__ponder_position_active_index")
-  @@index([owner], map: "f07d__ponder_position_owner_index")
-}
-
-model f07d__ponder_range_move_event {
-  id              String  @id
-  old_position_id String
-  new_position_id String
-  new_tick_lower  Int
-  new_tick_upper  Int
-  tx_hash         String
-  block_number    Decimal @db.Decimal(78, 0)
-  timestamp       Decimal @db.Decimal(78, 0)
-
-  @@index([new_position_id], map: "f07d__ponder_range_move_event_new_position_id_index")
-  @@index([old_position_id], map: "f07d__ponder_range_move_event_old_position_id_index")
-}
-
-model f07d_reorg__ponder_close_event {
-  id           String
-  position_id  String
-  amount0      String
-  amount1      String
-  tx_hash      String
-  block_number Decimal @db.Decimal(78, 0)
-  timestamp    Decimal @db.Decimal(78, 0)
-  operation_id Int     @id @default(autoincrement())
-  operation    Int
-  checkpoint   String  @db.VarChar(75)
-}
-
-model f07d_reorg__ponder_compound_event {
-  id              String
-  position_id     String
-  added_liquidity String
-  tx_hash         String
-  block_number    Decimal @db.Decimal(78, 0)
-  timestamp       Decimal @db.Decimal(78, 0)
-  operation_id    Int     @id @default(autoincrement())
-  operation       Int
-  checkpoint      String  @db.VarChar(75)
-}
-
-model f07d_reorg__ponder_position {
-  id                   String
-  protocol             String
-  dex_token_id         String
-  owner                String
-  token0               String
-  token1               String
-  active               Boolean @default(true)
-  tick_lower           Int?
-  tick_upper           Int?
-  liquidity            String?
-  created_at           Decimal @db.Decimal(78, 0)
-  created_tx_hash      String
-  created_block_number Decimal @db.Decimal(78, 0)
-  updated_at           Decimal @db.Decimal(78, 0)
-  operation_id         Int     @id @default(autoincrement())
-  operation            Int
-  checkpoint           String  @db.VarChar(75)
-}
-
-model f07d_reorg__ponder_range_move_event {
-  id              String
-  old_position_id String
-  new_position_id String
-  new_tick_lower  Int
-  new_tick_upper  Int
-  tx_hash         String
-  block_number    Decimal @db.Decimal(78, 0)
-  timestamp       Decimal @db.Decimal(78, 0)
-  operation_id    Int     @id @default(autoincrement())
-  operation       Int
-  checkpoint      String  @db.VarChar(75)
 }
 
 enum EventType {

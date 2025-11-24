@@ -25,6 +25,7 @@ ponder.on("LPManager:PositionOpened", async ({ event, context }) => {
   // AdapterPosition is returned as: [key, owner, tickLower, tickUpper, liquidity]
   const [, , tickLower, tickUpper, liquidity] = adapterPosition as readonly [any, string, number, number, bigint];
 
+  // Use upsert to handle reorgs and duplicate position IDs gracefully
   await context.db.insert(position).values({
     id: positionId.toString(),
     protocol,
@@ -40,7 +41,7 @@ ponder.on("LPManager:PositionOpened", async ({ event, context }) => {
     createdTxHash: event.transaction.hash,
     createdBlockNumber: BigInt(event.block.number),
     updatedAt: BigInt(event.block.timestamp),
-  });
+  }).onConflictDoUpdate({ tickLower: Number(tickLower), tickUpper: Number(tickUpper), liquidity: liquidity.toString(), updatedAt: BigInt(event.block.timestamp) });
 });
 
 // RangeMoved event handler
@@ -60,7 +61,7 @@ ponder.on("LPManager:RangeMoved", async ({ event, context }) => {
     .find(position, { id: oldPositionId.toString() });
 
   if (oldPosition) {
-    // Create new position entry
+    // Create new position entry (use upsert to handle reorgs)
     await context.db.insert(position).values({
       id: newPositionId.toString(),
       protocol: oldPosition.protocol,
@@ -76,10 +77,10 @@ ponder.on("LPManager:RangeMoved", async ({ event, context }) => {
       createdTxHash: event.transaction.hash,
       createdBlockNumber: BigInt(event.block.number),
       updatedAt: BigInt(event.block.timestamp),
-    });
+    }).onConflictDoUpdate({ tickLower: Number(newTickLower), tickUpper: Number(newTickUpper), updatedAt: BigInt(event.block.timestamp) });
   }
 
-  // Record the range move event
+  // Record the range move event (use upsert to handle reorgs)
   await context.db.insert(rangeMoveEvent).values({
     id: `${event.transaction.hash}-${event.log.logIndex}`,
     oldPositionId: oldPositionId.toString(),
@@ -89,23 +90,28 @@ ponder.on("LPManager:RangeMoved", async ({ event, context }) => {
     txHash: event.transaction.hash,
     blockNumber: BigInt(event.block.number),
     timestamp: BigInt(event.block.timestamp),
-  });
+  }).onConflictDoNothing();
 });
 
 // PositionClosed event handler
 ponder.on("LPManager:PositionClosed", async ({ event, context }) => {
   const { positionId, amount0, amount1 } = event.args;
 
-  // Mark position as inactive
-  await context.db
-    .update(position, { id: positionId.toString() })
-    .set({
-      active: false,
-      liquidity: "0",
-      updatedAt: BigInt(event.block.timestamp),
-    });
+  // Check if position exists before updating
+  const existingPosition = await context.db.find(position, { id: positionId.toString() });
 
-  // Record the close event
+  if (existingPosition) {
+    // Mark position as inactive
+    await context.db
+      .update(position, { id: positionId.toString() })
+      .set({
+        active: false,
+        liquidity: "0",
+        updatedAt: BigInt(event.block.timestamp),
+      });
+  }
+
+  // Record the close event (use upsert to handle reorgs)
   await context.db.insert(closeEvent).values({
     id: `${event.transaction.hash}-${event.log.logIndex}`,
     positionId: positionId.toString(),
@@ -114,7 +120,7 @@ ponder.on("LPManager:PositionClosed", async ({ event, context }) => {
     txHash: event.transaction.hash,
     blockNumber: BigInt(event.block.number),
     timestamp: BigInt(event.block.timestamp),
-  });
+  }).onConflictDoNothing();
 });
 
 // Compounded event handler

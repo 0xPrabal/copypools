@@ -15,6 +15,15 @@ export class BlockchainService implements OnModuleInit {
   constructor(private configService: ConfigService) {}
 
   async onModuleInit() {
+    // Initialize in background to not block app startup
+    setImmediate(() => {
+      this.initializeBlockchain().catch((error) => {
+        this.logger.error('Failed to initialize blockchain service:', error);
+      });
+    });
+  }
+
+  private async initializeBlockchain() {
     await this.initializeProvider();
     await this.initializeContracts();
     this.logger.log('Blockchain service initialized');
