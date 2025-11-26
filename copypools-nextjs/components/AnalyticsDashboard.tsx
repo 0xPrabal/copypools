@@ -13,16 +13,17 @@ const formatCurrency = (value: number) => {
 }
 
 export const AnalyticsDashboard = () => {
-  const [positions, setPositions] = useState<Position[]>([])
+  const [tvlData, setTvlData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const data = await apiService.getAllPositions()
-        setPositions(data)
+        // Fetch REAL TVL data from analytics endpoint
+        const data = await apiService.getTVLData()
+        setTvlData(data)
       } catch (err) {
-        console.error('Failed to fetch positions:', err)
+        console.error('Failed to fetch TVL data:', err)
       } finally {
         setLoading(false)
       }
@@ -31,19 +32,32 @@ export const AnalyticsDashboard = () => {
   }, [])
 
   const summary = useMemo(() => {
-    const activePositions = positions.filter((p) => p.active).length
-    const protocols = [...new Set(positions.map((p) => p.protocol))]
-    const estimatedTVL = positions.length * 1250
-    const averageLiquidity = positions.length ? estimatedTVL / positions.length : 0
+    if (!tvlData) {
+      return {
+        total: 0,
+        active: 0,
+        protocols: [],
+        totalTVL: 0,
+        averageLiquidity: 0,
+      }
+    }
+
+    // Extract protocols from positions
+    const protocols = [...new Set(tvlData.positions.map((p: any) => p.protocol || 'UNISWAP_V4'))]
+
+    // Calculate average from REAL position values
+    const averageValue = tvlData.positionCount > 0
+      ? tvlData.totalTVL / tvlData.positionCount
+      : 0
 
     return {
-      total: positions.length,
-      active: activePositions,
+      total: tvlData.positionCount,
+      active: tvlData.activePositions,
       protocols,
-      estimatedTVL,
-      averageLiquidity,
+      totalTVL: tvlData.totalTVL,
+      averageLiquidity: averageValue,
     }
-  }, [positions])
+  }, [tvlData])
 
   const metrics = [
     {
@@ -59,9 +73,9 @@ export const AnalyticsDashboard = () => {
       icon: '🛰️',
     },
     {
-      label: 'Estimated TVL',
-      value: loading ? '…' : formatCurrency(summary.estimatedTVL),
-      change: 'Simulated gross TVL',
+      label: 'Total TVL',
+      value: loading ? '…' : formatCurrency(summary.totalTVL),
+      change: tvlData ? `Updated ${new Date(tvlData.lastUpdated).toLocaleTimeString()}` : 'Real-time TVL',
       icon: '💰',
     },
     {

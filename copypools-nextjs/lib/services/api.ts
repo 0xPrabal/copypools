@@ -114,4 +114,25 @@ export const apiService = {
     const { data } = await api.post('/positions', { positionId })
     return data
   },
+
+  // Analytics endpoints
+  getTVLData: async (): Promise<any> => {
+    const { data } = await api.get('/analytics/tvl')
+    return data
+  },
+
+  getPoolStats: async (): Promise<any> => {
+    const { data } = await api.get('/analytics/pool/stats')
+    return data
+  },
+
+  getTokenPrices: async (): Promise<any> => {
+    const { data } = await api.get('/analytics/prices')
+    return data
+  },
+
+  getPositionAnalytics: async (positionId: string): Promise<any> => {
+    const { data } = await api.get(`/analytics/positions/${positionId}`)
+    return data
+  },
 }
