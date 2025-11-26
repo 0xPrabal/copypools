@@ -43,7 +43,7 @@ export const AnalyticsDashboard = () => {
     }
 
     // Extract protocols from positions
-    const protocols = [...new Set(tvlData.positions.map((p: any) => p.protocol || 'UNISWAP_V4'))]
+    const protocols: string[] = [...new Set<string>(tvlData.positions.map((p: any) => p.protocol || 'UNISWAP_V4'))]
 
     // Calculate average from REAL position values
     const averageValue = tvlData.positionCount > 0
@@ -114,7 +114,7 @@ export const AnalyticsDashboard = () => {
 
       {summary.protocols.length > 0 && (
         <div className="protocol-chip-grid">
-          {summary.protocols.map((protocol) => (
+          {summary.protocols.map((protocol: string) => (
             <span key={protocol} className="protocol-chip">
               {protocol}
             </span>
