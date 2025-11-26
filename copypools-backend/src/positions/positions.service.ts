@@ -15,7 +15,7 @@ export class PositionsService {
   async getPosition(position_id: bigint) {
     try {
       // Query from Ponder indexed data (automatically synced from blockchain)
-      const dbPosition = await this.prisma["ponder_position"].findUnique({
+      const dbPosition = await this.prisma.b6__ponder_position.findUnique({
         where: { id: position_id.toString() },
       });
 
@@ -310,8 +310,8 @@ export class PositionsService {
       const blockNumber = await this.blockchainService.getCurrentBlock();
       const gasPrice = await this.blockchainService.getGasPrice();
       // Query Ponder indexed positions
-      const positionCount = await this.prisma["ponder_position"].count();
-      const activePositionCount = await this.prisma["ponder_position"].count({
+      const positionCount = await this.prisma.b6__ponder_position.count();
+      const activePositionCount = await this.prisma.b6__ponder_position.count({
         where: { active: true },
       });
 
@@ -363,7 +363,7 @@ export class PositionsService {
       this.logger.warn(`[DEPRECATED] Manual sync called for position ${position_id}. Use Ponder indexer instead.`);
 
       // Fallback: check if position is already indexed by Ponder
-      const ponderPosition = await this.prisma["ponder_position"].findUnique({
+      const ponderPosition = await this.prisma.b6__ponder_position.findUnique({
         where: { id: position_id.toString() },
       });
 
@@ -390,7 +390,7 @@ export class PositionsService {
   private async checkPonderStatus() {
     try {
       // Check if Ponder tables exist and have recent data
-      const recentPosition = await this.prisma["ponder_position"].findFirst({
+      const recentPosition = await this.prisma.b6__ponder_position.findFirst({
         orderBy: { updated_at: 'desc' },
       });
 
@@ -398,7 +398,7 @@ export class PositionsService {
         ? Number(recentPosition.created_block_number)
         : null;
 
-      const ponderEventCount = await this.prisma["ponder_range_move_event"].count();
+      const ponderEventCount = await this.prisma.b6__ponder_range_move_event.count();
 
       return {
         active: true,
@@ -556,7 +556,7 @@ export class PositionsService {
    * Returns all range move events for a position
    */
   async getPositionHistory(position_id: string) {
-    const rangeMoves = await this.prisma["ponder_range_move_event"].findMany({
+    const rangeMoves = await this.prisma.b6__ponder_range_move_event.findMany({
       where: {
         OR: [
           { old_position_id: position_id },
@@ -581,7 +581,7 @@ export class PositionsService {
    * Get compound events for a position from Ponder
    */
   async getPositionCompoundEvents(position_id: string) {
-    const compounds = await this.prisma["ponder_compound_event"].findMany({
+    const compounds = await this.prisma.b6__ponder_compound_event.findMany({
       where: { position_id },
       orderBy: { timestamp: 'desc' },
     });
@@ -599,7 +599,7 @@ export class PositionsService {
    * Get close event for a position from Ponder
    */
   async getPositionCloseEvent(position_id: string) {
-    const closeEvent = await this.prisma["ponder_close_event"].findFirst({
+    const closeEvent = await this.prisma.b6__ponder_close_event.findFirst({
       where: { position_id },
     });
 
@@ -621,7 +621,7 @@ export class PositionsService {
    * Get all indexed positions for an owner from Ponder
    */
   async getIndexedPositionsByOwner(owner: string) {
-    return await this.prisma["ponder_position"].findMany({
+    return await this.prisma.b6__ponder_position.findMany({
       where: { owner: { equals: owner, mode: 'insensitive' } },
       orderBy: { created_at: 'desc' },
     });
