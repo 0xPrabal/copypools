@@ -95,9 +95,9 @@ export const PoolDiscovery = () => {
       })
 
       // Fetch TVL data for real USD values
+      let tvlMap = new Map<string, number>()
       try {
         const tvlData = await apiService.getTVLData()
-        const tvlMap = new Map<string, number>()
         if (tvlData?.positions) {
           tvlData.positions.forEach((pos: any) => {
             tvlMap.set(pos.positionId, pos.estimatedValueUSD || 0)
@@ -184,9 +184,9 @@ export const PoolDiscovery = () => {
           ? Math.max(0, Math.floor((Date.now() - new Date(oldestPosition.createdAt).getTime()) / (1000 * 60 * 60 * 24)))
           : 0
 
-        // Calculate real TVL from position USD values
+        // Calculate real TVL from position USD values using the local tvlMap (not state)
         const realTvl = activePositions.reduce((sum, pos) => {
-          return sum + (positionTVLMap.get(pos.positionId) || 0)
+          return sum + (tvlMap.get(pos.positionId) || 0)
         }, 0)
 
         // Use real TVL if available, otherwise fallback to estimation
