@@ -6,7 +6,6 @@ import { formatUnits } from 'ethers'
 import { AddLiquidity } from '@/components/AddLiquidity'
 import { useWallet } from '@/lib/hooks/useWallet'
 import { apiService } from '@/lib/services/api'
-import { ContractService } from '@/lib/services/contracts'
 import { TokenInfoService, TokenInfo } from '@/lib/services/tokenInfo'
 import { Position } from '@/lib/types'
 
@@ -15,7 +14,6 @@ const FILTER_CHIPS = [
   { id: 'rewards', label: 'Rewards' },
   { id: 'trending', label: 'Trending' },
   { id: 'new', label: 'New pools' },
-  { id: 'loan', label: 'Loan' },
 ]
 
 const TIMEFRAME_OPTIONS: Array<'1d' | '1w' | '1m' | '1y'> = ['1d', '1w', '1m', '1y']
@@ -300,8 +298,6 @@ export const PoolDiscovery = () => {
       data = data.filter((pool) => pool.volume1d > pool.tvl * 0.6)
     } else if (activeChip === 'new') {
       data = data.filter((pool) => pool.age <= 90)
-    } else if (activeChip === 'loan') {
-      data = data.filter((_, index) => index % 2 === 0)
     }
 
     if (sortConfig) {
@@ -326,26 +322,30 @@ export const PoolDiscovery = () => {
   const SkeletonRow = () => (
     <tr>
       <td><div className="skeleton" style={{ width: '180px', height: '40px' }} /></td>
-      <td><div className="skeleton skeleton-text" /></td>
-      <td><div className="skeleton skeleton-text" /></td>
-      <td><div className="skeleton skeleton-text" /></td>
-      <td><div className="skeleton skeleton-text" style={{ width: '60px' }} /></td>
-      <td><div className="skeleton skeleton-text" style={{ width: '40px' }} /></td>
+      <td style={{ textAlign: 'right' }}><div className="skeleton skeleton-text" style={{ marginLeft: 'auto' }} /></td>
+      <td style={{ textAlign: 'right' }}><div className="skeleton skeleton-text" style={{ marginLeft: 'auto' }} /></td>
+      <td style={{ textAlign: 'right' }}><div className="skeleton skeleton-text" style={{ marginLeft: 'auto' }} /></td>
+      <td style={{ textAlign: 'right' }}><div className="skeleton skeleton-text" style={{ width: '60px', marginLeft: 'auto' }} /></td>
+      <td style={{ textAlign: 'right' }}><div className="skeleton skeleton-text" style={{ width: '40px', marginLeft: 'auto' }} /></td>
       <td />
     </tr>
   )
 
   if (showCreateForm && selectedPool) {
     return (
-      <div className="pool-discovery">
-        <div className="discovery-header">
+      <div className="pool-discovery fade-in-content">
+        <div className="discovery-header" style={{ marginBottom: '2rem' }}>
           <div className="discovery-title">
+            <button 
+              className="btn-outline btn-sm" 
+              onClick={() => { setShowCreateForm(false); setSelectedPool(null) }}
+              style={{ marginBottom: '1rem' }}
+            >
+              ← Back to pools
+            </button>
             <h1>Create new position</h1>
-            <p>Provide liquidity to earn trading fees</p>
+            <p className="text-secondary">Provide liquidity to {getTokenSymbol(selectedPool.token0)}/{getTokenSymbol(selectedPool.token1)}</p>
           </div>
-          <button className="btn-primary" onClick={() => { setShowCreateForm(false); setSelectedPool(null) }}>
-            ← Back to pools
-          </button>
         </div>
         <div className="create-form-wrapper">
           <AddLiquidity
@@ -367,39 +367,38 @@ export const PoolDiscovery = () => {
 
   return (
     <div className="pool-discovery">
-      <section className="hero-section">
+      <section className="hero-section" style={{ padding: '2rem 1.75rem' }}>
+        <div className="hero-gradient" />
         <div className="hero-content">
           <div>
-            <span className="hero-pill">Uniswap v4</span>
-            <h1>Create position</h1>
-            <p>Explore pools, inspect capital efficiency, and deploy liquidity with the same polish as Revert Finance.</p>
+            <span className="hero-pill">Market Overview</span>
+            <h1>Pool Discovery</h1>
+            <p>Explore liquidity pools, analyze yields, and deploy capital efficiently on Uniswap V4.</p>
             <div className="hero-actions">
-              <button className="btn-gradient" onClick={() => setShowCreateForm(true)}>+ New position</button>
-              <button className="btn-outline">Import position</button>
+              <button className="btn-gradient" onClick={() => setShowCreateForm(true)}>+ New Position</button>
             </div>
           </div>
           <div className="hero-stats-grid">
             <div className="hero-stat-card">
-              <label>Total TVL</label>
+              <label>Total Value Locked</label>
               <strong>{formatCurrency(stats.totalTVL)}</strong>
-              <span>Across CopyPools</span>
+              <span>Across all pools</span>
             </div>
             <div className="hero-stat-card">
               <label>24h Volume</label>
               <strong>{formatCurrency(stats.totalVolume)}</strong>
-              <span>Tracked pools</span>
+              <span>Estimated</span>
             </div>
             <div className="hero-stat-card">
-              <label>Active Positions</label>
+              <label>Active Pools</label>
               <strong>{stats.activePositions}</strong>
-              <span>On-chain sync</span>
+              <span>Tracked</span>
             </div>
           </div>
         </div>
-        <div className="hero-gradient" />
       </section>
 
-      <div className="controls-row">
+      <div className="controls-row" style={{ marginBottom: '2rem' }}>
         <div className="chip-list">
           {FILTER_CHIPS.map((chip) => (
             <button
@@ -422,18 +421,6 @@ export const PoolDiscovery = () => {
             />
             <span className="search-icon-overlay">🔍</span>
           </div>
-
-          <select className="filter-select" value={selectedNetwork} onChange={(e) => setSelectedNetwork(e.target.value)}>
-            <option value="any">Any network</option>
-            <option value="ethereum">Ethereum</option>
-            <option value="sepolia">Sepolia</option>
-          </select>
-
-          <select className="filter-select" value={selectedTokens} onChange={(e) => setSelectedTokens(e.target.value)}>
-            <option value="any">Any tokens</option>
-            <option value="weth">WETH</option>
-            <option value="usdc">USDC</option>
-          </select>
 
           <div className="pill-tabs">
             {TIMEFRAME_OPTIONS.map((t) => (
@@ -462,11 +449,11 @@ export const PoolDiscovery = () => {
           <thead>
             <tr>
               <th>Pool</th>
-              <th onClick={() => requestSort('tvl')}>TVL {sortIcon('tvl')}</th>
-              <th onClick={() => requestSort('volume1d')}>Volume {sortIcon('volume1d')}</th>
-              <th onClick={() => requestSort('fees1d')}>Fees {sortIcon('fees1d')}</th>
-              <th onClick={() => requestSort('feesApr1d')}>APR {sortIcon('feesApr1d')}</th>
-              <th onClick={() => requestSort('age')}>Age {sortIcon('age')}</th>
+              <th style={{ textAlign: 'right' }} onClick={() => requestSort('tvl')}>TVL {sortIcon('tvl')}</th>
+              <th style={{ textAlign: 'right' }} onClick={() => requestSort('volume1d')}>Volume {sortIcon('volume1d')}</th>
+              <th style={{ textAlign: 'right' }} onClick={() => requestSort('fees1d')}>Fees {sortIcon('fees1d')}</th>
+              <th style={{ textAlign: 'right' }} onClick={() => requestSort('feesApr1d')}>APR {sortIcon('feesApr1d')}</th>
+              <th style={{ textAlign: 'right' }} onClick={() => requestSort('age')}>Age {sortIcon('age')}</th>
               <th></th>
             </tr>
           </thead>
@@ -475,11 +462,11 @@ export const PoolDiscovery = () => {
               ? Array.from({ length: 6 }).map((_, idx) => <SkeletonRow key={idx} />)
               : filteredPools.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="empty-state-cell">
-                    <div className="empty-state">
+                  <td colSpan={7} className="p-0">
+                    <div className="empty-state" style={{ padding: '4rem 2rem' }}>
                       <div className="empty-icon">🌊</div>
                       <h3>No pools found</h3>
-                      <p>Try adjusting filters or search.</p>
+                      <p>Try adjusting filters or search query.</p>
                     </div>
                   </td>
                 </tr>
@@ -494,34 +481,38 @@ export const PoolDiscovery = () => {
                         <td>
                           <div className="token-pair-display">
                             <div className="avatar-group">
-                              <div className="token-avatar-img">{sym0[0]}</div>
-                              <div className="token-avatar-img">{sym1[0]}</div>
+                              <div className="token-avatar-img" style={{ fontSize: '0.7rem', fontWeight: 800 }}>{sym0[0]}</div>
+                              <div className="token-avatar-img" style={{ fontSize: '0.7rem', fontWeight: 800 }}>{sym1[0]}</div>
                             </div>
                             <div className="pool-info">
-                              <div className="pool-title">
+                              <div className="pool-title" style={{ fontSize: '1rem', fontWeight: 700 }}>
                                 {sym0}/{sym1}
-                                <span className="fee-badge">{pool.feeTier}</span>
+                                <span className="fee-badge" style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.15rem 0.5rem' }}>{pool.feeTier}</span>
                               </div>
-                              <div className="pool-subtitle">{pool.protocol}</div>
+                              <div className="pool-subtitle" style={{ fontSize: '0.75rem', opacity: 0.7 }}>{pool.protocol}</div>
                             </div>
                           </div>
                         </td>
-                        <td>
-                          <span className="font-mono">{formatCurrency(pool.tvl)}</span>
-                          <div className="metric-bar-container">
-                            <div className="metric-bar-fill" style={{ width: `${tvlShare}%` }} />
+                        <td style={{ textAlign: 'right' }}>
+                          <span className="font-mono" style={{ fontWeight: 600, fontSize: '1rem' }}>{formatCurrency(pool.tvl)}</span>
+                          <div className="metric-bar-container" style={{ height: '3px', background: 'rgba(255,255,255,0.05)', marginLeft: 'auto' }}>
+                            <div className="metric-bar-fill" style={{ width: `${tvlShare}%`, background: 'var(--accent-primary)' }} />
                           </div>
                         </td>
-                        <td><span className="font-mono">{formatCurrency(pool.volume1d)}</span></td>
-                        <td><span className="font-mono">{formatCurrency(pool.fees1d)}</span></td>
-                        <td>
-                          <span className={`font-mono ${pool.feesApr1d > 20 ? 'text-success' : ''}`}>
+                        <td style={{ textAlign: 'right' }}><span className="font-mono" style={{ fontWeight: 500 }}>{formatCurrency(pool.volume1d)}</span></td>
+                        <td style={{ textAlign: 'right' }}><span className="font-mono" style={{ fontWeight: 500, color: 'var(--text-secondary)' }}>{formatCurrency(pool.fees1d)}</span></td>
+                        <td style={{ textAlign: 'right' }}>
+                          <span className="font-mono" style={{ 
+                            color: pool.feesApr1d > 0 ? 'var(--accent-success)' : 'var(--text-primary)',
+                            fontWeight: pool.feesApr1d > 20 ? 700 : 500,
+                            textShadow: pool.feesApr1d > 50 ? '0 0 10px rgba(16, 185, 129, 0.2)' : 'none'
+                          }}>
                             {formatPercent(pool.feesApr1d)}
                           </span>
                         </td>
-                        <td>{formatAge(pool.age)}</td>
+                        <td style={{ textAlign: 'right' }}><span style={{ opacity: 0.6, fontSize: '0.9rem' }}>{formatAge(pool.age)}</span></td>
                         <td>
-                          <button className="expand-button">{expandedPool === pool.id ? '▲' : '▼'}</button>
+                          <button className="expand-button" style={{ opacity: 0.5 }}>{expandedPool === pool.id ? '▲' : '▼'}</button>
                         </td>
                       </tr>
                       {expandedPool === pool.id && (
@@ -533,7 +524,7 @@ export const PoolDiscovery = () => {
                                   <div className="dashboard-stats">
                                     <div className="dashboard-card">
                                       <h4>Total liquidity</h4>
-                                      <div className="value">
+                                      <div className="value font-mono">
                                         {pool.totalLiquidity ? parseFloat(formatUnits(pool.totalLiquidity, 18)).toFixed(4) : '0'}
                                       </div>
                                     </div>
@@ -543,7 +534,7 @@ export const PoolDiscovery = () => {
                                     </div>
                                     <div className="dashboard-card">
                                       <h4>Fees/TVL</h4>
-                                      <div className="value">{(pool.feesPerTvl1d * 100).toFixed(3)}%</div>
+                                      <div className="value font-mono">{(pool.feesPerTvl1d * 100).toFixed(3)}%</div>
                                     </div>
                                     <div className="dashboard-card">
                                       <h4>Pool efficiency</h4>
@@ -551,9 +542,9 @@ export const PoolDiscovery = () => {
                                     </div>
                                   </div>
                                 </div>
-                                <div className="action-card">
+                                <div className="action-card glass-card">
                                   <h3>Ready to earn?</h3>
-                                  <p>Provide liquidity to {sym0}/{sym1} and start earning trading fees immediately.</p>
+                                  <p className="text-secondary" style={{ marginBottom: '1.5rem' }}>Provide liquidity to {sym0}/{sym1} and start earning trading fees immediately.</p>
                                   <button
                                     className="btn-gradient"
                                     onClick={(e) => {
@@ -563,7 +554,7 @@ export const PoolDiscovery = () => {
                                       setExpandedPool(null)
                                     }}
                                   >
-                                    Create position
+                                    Create Position
                                   </button>
                                 </div>
                               </div>

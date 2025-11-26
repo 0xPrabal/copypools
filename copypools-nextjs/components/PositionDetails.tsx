@@ -63,15 +63,6 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
     return Math.round(tick / tickSpacing) * tickSpacing
   }
 
-  // Helper function to get tick spacing for fee tier
-  const getTickSpacing = (fee: number): number => {
-    if (fee === 100) return 1
-    if (fee === 500) return 10
-    if (fee === 3000) return 60
-    if (fee === 10000) return 200
-    return 60 // Default to 3000 fee tier
-  }
-
   const handleMoveRange = async () => {
     if (!provider || !address) {
       alert('Please connect your wallet')
@@ -94,12 +85,10 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
       setOperationType('moveRange')
 
       // Align ticks to tick spacing (fee 3000 = spacing 60)
-      // TODO: Query actual fee from adapter position
       const tickSpacing = 60 // Fee tier 3000
       const inputTickLower = parseInt(tickLower)
       const inputTickUpper = parseInt(tickUpper)
 
-      // Validate parsed tick values
       if (isNaN(inputTickLower) || isNaN(inputTickUpper)) {
         alert('Invalid tick values. Please enter valid numbers.')
         setLoading(false)
@@ -117,7 +106,6 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
       const alignedTickLower = alignTickToSpacing(inputTickLower, tickSpacing)
       const alignedTickUpper = alignTickToSpacing(inputTickUpper, tickSpacing)
 
-      // Warn user if ticks were adjusted
       if (alignedTickLower !== inputTickLower || alignedTickUpper !== inputTickUpper) {
         const proceed = confirm(
           `Ticks adjusted for alignment:\n` +
@@ -198,7 +186,6 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
       return
     }
 
-    // Validate amounts are valid numbers
     if (isNaN(parseFloat(increaseAmount0)) || isNaN(parseFloat(increaseAmount1))) {
       alert('Please enter valid amounts')
       return
@@ -215,12 +202,9 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
       setOperationType('increase')
 
       const contractService = new ContractService(provider)
-
-      // Get token decimals from contract
       const token0Info = await contractService.getTokenInfo(position.token0)
       const token1Info = await contractService.getTokenInfo(position.token1)
 
-      // Parse amounts with actual token decimals
       const amount0 = parseUnits(increaseAmount0, token0Info.decimals)
       const amount1 = parseUnits(increaseAmount1, token1Info.decimals)
 
@@ -259,7 +243,6 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
       return
     }
 
-    // Validate that decreaseLiquidityAmount is a valid number that can be converted to BigInt
     try {
       BigInt(decreaseLiquidityAmount)
     } catch {
@@ -371,7 +354,6 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
       return
     }
 
-    // Validate that closeLiquidity is a valid number that can be converted to BigInt
     try {
       BigInt(closeLiquidity)
     } catch {
@@ -408,26 +390,18 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
 
   const explorerUrl = chainId ? EXPLORER_URLS[chainId] : ''
 
-  // Helper function to get token symbol from address
   const getTokenSymbol = (address: string): string => {
     return TokenInfoService.getTokenSymbol(address)
   }
 
-  // Helper function to format liquidity for display
   const formatLiquidity = (liquidityStr: string): string => {
     try {
       const liquidity = BigInt(liquidityStr)
-      // Format with 18 decimals (standard for liquidity)
       const formatted = formatUnits(liquidity, 18)
-      // Round to 4 decimal places for display
       const num = parseFloat(formatted)
-      if (num >= 1000000) {
-        return `${(num / 1000000).toFixed(2)}M`
-      } else if (num >= 1000) {
-        return `${(num / 1000).toFixed(2)}K`
-      } else {
-        return num.toFixed(4)
-      }
+      if (num >= 1000000) return `${(num / 1000000).toFixed(2)}M`
+      if (num >= 1000) return `${(num / 1000).toFixed(2)}K`
+      return num.toFixed(4)
     } catch {
       return liquidityStr
     }
@@ -438,7 +412,6 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
       setSyncing(true)
       setError(null)
       await apiService.syncPosition(position.positionId)
-      // Refresh position data
       fetchTransactions()
       alert('Position synced successfully!')
     } catch (err: any) {
@@ -453,50 +426,69 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
       <div className="modal-overlay" onClick={onClose}></div>
       <div className="modal-content">
         <div className="modal-header">
-          <h2>Position #{position.positionId}</h2>
+          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+            <div className="avatar-group">
+                <div className="token-avatar-img" style={{ width: '40px', height: '40px' }}>{getTokenSymbol(position.token0)[0]}</div>
+                <div className="token-avatar-img" style={{ width: '40px', height: '40px' }}>{getTokenSymbol(position.token1)[0]}</div>
+            </div>
+            <div>
+              <h2 style={{ fontSize: '1.5rem', margin: 0 }}>
+                {getTokenSymbol(position.token0)}/{getTokenSymbol(position.token1)}
+              </h2>
+              <span className="badge badge-primary">#{position.positionId}</span>
+            </div>
+          </div>
           <button onClick={onClose} className="close-button">×</button>
         </div>
 
         <div className="modal-body">
-          {/* Position Info */}
-          <div className="section">
-            <div className="section-header-with-action">
-              <h3>Position Information</h3>
+          {/* Position Info Grid */}
+          <div className="glass-card" style={{ marginBottom: '2rem', padding: '1.5rem' }}>
+            <div className="section-header-with-action" style={{ marginBottom: '1rem' }}>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Position Details</h3>
               <button
                 onClick={handleSyncPosition}
                 disabled={syncing}
-                className="sync-button"
+                className="btn-outline btn-sm"
                 title="Sync position data from blockchain"
+                style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
               >
                 {syncing ? '⏳ Syncing...' : '🔄 Sync'}
               </button>
             </div>
-            <div className="info-grid">
-              <div><strong>Protocol:</strong> {position.protocol}</div>
-              <div><strong>Status:</strong> {position.active ? '✅ Active' : '❌ Inactive'}</div>
-              <div><strong>Owner:</strong> {position.owner}</div>
-              <div><strong>DEX Token ID:</strong> {position.dexTokenId}</div>
+            <div className="info-grid" style={{ background: 'transparent', border: 'none', padding: 0 }}>
               <div>
-                <strong>Token0:</strong> {getTokenSymbol(position.token0)}
-                <span style={{ fontSize: '0.8em', color: '#888', marginLeft: '8px' }}>
-                  ({position.token0.substring(0, 6)}...{position.token0.substring(38)})
-                </span>
+                 <span className="text-secondary" style={{ fontSize: '0.8rem' }}>Protocol</span>
+                 <strong style={{ fontSize: '1rem' }}>{position.protocol}</strong>
               </div>
               <div>
-                <strong>Token1:</strong> {getTokenSymbol(position.token1)}
-                <span style={{ fontSize: '0.8em', color: '#888', marginLeft: '8px' }}>
-                  ({position.token1.substring(0, 6)}...{position.token1.substring(38)})
-                </span>
+                 <span className="text-secondary" style={{ fontSize: '0.8rem' }}>Status</span>
+                 <div style={{ marginTop: '0.25rem' }}>
+                    <span className={`badge ${position.active ? 'badge-success' : 'badge-danger'}`}>
+                        {position.active ? 'Active' : 'Inactive'}
+                    </span>
+                 </div>
               </div>
-              {position.tickLower !== undefined && (
-                <>
-                  <div><strong>Tick Lower:</strong> {position.tickLower}</div>
-                  <div><strong>Tick Upper:</strong> {position.tickUpper}</div>
-                </>
-              )}
-              {position.liquidity && (
-                <div><strong>Liquidity:</strong> {formatLiquidity(position.liquidity)}</div>
-              )}
+              <div>
+                 <span className="text-secondary" style={{ fontSize: '0.8rem' }}>Owner</span>
+                 <a 
+                    href={`${explorerUrl}/address/${position.owner}`} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="font-mono text-primary"
+                    style={{ fontSize: '0.9rem' }}
+                 >
+                    {position.owner.substring(0, 6)}...{position.owner.substring(38)}
+                 </a>
+              </div>
+              <div>
+                 <span className="text-secondary" style={{ fontSize: '0.8rem' }}>Liquidity</span>
+                 <strong className="font-mono">{position.liquidity ? formatLiquidity(position.liquidity) : '0'}</strong>
+              </div>
+              <div>
+                 <span className="text-secondary" style={{ fontSize: '0.8rem' }}>Price Range</span>
+                 <strong className="font-mono">{position.tickLower} ↔ {position.tickUpper}</strong>
+              </div>
             </div>
           </div>
 
@@ -506,68 +498,71 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
               className={`position-tab ${activeTab === 'operations' ? 'active' : ''}`}
               onClick={() => setActiveTab('operations')}
             >
-              Operations
+              Manage
             </button>
             <button
               className={`position-tab ${activeTab === 'timeline' ? 'active' : ''}`}
               onClick={() => setActiveTab('timeline')}
             >
-              Timeline
+              Analytics
             </button>
             <button
               className={`position-tab ${activeTab === 'transactions' ? 'active' : ''}`}
               onClick={() => setActiveTab('transactions')}
             >
-              Transactions
+              History
             </button>
           </div>
 
           {/* Operations Tab */}
           {activeTab === 'operations' && position.active && address && (
-            <div className="section operations">
-              <h3>Operations</h3>
-
-              {error && <div className="error-message">{error}</div>}
+            <div className="section operations fade-in-content" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem' }}>
+              
+              {error && <div className="error-message" style={{ gridColumn: '1 / -1' }}>{error}</div>}
 
               {/* Increase Liquidity */}
-              <div className="operation-card">
-                <h4>Increase Liquidity</h4>
+              <div className="glass-card" style={{ padding: '1.5rem' }}>
+                <h4 style={{ marginBottom: '1rem' }}>Add Liquidity</h4>
                 <div className="form-group">
                   <input
                     type="number"
-                    step="any"
-                    placeholder="Amount Token0 (WETH)"
+                    placeholder={`Amount ${getTokenSymbol(position.token0)}`}
                     value={increaseAmount0}
                     onChange={(e) => setIncreaseAmount0(e.target.value)}
                     disabled={loading}
+                    className="range-input"
                   />
                   <input
                     type="number"
-                    step="any"
-                    placeholder="Amount Token1 (USDC)"
+                    placeholder={`Amount ${getTokenSymbol(position.token1)}`}
                     value={increaseAmount1}
                     onChange={(e) => setIncreaseAmount1(e.target.value)}
                     disabled={loading}
+                    className="range-input"
                   />
                   <button
                     onClick={handleIncreaseLiquidity}
                     disabled={loading || !increaseAmount0 || !increaseAmount1}
-                    className="operation-button"
+                    className="btn-primary"
+                    style={{ width: '100%' }}
                   >
-                    {loading && operationType === 'increase' ? 'Processing...' : 'Increase Liquidity'}
+                    {loading && operationType === 'increase' ? 'Processing...' : 'Deposit'}
                   </button>
                 </div>
               </div>
 
               {/* Collect Fees */}
-              <div className="operation-card">
-                <h4>Collect Fees</h4>
+              <div className="glass-card" style={{ padding: '1.5rem' }}>
+                <h4 style={{ marginBottom: '1rem' }}>Claim Rewards</h4>
                 <div className="form-group">
-                  <p>Collect accumulated trading fees from this position.</p>
+                  <p className="text-secondary" style={{ fontSize: '0.9rem', marginBottom: '1rem' }}>
+                    Collect accumulated trading fees from this position.
+                  </p>
                   <button
                     onClick={handleCollectFees}
                     disabled={loading}
-                    className="operation-button"
+                    className="btn-gradient"
+                    style={{ width: '100%' }}
                   >
                     {loading && operationType === 'collectFees' ? 'Processing...' : 'Collect Fees'}
                   </button>
@@ -575,8 +570,8 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
               </div>
 
               {/* Decrease Liquidity */}
-              <div className="operation-card">
-                <h4>Decrease Liquidity</h4>
+              <div className="glass-card" style={{ padding: '1.5rem' }}>
+                <h4 style={{ marginBottom: '1rem' }}>Remove Liquidity</h4>
                 <div className="form-group">
                   <input
                     type="text"
@@ -584,48 +579,55 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
                     value={decreaseLiquidityAmount}
                     onChange={(e) => setDecreaseLiquidityAmount(e.target.value)}
                     disabled={loading}
+                    className="range-input"
                   />
                   <button
                     onClick={handleDecreaseLiquidity}
                     disabled={loading || !decreaseLiquidityAmount}
-                    className="operation-button"
+                    className="btn-outline"
+                    style={{ width: '100%' }}
                   >
-                    {loading && operationType === 'decrease' ? 'Processing...' : 'Decrease Liquidity'}
+                    {loading && operationType === 'decrease' ? 'Processing...' : 'Withdraw'}
                   </button>
                 </div>
               </div>
 
               {/* Move Range */}
-              <div className="operation-card">
-                <h4>Move Range</h4>
+              <div className="glass-card" style={{ padding: '1.5rem' }}>
+                <h4 style={{ marginBottom: '1rem' }}>Adjust Range</h4>
                 <div className="form-group">
-                  <input
-                    type="number"
-                    placeholder="New Tick Lower"
-                    value={tickLower}
-                    onChange={(e) => setTickLower(e.target.value)}
-                    disabled={loading}
-                  />
-                  <input
-                    type="number"
-                    placeholder="New Tick Upper"
-                    value={tickUpper}
-                    onChange={(e) => setTickUpper(e.target.value)}
-                    disabled={loading}
-                  />
-                  <label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                    <input
+                      type="number"
+                      placeholder="Min Tick"
+                      value={tickLower}
+                      onChange={(e) => setTickLower(e.target.value)}
+                      disabled={loading}
+                      className="range-input"
+                    />
+                    <input
+                      type="number"
+                      placeholder="Max Tick"
+                      value={tickUpper}
+                      onChange={(e) => setTickUpper(e.target.value)}
+                      disabled={loading}
+                      className="range-input"
+                    />
+                  </div>
+                  <label className="text-secondary" style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <input
                       type="checkbox"
                       checked={moveRangeSwap}
                       onChange={(e) => setMoveRangeSwap(e.target.checked)}
                       disabled={loading}
                     />
-                    Swap for optimal ratio
+                    Auto-swap tokens
                   </label>
                   <button
                     onClick={handleMoveRange}
                     disabled={loading || !tickLower || !tickUpper}
-                    className="operation-button"
+                    className="btn-outline"
+                    style={{ width: '100%' }}
                   >
                     {loading && operationType === 'moveRange' ? 'Processing...' : 'Move Range'}
                   </button>
@@ -633,58 +635,46 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
               </div>
 
               {/* Compound */}
-              <div className="operation-card">
-                <h4>Compound Fees</h4>
+              <div className="glass-card" style={{ padding: '1.5rem' }}>
+                <h4 style={{ marginBottom: '1rem' }}>Compound Fees</h4>
                 <div className="form-group">
-                  <label>
+                  <label className="text-secondary" style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
                     <input
                       type="checkbox"
                       checked={compoundSwap}
                       onChange={(e) => setCompoundSwap(e.target.checked)}
                       disabled={loading}
                     />
-                    Swap for optimal ratio
+                    Auto-swap for optimal ratio
                   </label>
                   <button
                     onClick={handleCompound}
                     disabled={loading}
-                    className="operation-button"
+                    className="btn-primary"
+                    style={{ width: '100%' }}
                   >
                     {loading && operationType === 'compound' ? 'Processing...' : 'Compound'}
                   </button>
                 </div>
               </div>
 
-              {/* Burn Position */}
-              <div className="operation-card danger">
-                <h4>Burn Position (Remove ALL Liquidity)</h4>
-                <div className="form-group">
-                  <p>This will remove ALL liquidity and close the position permanently.</p>
-                  <button
-                    onClick={handleBurnPosition}
-                    disabled={loading}
-                    className="operation-button danger"
-                  >
-                    {loading && operationType === 'burn' ? 'Processing...' : 'Burn Position'}
-                  </button>
-                </div>
-              </div>
-
               {/* Close Position */}
-              <div className="operation-card danger">
-                <h4>Close Position</h4>
+              <div className="glass-card" style={{ padding: '1.5rem', borderColor: 'var(--accent-danger)' }}>
+                <h4 className="text-danger" style={{ marginBottom: '1rem' }}>Close Position</h4>
                 <div className="form-group">
                   <input
                     type="text"
-                    placeholder="Liquidity Amount"
+                    placeholder="Total Liquidity Amount"
                     value={closeLiquidity}
                     onChange={(e) => setCloseLiquidity(e.target.value)}
                     disabled={loading}
+                    className="range-input"
                   />
                   <button
                     onClick={handleClosePosition}
                     disabled={loading || !closeLiquidity}
-                    className="operation-button danger"
+                    className="btn-outline"
+                    style={{ width: '100%', color: 'var(--accent-danger)', borderColor: 'var(--accent-danger)' }}
                   >
                     {loading && operationType === 'close' ? 'Processing...' : 'Close Position'}
                   </button>
@@ -695,15 +685,14 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
 
           {/* Timeline Tab */}
           {activeTab === 'timeline' && (
-            <div className="section">
+            <div className="section fade-in-content">
               <PositionTimeline positionId={position.positionId} />
             </div>
           )}
 
           {/* Transactions Tab */}
           {activeTab === 'transactions' && (
-            <div className="section">
-              <h3>Transaction History</h3>
+            <div className="section fade-in-content">
               {transactions.length === 0 ? (
                 <div className="empty-state">
                   <div className="empty-icon">📭</div>
@@ -715,22 +704,25 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
                     <div key={tx.id} className={`transaction-item ${tx.status.toLowerCase()}`}>
                       <div className="tx-header">
                         <span className="tx-type">{tx.type}</span>
-                        <span className={`tx-status ${tx.status.toLowerCase()}`}>{tx.status}</span>
+                        <span className={`badge ${tx.status === 'SUCCESS' ? 'badge-success' : tx.status === 'PENDING' ? 'badge-warning' : 'badge-danger'}`}>
+                            {tx.status}
+                        </span>
                       </div>
-                      {tx.txHash && explorerUrl && (
-                        <a
-                          href={`${explorerUrl}/tx/${tx.txHash}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="tx-hash"
-                        >
-                          {tx.txHash.substring(0, 10)}...{tx.txHash.substring(tx.txHash.length - 8)}
-                        </a>
-                      )}
-                      {tx.blockNumber && <div>Block: {tx.blockNumber}</div>}
-                      {tx.gasUsed && <div>Gas: {tx.gasUsed}</div>}
-                      {tx.errorMessage && <div className="error-message">{tx.errorMessage}</div>}
-                      <div className="tx-date">{new Date(tx.createdAt).toLocaleString()}</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                        {tx.txHash && explorerUrl && (
+                            <a
+                            href={`${explorerUrl}/tx/${tx.txHash}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="tx-hash font-mono"
+                            >
+                            {tx.txHash}
+                            </a>
+                        )}
+                        <span className="text-secondary" style={{ fontSize: '0.8rem' }}>
+                            {new Date(tx.createdAt).toLocaleString()}
+                        </span>
+                      </div>
                     </div>
                   ))}
                 </div>

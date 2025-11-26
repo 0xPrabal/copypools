@@ -22,9 +22,9 @@ export const PositionsList = ({ onSelectPosition, showAll = true }: PositionsLis
   const [filterProtocol, setFilterProtocol] = useState<string>('all')
   const [positionValues, setPositionValues] = useState<Map<string, number>>(new Map())
 
-  const heroTitle = showAll ? 'Discover liquidity positions' : 'Your active strategies'
+  const heroTitle = showAll ? 'Discover Strategies' : 'My Liquidity Positions'
   const heroSubtitle = showAll
-    ? 'Scan indexed Uniswap v4 positions or import an existing vault.'
+    ? 'Scan indexed Uniswap v4 positions or import an existing vault to copy.'
     : 'Track, manage, and compound all of your CopyPools positions from one place.'
 
   const tokenBadge = (address: string) => address.slice(2, 6).toUpperCase()
@@ -34,6 +34,14 @@ export const PositionsList = ({ onSelectPosition, showAll = true }: PositionsLis
     try {
       setLoading(true)
       setError(null)
+
+      // If on "My Positions" tab without wallet, don't fetch anything
+      if (!showAll && !address) {
+        setPositions([])
+        setLoading(false)
+        return
+      }
+
       const owner = showMyPositions && address ? address : filterOwner || undefined
       const data = await apiService.getAllPositions(owner)
       setPositions(data)
@@ -55,7 +63,6 @@ export const PositionsList = ({ onSelectPosition, showAll = true }: PositionsLis
         setPositionValues(valueMap)
       } catch (err) {
         console.warn('Failed to fetch TVL data:', err)
-        // Continue without TVL data - component will show placeholder
       }
     } catch (err: any) {
       console.error('API failed:', err)
@@ -100,43 +107,48 @@ export const PositionsList = ({ onSelectPosition, showAll = true }: PositionsLis
 
   return (
     <section className="positions-section">
-      <div className="positions-hero">
-        <div className="positions-hero-text">
-          <span className="hero-pill">{showAll ? 'Discover' : 'Portfolio'}</span>
-          <h2>{heroTitle}</h2>
-          <p>{heroSubtitle}</p>
-        </div>
-        <div className="positions-summary-grid">
-          <div className="summary-card">
-            <label>Total positions</label>
-            <strong>{summary.total}</strong>
-            <span>{summary.active} active</span>
+      <div className="hero-section" style={{ padding: '2.5rem' }}>
+        <div className="hero-gradient" style={!showAll ? { filter: 'hue-rotate(45deg) saturate(1.2)' } : undefined} />
+        <div className="hero-content">
+          <div>
+            <span className="hero-pill" style={!showAll ? { color: 'var(--accent-secondary)', borderColor: 'var(--accent-secondary)' } : undefined}>
+              {showAll ? 'Explore' : 'Personal Assets'}
+            </span>
+            <h1>{heroTitle}</h1>
+            <p>{heroSubtitle}</p>
           </div>
-          <div className="summary-card">
-            <label>Estimated TVL</label>
-            <strong>{formatCurrency(summary.estimatedTVL)}</strong>
-            <span>Across filtered set</span>
-          </div>
-          <div className="summary-card">
-            <label>Status</label>
-            <strong>{summary.active} / {summary.total}</strong>
-            <span>{summary.inactive} inactive</span>
+          <div className="hero-stats-grid">
+            <div className="hero-stat-card">
+              <label>Total Positions</label>
+              <strong>{summary.total}</strong>
+              <span>{summary.active} active</span>
+            </div>
+            <div className="hero-stat-card">
+              <label>Total Value</label>
+              <strong>{formatCurrency(summary.estimatedTVL)}</strong>
+              <span>Estimated USD</span>
+            </div>
+            <div className="hero-stat-card">
+              <label>Efficiency</label>
+              <strong>{summary.total > 0 ? Math.round((summary.active / summary.total) * 100) : 0}%</strong>
+              <span>Active rate</span>
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="positions-toolbar">
+      <div className="positions-toolbar glow-on-hover">
         <div className="toolbar-left">
           {showAll && address && (
-            <div className="toggle-pill">
+            <div className="chip-list">
               <button
-                className={showMyPositions ? 'active' : ''}
+                className={`chip ${showMyPositions ? 'active' : ''}`}
                 onClick={() => setShowMyPositions(true)}
               >
                 My positions
               </button>
               <button
-                className={!showMyPositions ? 'active' : ''}
+                className={`chip ${!showMyPositions ? 'active' : ''}`}
                 onClick={() => {
                   setShowMyPositions(false)
                   setFilterOwner('')
@@ -148,15 +160,21 @@ export const PositionsList = ({ onSelectPosition, showAll = true }: PositionsLis
           )}
         </div>
         <div className="toolbar-actions">
-          <div className="search-input-wrapper">
-            <span>🔍</span>
+          <div className="search-container" style={{ width: 'auto', flex: 1 }}>
             <input
+              className="search-input-field"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by owner, token or position id"
             />
+            <span className="search-icon-overlay">🔍</span>
           </div>
-          <select value={filterProtocol} onChange={(e) => setFilterProtocol(e.target.value)}>
+          
+          <select 
+            className="filter-select" 
+            value={filterProtocol} 
+            onChange={(e) => setFilterProtocol(e.target.value)}
+          >
             <option value="all">All protocols</option>
             {uniqueProtocols.map((protocol) => (
               <option key={protocol} value={protocol}>
@@ -164,69 +182,123 @@ export const PositionsList = ({ onSelectPosition, showAll = true }: PositionsLis
               </option>
             ))}
           </select>
+          
           {!showMyPositions && (
             <input
+              className="filter-select"
+              style={{ width: '180px' }}
               placeholder="Filter owner"
               value={filterOwner}
               onChange={(e) => setFilterOwner(e.target.value)}
             />
           )}
-          <button className="pill-action" onClick={fetchPositions}>
-            🔄 Refresh
+          
+          <button className="btn-outline btn-icon" onClick={fetchPositions} title="Refresh">
+            🔄
           </button>
         </div>
       </div>
 
       {loading && (
-        <div className="positions-loading">
-          <div className="skeleton" style={{ width: '100%', height: '160px' }}></div>
+        <div className="positions-grid">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="skeleton" style={{ height: '280px', borderRadius: '24px' }} />
+          ))}
         </div>
       )}
 
-      {!loading && error && <div className="error-banner">{error}</div>}
+      {!loading && error && (
+        <div className="error-banner">
+          <span className="error-icon">⚠️</span>
+          <span>{error}</span>
+          <button className="retry-btn" onClick={fetchPositions}>Retry</button>
+        </div>
+      )}
 
       {!loading && !error && (
         <div className="positions-grid">
           {filteredPositions.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-icon">📭</div>
-              <h3>No positions</h3>
-              <p>Try adjusting filters or creating a new position.</p>
+            <div className="glass-card empty-state" style={{ gridColumn: '1 / -1', padding: '4rem 2rem', textAlign: 'center' }}>
+              {!showAll && !address ? (
+                <>
+                  <div className="empty-icon" style={{ fontSize: '4rem', marginBottom: '1rem' }}>🔐</div>
+                  <h3 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Connect Your Wallet</h3>
+                  <p className="text-secondary">Connect your wallet to view and manage your liquidity positions.</p>
+                  <div style={{ marginTop: '1.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                    <p>Click the "Connect Wallet" button in the top right corner to get started.</p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="empty-icon" style={{ fontSize: '4rem', marginBottom: '1rem' }}>📭</div>
+                  <h3 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>No positions found</h3>
+                  <p className="text-secondary">Try adjusting filters or creating a new position.</p>
+                  <button className="btn-primary" style={{ marginTop: '1.5rem' }} onClick={() => setFilterProtocol('all')}>
+                    Clear filters
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             filteredPositions.map((position) => (
               <article
                 key={position.positionId}
                 className={`position-card ${position.active ? 'active' : 'inactive'}`}
+                style={{ 
+                  gap: '1rem',
+                  borderColor: position.active ? 'rgba(16, 185, 129, 0.2)' : 'var(--border-color)',
+                  boxShadow: position.active ? '0 0 20px rgba(16, 185, 129, 0.05)' : 'none'
+                }}
                 onClick={() => onSelectPosition(position)}
               >
-                <header className="position-card-header">
-                  <div className="token-chips">
-                    <span>{tokenBadge(position.token0)}</span>
-                    <span>{tokenBadge(position.token1)}</span>
+                <header className="position-card-header" style={{ marginBottom: '0.5rem' }}>
+                  <div className="token-pair-display" style={{ gap: '0.75rem' }}>
+                    <div className="avatar-group">
+                      <div className="token-avatar-img" style={{ width: '36px', height: '36px', fontSize: '0.8rem', fontWeight: 800 }}>
+                        {tokenBadge(position.token0)[0]}
+                      </div>
+                      <div className="token-avatar-img" style={{ width: '36px', height: '36px', fontSize: '0.8rem', fontWeight: 800 }}>
+                        {tokenBadge(position.token1)[0]}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      <h4 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800, letterSpacing: '-0.02em' }}>
+                        {tokenBadge(position.token0)}/{tokenBadge(position.token1)}
+                      </h4>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.25rem' }}>
+                        <span className={`status-dot ${position.active ? 'on' : 'off'}`} />
+                        <span className="text-secondary" style={{ fontSize: '0.75rem', fontWeight: 500 }}>
+                          #{position.positionId} • {position.protocol}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div className={`status-dot ${position.active ? 'on' : 'off'}`}></div>
+                  <div className="badge" style={{ 
+                    background: position.active ? 'rgba(16, 185, 129, 0.1)' : 'rgba(255, 255, 255, 0.05)',
+                    color: position.active ? 'var(--accent-success)' : 'var(--text-secondary)',
+                    fontSize: '0.7rem',
+                    padding: '0.25rem 0.6rem'
+                  }}>
+                    {position.active ? 'Running' : 'Paused'}
+                  </div>
                 </header>
 
-                <div className="position-card-body">
+                <div className="position-card-metrics" style={{ 
+                  background: 'rgba(0,0,0,0.2)', 
+                  border: '1px solid rgba(255,255,255,0.03)',
+                  padding: '1rem'
+                }}>
                   <div>
-                    <p className="position-label">Position #{position.positionId}</p>
-                    <h3>{position.protocol}</h3>
-                    <p className="position-owner">Owner {formatAddress(position.owner)}</p>
-                  </div>
-                  <div className="range-pill">
-                    Range {position.tickLower ?? '-'} / {position.tickUpper ?? '-'}
-                  </div>
-                </div>
-
-                <div className="position-card-metrics">
-                  <div>
-                    <span>Liquidity</span>
-                    <strong>{position.liquidity || '—'}</strong>
+                    <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', opacity: 0.7 }}>Liquidity</span>
+                    <strong className="font-mono" style={{ fontSize: '1.1rem', marginTop: '0.25rem' }}>
+                      {position.liquidity ? formatCompact(position.liquidity) : '—'}
+                    </strong>
                   </div>
                   <div>
-                    <span>{positionValues.get(position.positionId) ? 'Est. Value' : 'DEX token'}</span>
-                    <strong>
+                    <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', opacity: 0.7 }}>
+                      {positionValues.get(position.positionId) ? 'Est. Value' : 'Token ID'}
+                    </span>
+                    <strong className="font-mono text-primary" style={{ fontSize: '1.1rem', marginTop: '0.25rem' }}>
                       {positionValues.get(position.positionId)
                         ? formatCurrency(positionValues.get(position.positionId)!)
                         : position.dexTokenId}
@@ -234,10 +306,25 @@ export const PositionsList = ({ onSelectPosition, showAll = true }: PositionsLis
                   </div>
                 </div>
 
-                <footer className="position-card-footer">
-                  <button className="btn-outline">Manage</button>
-                  <span className="view-details">View details →</span>
-                </footer>
+                <div style={{ 
+                  marginTop: 'auto', 
+                  paddingTop: '0.75rem', 
+                  display: 'flex', 
+                  justifyContent: 'space-between', 
+                  alignItems: 'center' 
+                }}>
+                  <div className="range-pill" style={{ 
+                    fontSize: '0.75rem', 
+                    background: 'rgba(255,255,255,0.03)',
+                    border: '1px solid rgba(255,255,255,0.05)',
+                    color: 'var(--text-secondary)'
+                  }}>
+                    <span style={{ opacity: 0.7 }}>Tick:</span> <span className="font-mono">{position.tickLower ?? '-'} ↔ {position.tickUpper ?? '-'}</span>
+                  </div>
+                  <span className="text-primary" style={{ fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', opacity: 0.8 }}>
+                    Manage
+                  </span>
+                </div>
               </article>
             ))
           )}
@@ -252,4 +339,15 @@ const formatCurrency = (value: number) => {
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`
   if (value >= 1_000) return `$${(value / 1_000).toFixed(2)}K`
   return `$${value.toFixed(2)}`
+}
+
+const formatCompact = (val: string) => {
+  try {
+    const num = parseFloat(val) / 1e18 // Assuming 18 decimals roughly
+    if (num < 0.0001) return '< 0.0001'
+    if (num > 1000) return `${(num / 1000).toFixed(1)}k`
+    return num.toFixed(2)
+  } catch {
+    return val.substring(0, 6) + '...'
+  }
 }

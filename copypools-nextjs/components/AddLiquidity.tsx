@@ -21,19 +21,18 @@ const TOKEN_PAIRS = [
 ]
 
 const FEE_OPTIONS = [
-  { value: '500', label: '0.05%', description: 'Best for stable pairs' },
-  { value: '3000', label: '0.3%', description: 'Best for most pairs' },
-  { value: '10000', label: '1%', description: 'Best for exotic pairs' },
+  { value: '500', label: '0.05%', description: 'Best for stable pairs', badge: 'Stable' },
+  { value: '3000', label: '0.3%', description: 'Best for most pairs', badge: 'Standard' },
+  { value: '10000', label: '1%', description: 'Best for exotic pairs', badge: 'Exotic' },
 ]
 
 // Tick values must be aligned to tick spacing (60 for 0.3% fee tier)
 // Tick spacing 60 requires ticks divisible by 60
 const PRICE_RANGE_PRESETS = [
-  { label: 'Full Range', tickLower: '-887220', tickUpper: '887220', description: 'Maximum liquidity, lower fees' },
-  { label: 'Wide Range', tickLower: '-200040', tickUpper: '200040', description: 'Good balance' },
-  { label: 'Medium Range', tickLower: '-100020', tickUpper: '100020', description: 'More concentrated' },
-  { label: 'Narrow Range', tickLower: '-50040', tickUpper: '50040', description: 'Maximum efficiency' },
-  { label: 'Custom', tickLower: '', tickUpper: '', description: 'Set your own range' },
+  { label: 'Full Range', tickLower: '-887220', tickUpper: '887220', description: 'Passive strategy', icon: '🌊' },
+  { label: 'Wide Range', tickLower: '-200040', tickUpper: '200040', description: 'Balanced exposure', icon: '⚖️' },
+  { label: 'Concentrated', tickLower: '-50040', tickUpper: '50040', description: 'Active management', icon: '🎯' },
+  { label: 'Custom', tickLower: '', tickUpper: '', description: 'Manual setup', icon: '🔧' },
 ]
 
 interface AddLiquidityProps {
@@ -223,45 +222,56 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
     <div className="create-position">
       {!preSelectedPool && (
         <div className="create-position-header">
-          <h2>Create New Position</h2>
-          <p className="create-subtitle">Provide liquidity to earn trading fees</p>
+          <h2 style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>Create Position</h2>
+          <p className="create-subtitle">Provide liquidity to Uniswap V4 pools and earn fees.</p>
         </div>
       )}
 
       <div className="create-position-content">
-        {/* Token Pair Selection */}
-        <div className="create-section">
-          <div className="section-header">
-            <h3>Select Token Pair</h3>
+        {/* Token Pair Selection - Glass Card */}
+        <div className="glass-card" style={{ padding: '2rem' }}>
+          <div className="section-header" style={{ marginBottom: '1.5rem' }}>
+            <h3 style={{ fontSize: '1.25rem', marginBottom: '0.25rem' }}>Select Pair</h3>
+            <p className="text-secondary">Choose tokens to deposit liquidity</p>
           </div>
+          
           <div className="token-pair-selector">
-            <div className="pair-card active">
+            <div className="pair-card active" style={{ 
+              background: 'rgba(139, 92, 246, 0.05)', 
+              borderColor: 'var(--accent-primary)',
+              boxShadow: '0 0 20px rgba(139, 92, 246, 0.1)' 
+            }}>
               <div className="pair-tokens">
                 <div className="token-display">
-                  <div className="token-avatar-large">{token0Info?.symbol?.[0] || 'T'}</div>
+                  <div className="token-avatar-img" style={{ width: '48px', height: '48px', fontSize: '1rem' }}>
+                    {token0Info?.symbol?.[0] || 'T'}
+                  </div>
                   <div className="token-info">
-                    <div className="token-symbol">{token0Info?.symbol || 'Token 0'}</div>
-                    <div className="token-address-small">{formatAddress(token0)}</div>
+                    <div className="token-symbol" style={{ fontSize: '1.2rem' }}>{token0Info?.symbol || 'Token 0'}</div>
+                    <div className="font-mono text-secondary" style={{ fontSize: '0.8rem' }}>{formatAddress(token0)}</div>
                   </div>
                 </div>
-                <div className="pair-divider">/</div>
+                <div className="pair-divider" style={{ margin: '0 1rem', opacity: 0.3 }}>/</div>
                 <div className="token-display">
-                  <div className="token-avatar-large">{token1Info?.symbol?.[0] || 'T'}</div>
+                  <div className="token-avatar-img" style={{ width: '48px', height: '48px', fontSize: '1rem' }}>
+                    {token1Info?.symbol?.[0] || 'T'}
+                  </div>
                   <div className="token-info">
-                    <div className="token-symbol">{token1Info?.symbol || 'Token 1'}</div>
-                    <div className="token-address-small">{formatAddress(token1)}</div>
+                    <div className="token-symbol" style={{ fontSize: '1.2rem' }}>{token1Info?.symbol || 'Token 1'}</div>
+                    <div className="font-mono text-secondary" style={{ fontSize: '0.8rem' }}>{formatAddress(token1)}</div>
                   </div>
                 </div>
               </div>
+              
               {address && (
-                <div className="token-balances-display">
+                <div className="token-balances-display" style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
                   <div className="balance-item">
-                    <span className="balance-label">Balance:</span>
-                    <span className="balance-value">{balance0 || '0.00'} {token0Info?.symbol}</span>
+                    <span className="balance-label">Available</span>
+                    <span className="font-mono text-primary">{parseFloat(balance0 || '0').toFixed(4)} {token0Info?.symbol}</span>
                   </div>
                   <div className="balance-item">
-                    <span className="balance-label">Balance:</span>
-                    <span className="balance-value">{balance1 || '0.00'} {token1Info?.symbol}</span>
+                    <span className="balance-label">Available</span>
+                    <span className="font-mono text-primary">{parseFloat(balance1 || '0').toFixed(4)} {token1Info?.symbol}</span>
                   </div>
                 </div>
               )}
@@ -270,195 +280,192 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
         </div>
 
         {/* Amount Input */}
-        <div className="create-section">
-          <div className="section-header">
-            <h3>Deposit Amounts</h3>
+        <div className="glass-card" style={{ padding: '2rem' }}>
+          <div className="section-header" style={{ marginBottom: '1.5rem' }}>
+            <h3 style={{ fontSize: '1.25rem', marginBottom: '0.25rem' }}>Deposit Amounts</h3>
+            <p className="text-secondary">Enter amounts to provide</p>
           </div>
           <div className="amount-inputs">
-            <div className="amount-input-card">
-              <div className="amount-input-header">
-                <div className="token-selector-display">
-                  <div className="token-avatar-small">{token0Info?.symbol?.[0] || 'T'}</div>
-                  <span className="token-symbol-small">{token0Info?.symbol || 'Token 0'}</span>
+            {[
+              { 
+                token: token0Info, 
+                amount: amount0, 
+                setAmount: setAmount0, 
+                balance: balance0,
+                idx: 0
+              },
+              { 
+                token: token1Info, 
+                amount: amount1, 
+                setAmount: setAmount1, 
+                balance: balance1,
+                idx: 1
+              }
+            ].map((item, i) => (
+              <div key={i} className="amount-input-card" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <div className="amount-input-header">
+                  <div className="token-selector-display">
+                    <div className="token-avatar-img" style={{ width: '24px', height: '24px', fontSize: '0.6rem' }}>
+                      {item.token?.symbol?.[0] || 'T'}
+                    </div>
+                    <span className="token-symbol-small">{item.token?.symbol}</span>
+                  </div>
+                  {address && (
+                    <button
+                      type="button"
+                      onClick={() => handleMax(item.idx as 0 | 1)}
+                      className="badge badge-primary"
+                      style={{ cursor: 'pointer', border: 'none' }}
+                      disabled={loading}
+                    >
+                      MAX
+                    </button>
+                  )}
                 </div>
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="0.00"
+                  value={item.amount}
+                  onChange={(e) => item.setAmount(e.target.value)}
+                  disabled={loading || !address}
+                  className="amount-input font-mono"
+                  style={{ fontSize: '1.75rem', marginTop: '0.5rem' }}
+                />
                 {address && (
-                  <button
-                    type="button"
-                    onClick={() => handleMax(0)}
-                    className="max-button"
-                    disabled={loading}
-                  >
-                    MAX
-                  </button>
+                  <div className="balance-hint font-mono" style={{ textAlign: 'right', marginTop: '0.5rem' }}>
+                    ~${(parseFloat(item.amount || '0') * 1).toFixed(2)}
+                  </div>
                 )}
               </div>
-              <input
-                type="number"
-                step="any"
-                placeholder="0.0"
-                value={amount0}
-                onChange={(e) => setAmount0(e.target.value)}
-                disabled={loading || !address}
-                className="amount-input"
-              />
-              {address && balance0 && (
-                <div className="balance-hint">
-                  Balance: {parseFloat(balance0).toLocaleString()} {token0Info?.symbol}
-                </div>
-              )}
-            </div>
-
-            <div className="amount-input-card">
-              <div className="amount-input-header">
-                <div className="token-selector-display">
-                  <div className="token-avatar-small">{token1Info?.symbol?.[0] || 'T'}</div>
-                  <span className="token-symbol-small">{token1Info?.symbol || 'Token 1'}</span>
-                </div>
-                {address && (
-                  <button
-                    type="button"
-                    onClick={() => handleMax(1)}
-                    className="max-button"
-                    disabled={loading}
-                  >
-                    MAX
-                  </button>
-                )}
-              </div>
-              <input
-                type="number"
-                step="any"
-                placeholder="0.0"
-                value={amount1}
-                onChange={(e) => setAmount1(e.target.value)}
-                disabled={loading || !address}
-                className="amount-input"
-              />
-              {address && balance1 && (
-                <div className="balance-hint">
-                  Balance: {parseFloat(balance1).toLocaleString()} {token1Info?.symbol}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Fee Tier */}
-        <div className="create-section">
-          <div className="section-header">
-            <h3>Fee Tier</h3>
-            <p className="section-description">Select the fee tier for this pool</p>
-          </div>
-          <div className="fee-tier-selector">
-            {FEE_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => setFee(option.value)}
-                disabled={loading}
-                className={`fee-option ${fee === option.value ? 'active' : ''}`}
-              >
-                <div className="fee-option-content">
-                  <div className="fee-label">{option.label}</div>
-                  <div className="fee-description">{option.description}</div>
-                </div>
-                {fee === option.value && <div className="fee-check">✓</div>}
-              </button>
             ))}
           </div>
         </div>
 
-        {/* Price Range */}
-        <div className="create-section">
-          <div className="section-header">
-            <h3>Price Range</h3>
-            <p className="section-description">Set the price range for your liquidity position</p>
-          </div>
-          <div className="range-presets">
-            {PRICE_RANGE_PRESETS.map((preset, index) => (
-              <button
-                key={index}
-                type="button"
-                onClick={() => handleRangePreset(index)}
-                disabled={loading}
-                className={`range-preset ${selectedRangePreset === index ? 'active' : ''}`}
-              >
-                <div className="preset-label">{preset.label}</div>
-                <div className="preset-description">{preset.description}</div>
-              </button>
-            ))}
-          </div>
-          <div className="range-inputs">
-            <div className="range-input-group">
-              <label>Tick Lower</label>
-              <input
-                type="number"
-                placeholder="-887220"
-                value={tickLower}
-                onChange={(e) => {
-                  setTickLower(e.target.value)
-                  setSelectedRangePreset(PRICE_RANGE_PRESETS.length - 1) // Custom
-                }}
-                disabled={loading}
-                className="range-input"
-              />
+        {/* Configuration Row */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
+          {/* Fee Tier */}
+          <div className="glass-card" style={{ padding: '1.5rem' }}>
+            <div className="section-header" style={{ marginBottom: '1rem' }}>
+              <h3 style={{ fontSize: '1.1rem' }}>Fee Tier</h3>
             </div>
-            <div className="range-input-group">
-              <label>Tick Upper</label>
-              <input
-                type="number"
-                placeholder="887220"
-                value={tickUpper}
-                onChange={(e) => {
-                  setTickUpper(e.target.value)
-                  setSelectedRangePreset(PRICE_RANGE_PRESETS.length - 1) // Custom
-                }}
-                disabled={loading}
-                className="range-input"
-              />
+            <div className="fee-tier-selector">
+              {FEE_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setFee(option.value)}
+                  disabled={loading}
+                  className={`fee-option ${fee === option.value ? 'active' : ''}`}
+                  style={{ padding: '0.75rem', border: fee === option.value ? '1px solid var(--accent-primary)' : '1px solid transparent' }}
+                >
+                  <div className="fee-option-content">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                      <span className="fee-label font-mono">{option.label}</span>
+                      <span className="badge" style={{ fontSize: '0.6rem' }}>{option.badge}</span>
+                    </div>
+                    <div className="fee-description" style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>{option.description}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Price Range */}
+          <div className="glass-card" style={{ padding: '1.5rem' }}>
+            <div className="section-header" style={{ marginBottom: '1rem' }}>
+              <h3 style={{ fontSize: '1.1rem' }}>Price Range</h3>
+            </div>
+            <div className="range-presets" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+              {PRICE_RANGE_PRESETS.map((preset, index) => (
+                <button
+                  key={index}
+                  type="button"
+                  onClick={() => handleRangePreset(index)}
+                  disabled={loading}
+                  className={`range-preset ${selectedRangePreset === index ? 'active' : ''}`}
+                  style={{ 
+                    padding: '0.75rem', 
+                    textAlign: 'left',
+                    background: selectedRangePreset === index ? 'rgba(139, 92, 246, 0.1)' : 'rgba(255,255,255,0.03)',
+                    border: selectedRangePreset === index ? '1px solid var(--accent-primary)' : '1px solid transparent'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span>{preset.icon}</span>
+                    <span className="preset-label" style={{ fontSize: '0.9rem' }}>{preset.label}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+            
+            <div className="range-inputs" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
+               <div style={{ flex: 1 }}>
+                  <label className="text-secondary" style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.25rem' }}>Min Tick</label>
+                  <input
+                    type="number"
+                    value={tickLower}
+                    onChange={(e) => { setTickLower(e.target.value); setSelectedRangePreset(3); }}
+                    className="range-input font-mono"
+                    style={{ fontSize: '0.9rem', padding: '0.5rem' }}
+                  />
+               </div>
+               <div style={{ flex: 1 }}>
+                  <label className="text-secondary" style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.25rem' }}>Max Tick</label>
+                  <input
+                    type="number"
+                    value={tickUpper}
+                    onChange={(e) => { setTickUpper(e.target.value); setSelectedRangePreset(3); }}
+                    className="range-input font-mono"
+                    style={{ fontSize: '0.9rem', padding: '0.5rem' }}
+                  />
+               </div>
             </div>
           </div>
         </div>
 
-        {/* Status Messages */}
-        {error && (
-          <div className="status-message error">
-            <span className="status-icon">⚠️</span>
-            <span>{error}</span>
-          </div>
-        )}
-        {success && (
-          <div className="status-message success">
-            <span className="status-icon">✓</span>
-            <span>{success}</span>
-          </div>
-        )}
-        {step && (
-          <div className="status-message info">
-            <span className="status-icon">⏳</span>
-            <span>{step}</span>
-          </div>
-        )}
+        {/* Messages */}
+        <div style={{ minHeight: '60px' }}>
+          {error && (
+            <div className="status-message error">
+              <span className="status-icon">⚠️</span>
+              <span>{error}</span>
+            </div>
+          )}
+          {success && (
+            <div className="status-message success">
+              <span className="status-icon">✓</span>
+              <span>{success}</span>
+            </div>
+          )}
+          {step && (
+            <div className="status-message info">
+              <span className="status-icon">⏳</span>
+              <span>{step}</span>
+            </div>
+          )}
+        </div>
 
         {/* Action Button */}
         <div className="create-action">
           {!address ? (
-            <div className="wallet-prompt">
+            <div className="wallet-prompt glass-card">
               <p>Please connect your wallet to create a position</p>
             </div>
           ) : (
             <button
               onClick={handleAddLiquidity}
               disabled={loading || !amount0 || !amount1}
-              className="create-button"
+              className="btn-gradient"
+              style={{ width: '100%', padding: '1.25rem', fontSize: '1.1rem' }}
             >
               {loading ? (
                 <>
                   <span className="button-spinner">⏳</span>
-                  {step || 'Processing...'}
+                  {step || 'Processing transaction...'}
                 </>
               ) : (
-                'Create Position'
+                'Create Liquidity Position'
               )}
             </button>
           )}
@@ -467,15 +474,13 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
         {/* Info Box */}
         <div className="info-card">
           <div className="info-header">
-            <span className="info-icon">ℹ️</span>
-            <h4>Important Information</h4>
+            <span className="info-icon">💡</span>
+            <h4>Pro Tips</h4>
           </div>
           <ul className="info-list">
-            <li>Ensure you have sufficient balance of both tokens</li>
-            <li>Token approvals will be handled automatically</li>
-            <li>Full range provides maximum liquidity coverage</li>
-            <li>Narrower ranges offer higher capital efficiency</li>
-            <li>Recommended fee tier: 0.05% for stable pairs</li>
+            <li>Ensure you have sufficient balance of both tokens for gas and deposit.</li>
+            <li>Token approvals will be handled automatically before the deposit.</li>
+            <li>Full range provides passive fees but lower efficiency. Concentrated liquidity earns more but requires management.</li>
           </ul>
         </div>
       </div>

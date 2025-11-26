@@ -4,7 +4,6 @@ import { useState } from 'react'
 import { WalletConnect } from '@/components/WalletConnect'
 import { PositionsList } from '@/components/PositionsList'
 import { PositionDetails } from '@/components/PositionDetails'
-import { AddLiquidity } from '@/components/AddLiquidity'
 import { AnalyticsDashboard } from '@/components/AnalyticsDashboard'
 import { PoolDiscovery } from '@/components/PoolDiscovery'
 import { Position } from '@/lib/types'
@@ -18,7 +17,7 @@ export default function Home() {
       <header className="app-header">
         <div className="header-content">
           <div className="logo-section">
-            <h1 className="logo">CopyPools</h1>
+            <h1 className="logo" onClick={() => setActiveTab('discover')}>CopyPools</h1>
             <span className="tagline">Liquidity Management for Uniswap V4</span>
           </div>
           <WalletConnect />
@@ -42,7 +41,7 @@ export default function Home() {
             className={`tab ${activeTab === 'create' ? 'active' : ''}`}
             onClick={() => setActiveTab('create')}
           >
-            <span className="tab-icon">➕</span>
+            <span className="tab-icon">✨</span>
             Create Position
           </button>
         </nav>
@@ -51,16 +50,18 @@ export default function Home() {
       <main className="app-main">
         <div className="container">
           {activeTab === 'discover' && (
-            <>
+            <div className="fade-in-content">
               <AnalyticsDashboard />
               <PositionsList onSelectPosition={setSelectedPosition} showAll={true} />
-            </>
+            </div>
           )}
           {activeTab === 'positions' && (
-            <PositionsList onSelectPosition={setSelectedPosition} showAll={false} />
+            <div className="fade-in-content">
+              <PositionsList onSelectPosition={setSelectedPosition} showAll={false} />
+            </div>
           )}
           {activeTab === 'create' && (
-            <div className="create-position-page">
+            <div className="create-position-page fade-in-content">
               <PoolDiscovery />
             </div>
           )}
@@ -76,7 +77,10 @@ export default function Home() {
 
       <footer className="app-footer">
         <div className="footer-content">
-          <p>CopyPools Protocol - Multi-DEX Liquidity Management</p>
+          <div className="footer-brand">
+            <p>© 2025 CopyPools Protocol</p>
+            <span>Multi-DEX Liquidity Management on Uniswap v4</span>
+          </div>
           <div className="footer-links">
             <a href="https://github.com/doryoku-projects/copypools-smart-contract" target="_blank" rel="noopener noreferrer">
               GitHub
@@ -85,6 +89,8 @@ export default function Home() {
             <a href="https://docs.copypools.xyz" target="_blank" rel="noopener noreferrer">
               Documentation
             </a>
+            <span>•</span>
+            <a href="#" className="text-secondary">Terms</a>
           </div>
         </div>
       </footer>
