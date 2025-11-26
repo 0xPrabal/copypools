@@ -147,7 +147,7 @@ export const PoolDiscovery = () => {
               try {
                 totalLiquidity += BigInt(pos.liquidity)
               } catch (e) {
-                console.warn(`Invalid liquidity value for position ${pos.position_id}:`, pos.liquidity)
+                console.warn(`Invalid liquidity value for position ${pos.positionId}:`, pos.liquidity)
               }
             }
           }

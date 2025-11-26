@@ -68,6 +68,15 @@ ponder.on("LPManager:PositionOpened", async ({ event, context }) => {
 ponder.on("LPManager:RangeMoved", async ({ event, context }) => {
   const { oldPositionId, newPositionId, newTickLower, newTickUpper } = event.args;
 
+  // Get old position data first - skip if doesn't exist (from old adapter)
+  const oldPosition = await context.db
+    .find(position, { id: oldPositionId.toString() });
+
+  if (!oldPosition) {
+    console.log(`⚠️  Position ${oldPositionId} not found for RangeMoved - SKIPPING (likely from old adapter)`);
+    return;
+  }
+
   // Mark old position as inactive
   await context.db
     .update(position, { id: oldPositionId.toString() })
@@ -75,10 +84,6 @@ ponder.on("LPManager:RangeMoved", async ({ event, context }) => {
       active: false,
       updatedAt: BigInt(event.block.timestamp),
     });
-
-  // Get old position data to copy to new position
-  const oldPosition = await context.db
-    .find(position, { id: oldPositionId.toString() });
 
   if (oldPosition) {
     // Create new position entry (use upsert to handle reorgs)
@@ -121,12 +126,37 @@ ponder.on("LPManager:PositionClosed", async ({ event, context }) => {
   const existingPosition = await context.db.find(position, { id: positionId.toString() });
 
   if (existingPosition) {
-    // Mark position as inactive
+    // Query the actual position state from LPManager to check if it's still active
+    const lpManagerPosition = await context.client.readContract({
+      abi: context.contracts.LPManager.abi,
+      address: context.contracts.LPManager.address,
+      functionName: "positions",
+      args: [positionId],
+    });
+
+    // Get real liquidity from adapter
+    let remainingLiquidity = BigInt(0);
+    try {
+      const adapterPosition = await context.client.readContract({
+        abi: AdapterABI.abi,
+        address: process.env.ADAPTER_ADDRESS as `0x${string}`,
+        functionName: "getPosition",
+        args: [existingPosition.dexTokenId],
+      });
+      // getPosition returns: [PoolKey, owner, tickLower, tickUpper, liquidity]
+      const posData = adapterPosition as readonly [any, string, number, number, bigint];
+      remainingLiquidity = posData[4];
+    } catch (error) {
+      // Position might be fully closed and removed from adapter
+      remainingLiquidity = BigInt(0);
+    }
+
+    // Update position based on actual state
     await context.db
       .update(position, { id: positionId.toString() })
       .set({
-        active: false,
-        liquidity: "0",
+        active: lpManagerPosition[5], // Use actual active state from contract
+        liquidity: remainingLiquidity.toString(),
         updatedAt: BigInt(event.block.timestamp),
       });
   }

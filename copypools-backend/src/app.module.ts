@@ -9,6 +9,7 @@ import { BlockchainModule } from './blockchain/blockchain.module';
 import { PositionsModule } from './positions/positions.module';
 import { EventsModule } from './events/events.module';
 import { HealthModule } from './health/health.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 import { validate } from './config/env.validation';
 
 @Module({
@@ -28,6 +29,7 @@ import { validate } from './config/env.validation';
     PositionsModule,
     EventsModule,
     HealthModule,
+    AnalyticsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

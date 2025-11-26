@@ -103,6 +103,41 @@ export class BlockchainService implements OnModuleInit {
     }
   }
 
+  /**
+   * Get V4 pool state (sqrtPriceX96, tick, fees)
+   * @param token0 - Token0 address
+   * @param token1 - Token1 address
+   * @param fee - Pool fee (e.g., 3000 for 0.3%)
+   * @returns Pool state data
+   */
+  async getPoolInfo(token0: string, token1: string, fee: number) {
+    try {
+      this.logger.debug(`Getting pool info for ${token0}/${token1} fee=${fee}`);
+
+      // Build PoolData struct for adapter call
+      const poolData = {
+        protocol: 'UNISWAP_V4', // Required by IAdapter.PoolData
+        token0,
+        token1,
+        fee,
+        tickSpacing: 60, // Standard tick spacing for V4
+        hooks: ethers.ZeroAddress, // No hooks for standard pools
+      };
+
+      const result = await this.adapterContract.getPoolInfo(poolData);
+
+      return {
+        sqrtPriceX96: result[0],
+        tick: result[1],
+        protocolFee: result[2],
+        lpFee: result[3],
+      };
+    } catch (error) {
+      this.logger.error(`Error getting pool info for ${token0}/${token1}:`, error);
+      throw error;
+    }
+  }
+
   // Contract Write Methods
   async moveRange(
     positionId: bigint,

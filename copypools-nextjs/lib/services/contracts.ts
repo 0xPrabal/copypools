@@ -242,17 +242,28 @@ export class ContractService {
       }
 
       // Check and approve tokens if needed (approve to LPManager, not Adapter)
+      // Use MAX_UINT256 for unlimited approvals - user only approves once!
+      const MAX_UINT256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff')
+
       const allowance0 = await this.getTokenAllowance(token0, signerAddress, LP_MANAGER_ADDRESS)
       const allowance1 = await this.getTokenAllowance(token1, signerAddress, LP_MANAGER_ADDRESS)
 
+      // Batch approval promises to execute in parallel
+      const approvalPromises = []
+
       if (allowance0 < amount0) {
-        console.log('Approving token0...')
-        await this.approveToken(token0, LP_MANAGER_ADDRESS, amount0)
+        console.log('Approving token0 (one-time unlimited approval)...')
+        approvalPromises.push(this.approveToken(token0, LP_MANAGER_ADDRESS, MAX_UINT256))
       }
 
       if (allowance1 < amount1) {
-        console.log('Approving token1...')
-        await this.approveToken(token1, LP_MANAGER_ADDRESS, amount1)
+        console.log('Approving token1 (one-time unlimited approval)...')
+        approvalPromises.push(this.approveToken(token1, LP_MANAGER_ADDRESS, MAX_UINT256))
+      }
+
+      // Wait for all approvals to complete (if any)
+      if (approvalPromises.length > 0) {
+        await Promise.all(approvalPromises)
       }
 
       // Prepare parameters matching the contract structure
