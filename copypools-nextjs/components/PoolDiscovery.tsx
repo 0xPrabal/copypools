@@ -327,7 +327,7 @@ export const PoolDiscovery = () => {
       <td style={{ textAlign: 'right' }}><div className="skeleton skeleton-text" style={{ marginLeft: 'auto' }} /></td>
       <td style={{ textAlign: 'right' }}><div className="skeleton skeleton-text" style={{ width: '60px', marginLeft: 'auto' }} /></td>
       <td style={{ textAlign: 'right' }}><div className="skeleton skeleton-text" style={{ width: '40px', marginLeft: 'auto' }} /></td>
-      <td />
+      <td style={{ textAlign: 'right' }} />
     </tr>
   )
 
@@ -449,11 +449,31 @@ export const PoolDiscovery = () => {
           <thead>
             <tr>
               <th>Pool</th>
-              <th style={{ textAlign: 'right' }} onClick={() => requestSort('tvl')}>TVL {sortIcon('tvl')}</th>
-              <th style={{ textAlign: 'right' }} onClick={() => requestSort('volume1d')}>Volume {sortIcon('volume1d')}</th>
-              <th style={{ textAlign: 'right' }} onClick={() => requestSort('fees1d')}>Fees {sortIcon('fees1d')}</th>
-              <th style={{ textAlign: 'right' }} onClick={() => requestSort('feesApr1d')}>APR {sortIcon('feesApr1d')}</th>
-              <th style={{ textAlign: 'right' }} onClick={() => requestSort('age')}>Age {sortIcon('age')}</th>
+              <th onClick={() => requestSort('tvl')}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                  TVL {sortIcon('tvl')}
+                </div>
+              </th>
+              <th onClick={() => requestSort('volume1d')}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                  Volume {sortIcon('volume1d')}
+                </div>
+              </th>
+              <th onClick={() => requestSort('fees1d')}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                  Fees {sortIcon('fees1d')}
+                </div>
+              </th>
+              <th onClick={() => requestSort('feesApr1d')}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                  APR {sortIcon('feesApr1d')}
+                </div>
+              </th>
+              <th onClick={() => requestSort('age')}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                  Age {sortIcon('age')}
+                </div>
+              </th>
               <th></th>
             </tr>
           </thead>
@@ -511,7 +531,7 @@ export const PoolDiscovery = () => {
                           </span>
                         </td>
                         <td style={{ textAlign: 'right' }}><span style={{ opacity: 0.6, fontSize: '0.9rem' }}>{formatAge(pool.age)}</span></td>
-                        <td>
+                        <td style={{ textAlign: 'right' }}>
                           <button className="expand-button" style={{ opacity: 0.5 }}>{expandedPool === pool.id ? '▲' : '▼'}</button>
                         </td>
                       </tr>
