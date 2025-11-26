@@ -60,6 +60,7 @@ export const PoolDiscovery = () => {
     key: 'tvl',
     direction: 'desc',
   })
+  const [positionTVLMap, setPositionTVLMap] = useState<Map<string, number>>(new Map())
 
   const stats = useMemo(() => {
     const totalTVL = pools.reduce((sum, pool) => sum + pool.tvl, 0)
@@ -92,6 +93,20 @@ export const PoolDiscovery = () => {
         tokenAddresses.add(pos.token0)
         tokenAddresses.add(pos.token1)
       })
+
+      // Fetch TVL data for real USD values
+      try {
+        const tvlData = await apiService.getTVLData()
+        const tvlMap = new Map<string, number>()
+        if (tvlData?.positions) {
+          tvlData.positions.forEach((pos: any) => {
+            tvlMap.set(pos.positionId, pos.estimatedValueUSD || 0)
+          })
+        }
+        setPositionTVLMap(tvlMap)
+      } catch (err) {
+        console.warn('Failed to fetch TVL data:', err)
+      }
 
       if (provider) {
         const tokenInfoService = new TokenInfoService(provider)
@@ -169,12 +184,20 @@ export const PoolDiscovery = () => {
           ? Math.max(0, Math.floor((Date.now() - new Date(oldestPosition.createdAt).getTime()) / (1000 * 60 * 60 * 24)))
           : 0
 
-        const estimatedTvl = totalLiquidity > 0n
-          ? (Number(totalLiquidity) / 1e18) * 2000
-          : activePositions.length * 100000
+        // Calculate real TVL from position USD values
+        const realTvl = activePositions.reduce((sum, pos) => {
+          return sum + (positionTVLMap.get(pos.positionId) || 0)
+        }, 0)
 
-        const feesApr1d = totalLiquidity > 0n && activePositions.length > 0
-          ? Math.min(500, Math.max(0, (activePositions.length * 0.1) / (Number(totalLiquidity) / 1e18) * 365 * 100))
+        // Use real TVL if available, otherwise fallback to estimation
+        const estimatedTvl = realTvl > 0
+          ? realTvl
+          : totalLiquidity > 0n
+            ? (Number(totalLiquidity) / 1e18) * 2000
+            : activePositions.length * 100000
+
+        const feesApr1d = estimatedTvl > 0 && activePositions.length > 0
+          ? Math.min(500, Math.max(0, (activePositions.length * 100) / estimatedTvl * 365))
           : 0
 
         nextPools.push({

@@ -20,6 +20,7 @@ export const PositionsList = ({ onSelectPosition, showAll = true }: PositionsLis
   const [showMyPositions, setShowMyPositions] = useState(!showAll)
   const [searchQuery, setSearchQuery] = useState('')
   const [filterProtocol, setFilterProtocol] = useState<string>('all')
+  const [positionValues, setPositionValues] = useState<Map<string, number>>(new Map())
 
   const heroTitle = showAll ? 'Discover liquidity positions' : 'Your active strategies'
   const heroSubtitle = showAll
@@ -36,6 +37,26 @@ export const PositionsList = ({ onSelectPosition, showAll = true }: PositionsLis
       const owner = showMyPositions && address ? address : filterOwner || undefined
       const data = await apiService.getAllPositions(owner)
       setPositions(data)
+
+      // Fetch real TVL data for positions
+      try {
+        const tvlData = await apiService.getTVLData()
+        const valueMap = new Map<string, number>()
+
+        // Map position IDs to their USD values from analytics
+        if (tvlData?.positions) {
+          for (const pos of tvlData.positions) {
+            const posId = pos.positionId
+            if (posId) {
+              valueMap.set(posId, pos.estimatedValueUSD || 0)
+            }
+          }
+        }
+        setPositionValues(valueMap)
+      } catch (err) {
+        console.warn('Failed to fetch TVL data:', err)
+        // Continue without TVL data - component will show placeholder
+      }
     } catch (err: any) {
       console.error('API failed:', err)
       setError('Failed to load positions from backend API')
@@ -67,9 +88,15 @@ export const PositionsList = ({ onSelectPosition, showAll = true }: PositionsLis
     const total = filteredPositions.length
     const active = filteredPositions.filter((p) => p.active).length
     const inactive = total - active
-    const estimatedTVL = filteredPositions.length * 1250 // placeholder estimation
-    return { total, active, inactive, estimatedTVL }
-  }, [filteredPositions])
+
+    // Calculate real TVL from position values
+    const realTVL = filteredPositions.reduce((sum, pos) => {
+      const value = positionValues.get(pos.positionId) || 0
+      return sum + value
+    }, 0)
+
+    return { total, active, inactive, estimatedTVL: realTVL }
+  }, [filteredPositions, positionValues])
 
   return (
     <section className="positions-section">
@@ -198,8 +225,12 @@ export const PositionsList = ({ onSelectPosition, showAll = true }: PositionsLis
                     <strong>{position.liquidity || '—'}</strong>
                   </div>
                   <div>
-                    <span>DEX token</span>
-                    <strong>{position.dexTokenId}</strong>
+                    <span>{positionValues.get(position.positionId) ? 'Est. Value' : 'DEX token'}</span>
+                    <strong>
+                      {positionValues.get(position.positionId)
+                        ? formatCurrency(positionValues.get(position.positionId)!)
+                        : position.dexTokenId}
+                    </strong>
                   </div>
                 </div>
 
