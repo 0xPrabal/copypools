@@ -1,13 +1,14 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { parseUnits } from 'ethers'
+import { parseUnits, formatUnits } from 'ethers'
 import { Position, Transaction } from '@/lib/types'
 import { apiService } from '@/lib/services/api'
 import { ContractService } from '@/lib/services/contracts'
 import { useWallet } from '@/lib/hooks/useWallet'
 import { EXPLORER_URLS } from '@/lib/config/constants'
 import { PositionTimeline } from './PositionTimeline'
+import { TokenInfoService } from '@/lib/services/tokenInfo'
 
 interface PositionDetailsProps {
   position: Position
@@ -407,6 +408,31 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
 
   const explorerUrl = chainId ? EXPLORER_URLS[chainId] : ''
 
+  // Helper function to get token symbol from address
+  const getTokenSymbol = (address: string): string => {
+    return TokenInfoService.getTokenSymbol(address)
+  }
+
+  // Helper function to format liquidity for display
+  const formatLiquidity = (liquidityStr: string): string => {
+    try {
+      const liquidity = BigInt(liquidityStr)
+      // Format with 18 decimals (standard for liquidity)
+      const formatted = formatUnits(liquidity, 18)
+      // Round to 4 decimal places for display
+      const num = parseFloat(formatted)
+      if (num >= 1000000) {
+        return `${(num / 1000000).toFixed(2)}M`
+      } else if (num >= 1000) {
+        return `${(num / 1000).toFixed(2)}K`
+      } else {
+        return num.toFixed(4)
+      }
+    } catch {
+      return liquidityStr
+    }
+  }
+
   const handleSyncPosition = async () => {
     try {
       setSyncing(true)
@@ -450,8 +476,18 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
               <div><strong>Status:</strong> {position.active ? '✅ Active' : '❌ Inactive'}</div>
               <div><strong>Owner:</strong> {position.owner}</div>
               <div><strong>DEX Token ID:</strong> {position.dexTokenId}</div>
-              <div><strong>Token0:</strong> {position.token0}</div>
-              <div><strong>Token1:</strong> {position.token1}</div>
+              <div>
+                <strong>Token0:</strong> {getTokenSymbol(position.token0)}
+                <span style={{ fontSize: '0.8em', color: '#888', marginLeft: '8px' }}>
+                  ({position.token0.substring(0, 6)}...{position.token0.substring(38)})
+                </span>
+              </div>
+              <div>
+                <strong>Token1:</strong> {getTokenSymbol(position.token1)}
+                <span style={{ fontSize: '0.8em', color: '#888', marginLeft: '8px' }}>
+                  ({position.token1.substring(0, 6)}...{position.token1.substring(38)})
+                </span>
+              </div>
               {position.tickLower !== undefined && (
                 <>
                   <div><strong>Tick Lower:</strong> {position.tickLower}</div>
@@ -459,7 +495,7 @@ export const PositionDetails = ({ position, onClose }: PositionDetailsProps) => 
                 </>
               )}
               {position.liquidity && (
-                <div><strong>Liquidity:</strong> {position.liquidity}</div>
+                <div><strong>Liquidity:</strong> {formatLiquidity(position.liquidity)}</div>
               )}
             </div>
           </div>
