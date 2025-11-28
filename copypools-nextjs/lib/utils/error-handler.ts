@@ -112,11 +112,11 @@ export async function retryWithBackoff<T>(
   for (let i = 0; i < maxRetries; i++) {
     try {
       return await fn()
-    } catch (error) {
+    } catch (error: any) {
       lastError = error
 
       // Don't retry user rejections
-      const errorMsg = error?.message || ''
+      const errorMsg = (error?.message || error?.toString?.() || '') as string
       if (
         errorMsg.includes('user rejected') ||
         errorMsg.includes('User denied')
