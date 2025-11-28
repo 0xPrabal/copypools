@@ -22,27 +22,38 @@ const nextConfig = {
     NEXT_PUBLIC_BACKEND_URL: process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3000',
   },
 
-  // Experimental features to handle problematic dependencies
-  experimental: {
-    serverComponentsExternalPackages: [
-      '@reown/appkit',
-      '@privy-io/react-auth',
-      'pino',
-      'thread-stream',
-    ],
+  // Server external packages (moved from experimental in Next.js 16)
+  serverExternalPackages: [
+    '@reown/appkit',
+    '@reown/appkit-core',
+    '@reown/appkit-utils',
+    '@reown/appkit-controllers',
+    '@privy-io/react-auth',
+    'pino',
+    'pino-pretty',
+    'thread-stream',
+    '@walletconnect/ethereum-provider',
+    '@walletconnect/universal-provider',
+  ],
+
+  // Turbopack configuration (Next.js 16 default)
+  turbopack: {
+    resolveAlias: {
+      // Prevent bundling test dependencies
+      'why-is-node-running': false,
+      'tap': false,
+    },
   },
 
-  // Webpack configuration to exclude test files and resolve issues
+  // Webpack configuration (fallback for when --webpack flag is used)
   webpack: (config, { isServer }) => {
-    // Ignore test directories completely
     config.resolve = config.resolve || {}
     config.resolve.alias = {
       ...config.resolve.alias,
-      // Prevent bundling of test files
       'why-is-node-running': false,
+      'tap': false,
     }
 
-    // Exclude test files from being processed
     config.externals = config.externals || []
     if (isServer) {
       config.externals.push(
