@@ -3,8 +3,19 @@
 import { useState, useEffect } from 'react'
 import { ContractService } from '@/lib/services/contracts'
 import { useWallet } from '@/lib/hooks'
-import { parseUnits, formatUnits } from 'ethers'
+import { parseUnits, formatUnits, Contract } from 'ethers'
 import { apiService } from '@/lib/services/api'
+import {
+  tickToPrice,
+  priceToTick,
+  roundToTickSpacing,
+  getTickSpacing,
+  isInRange,
+  formatPrice,
+  tickToSqrtPriceX96,
+  calculateTokenAmountsForLiquidity,
+  getLiquidityForAmounts,
+} from '@/lib/utils/uniswap-math'
 
 // Token pair presets
 // WORKING TOKEN ADDRESSES - These have balance and pool is initialized!
@@ -33,6 +44,12 @@ const PRICE_RANGE_PRESETS = [
   { label: 'Wide Range', tickLower: '-200040', tickUpper: '200040', description: 'Balanced exposure', icon: '⚖️' },
   { label: 'Concentrated', tickLower: '-50040', tickUpper: '50040', description: 'Active management', icon: '🎯' },
   { label: 'Custom', tickLower: '', tickUpper: '', description: 'Manual setup', icon: '🔧' },
+]
+
+// Uniswap V4 Pool Manager
+const POOL_MANAGER_ADDRESS = '0x8C4BcBE6b9eF47855f97E675296FA3F6fafa5F1A' // Sepolia
+const POOL_MANAGER_ABI = [
+  'function getSlot0(bytes32 poolId) external view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)',
 ]
 
 interface AddLiquidityProps {
@@ -75,6 +92,20 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
   const [balance0, setBalance0] = useState<string>('')
   const [balance1, setBalance1] = useState<string>('')
 
+  // Pool state
+  const [currentPrice, setCurrentPrice] = useState<number>(0)
+  const [currentTick, setCurrentTick] = useState<number>(0)
+  const [sqrtPriceX96, setSqrtPriceX96] = useState<bigint>(0n)
+  const [poolLoading, setPoolLoading] = useState(false)
+
+  // Price inputs (human-readable)
+  const [minPrice, setMinPrice] = useState<string>('')
+  const [maxPrice, setMaxPrice] = useState<string>('')
+
+  // Calculated values
+  const [expectedLiquidity, setExpectedLiquidity] = useState<bigint>(0n)
+  const [positionInRange, setPositionInRange] = useState<boolean>(false)
+
   const loadTokenInfo = async (tokenAddress: string, setInfo: Function, setBalance: Function) => {
     if (!provider || !address || !tokenAddress) return
 
@@ -87,6 +118,44 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
       setBalance(formatUnits(balance, info.decimals))
     } catch (err) {
       console.error('Error loading token info:', err)
+    }
+  }
+
+  // Fetch current pool state
+  const fetchPoolState = async () => {
+    if (!provider || !token0 || !token1 || !fee) return
+
+    try {
+      setPoolLoading(true)
+      const poolManager = new Contract(POOL_MANAGER_ADDRESS, POOL_MANAGER_ABI, provider)
+
+      // Calculate pool ID (keccak256 of token0, token1, fee)
+      const { keccak256, solidityPacked } = await import('ethers')
+      const poolId = keccak256(
+        solidityPacked(
+          ['address', 'address', 'uint24'],
+          [token0, token1, parseInt(fee)]
+        )
+      )
+
+      const slot0 = await poolManager.getSlot0(poolId)
+      const sqrtPrice = slot0[0]
+      const tick = Number(slot0[1])
+
+      setSqrtPriceX96(sqrtPrice)
+      setCurrentTick(tick)
+
+      // Calculate price from tick
+      const decimals0 = token0Info?.decimals || 18
+      const decimals1 = token1Info?.decimals || 6
+      const price = tickToPrice(tick, decimals0, decimals1)
+      setCurrentPrice(price)
+
+      console.log('Pool state:', { tick, price, sqrtPrice: sqrtPrice.toString() })
+    } catch (err) {
+      console.error('Error fetching pool state:', err)
+    } finally {
+      setPoolLoading(false)
     }
   }
 
@@ -104,12 +173,122 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
     }
   }
 
+  // Handle price input changes (convert to ticks)
+  const handleMinPriceChange = (price: string) => {
+    setMinPrice(price)
+    if (!price || isNaN(parseFloat(price))) return
+
+    const decimals0 = token0Info?.decimals || 18
+    const decimals1 = token1Info?.decimals || 6
+    const tick = priceToTick(parseFloat(price), decimals0, decimals1)
+    const tickSpacing = getTickSpacing(fee)
+    const roundedTick = roundToTickSpacing(tick, tickSpacing)
+    setTickLower(roundedTick.toString())
+  }
+
+  const handleMaxPriceChange = (price: string) => {
+    setMaxPrice(price)
+    if (!price || isNaN(parseFloat(price))) return
+
+    const decimals0 = token0Info?.decimals || 18
+    const decimals1 = token1Info?.decimals || 6
+    const tick = priceToTick(parseFloat(price), decimals0, decimals1)
+    const tickSpacing = getTickSpacing(fee)
+    const roundedTick = roundToTickSpacing(tick, tickSpacing)
+    setTickUpper(roundedTick.toString())
+  }
+
+  // Auto-calculate amount1 when amount0 changes
+  const handleAmount0Change = (value: string) => {
+    setAmount0(value)
+    if (!value || !currentTick || !tickLower || !tickUpper) return
+
+    try {
+      const decimals0 = token0Info?.decimals || 18
+      const decimals1 = token1Info?.decimals || 6
+      const amount0Wei = parseUnits(value, decimals0)
+
+      const sqrtPriceLowerX96 = tickToSqrtPriceX96(parseInt(tickLower))
+      const sqrtPriceUpperX96 = tickToSqrtPriceX96(parseInt(tickUpper))
+
+      // Calculate liquidity from amount0
+      const liquidity = getLiquidityForAmounts(
+        sqrtPriceX96,
+        sqrtPriceLowerX96,
+        sqrtPriceUpperX96,
+        amount0Wei,
+        0n
+      )
+
+      setExpectedLiquidity(liquidity)
+
+      // Calculate required amount1
+      const amounts = calculateTokenAmountsForLiquidity(
+        liquidity,
+        sqrtPriceX96,
+        sqrtPriceLowerX96,
+        sqrtPriceUpperX96
+      )
+
+      setAmount1(formatUnits(amounts.amount1, decimals1))
+    } catch (err) {
+      console.error('Error calculating amounts:', err)
+    }
+  }
+
+  // Auto-calculate amount0 when amount1 changes
+  const handleAmount1Change = (value: string) => {
+    setAmount1(value)
+    if (!value || !currentTick || !tickLower || !tickUpper) return
+
+    try {
+      const decimals0 = token0Info?.decimals || 18
+      const decimals1 = token1Info?.decimals || 6
+      const amount1Wei = parseUnits(value, decimals1)
+
+      const sqrtPriceLowerX96 = tickToSqrtPriceX96(parseInt(tickLower))
+      const sqrtPriceUpperX96 = tickToSqrtPriceX96(parseInt(tickUpper))
+
+      // Calculate liquidity from amount1
+      const liquidity = getLiquidityForAmounts(
+        sqrtPriceX96,
+        sqrtPriceLowerX96,
+        sqrtPriceUpperX96,
+        0n,
+        amount1Wei
+      )
+
+      setExpectedLiquidity(liquidity)
+
+      // Calculate required amount0
+      const amounts = calculateTokenAmountsForLiquidity(
+        liquidity,
+        sqrtPriceX96,
+        sqrtPriceLowerX96,
+        sqrtPriceUpperX96
+      )
+
+      setAmount0(formatUnits(amounts.amount0, decimals0))
+    } catch (err) {
+      console.error('Error calculating amounts:', err)
+    }
+  }
+
   const handleRangePreset = (index: number) => {
     setSelectedRangePreset(index)
     const preset = PRICE_RANGE_PRESETS[index]
     if (preset.tickLower && preset.tickUpper) {
       setTickLower(preset.tickLower)
       setTickUpper(preset.tickUpper)
+
+      // Update price inputs
+      const decimals0 = token0Info?.decimals || 18
+      const decimals1 = token1Info?.decimals || 6
+      setMinPrice(tickToPrice(parseInt(preset.tickLower), decimals0, decimals1).toFixed(2))
+      setMaxPrice(tickToPrice(parseInt(preset.tickUpper), decimals0, decimals1).toFixed(2))
+    } else {
+      setMinPrice('')
+      setMaxPrice('')
     }
   }
 
@@ -121,6 +300,21 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
       loadTokenInfo(pair.token1, setToken1Info, setBalance1)
     }
   }, [provider, address, selectedPair])
+
+  // Fetch pool state when tokens or fee changes
+  useEffect(() => {
+    if (provider && token0 && token1 && fee && token0Info && token1Info) {
+      fetchPoolState()
+    }
+  }, [provider, token0, token1, fee, token0Info, token1Info])
+
+  // Update in-range indicator when ticks change
+  useEffect(() => {
+    if (currentTick && tickLower && tickUpper) {
+      const inRange = isInRange(currentTick, parseInt(tickLower), parseInt(tickUpper))
+      setPositionInRange(inRange)
+    }
+  }, [currentTick, tickLower, tickUpper])
 
   const handleAddLiquidity = async () => {
     if (!provider || !address) {
@@ -228,6 +422,36 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
       )}
 
       <div className="create-position-content">
+        {/* Pool Information Card */}
+        {currentPrice > 0 && (
+          <div className="glass-card" style={{ padding: '1.5rem', background: 'rgba(139, 92, 246, 0.05)', borderColor: 'var(--accent-primary)' }}>
+            <div className="section-header" style={{ marginBottom: '1rem' }}>
+              <h3 style={{ fontSize: '1.1rem' }}>📊 Current Pool State</h3>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+              <div>
+                <div className="text-secondary" style={{ fontSize: '0.75rem', marginBottom: '0.25rem' }}>Current Price</div>
+                <div className="font-mono" style={{ fontSize: '1.1rem' }}>
+                  1 {token0Info?.symbol} = {formatPrice(currentPrice)} {token1Info?.symbol}
+                </div>
+              </div>
+              <div>
+                <div className="text-secondary" style={{ fontSize: '0.75rem', marginBottom: '0.25rem' }}>Current Tick</div>
+                <div className="font-mono" style={{ fontSize: '1.1rem' }}>{currentTick.toLocaleString()}</div>
+              </div>
+              <div>
+                <div className="text-secondary" style={{ fontSize: '0.75rem', marginBottom: '0.25rem' }}>Tick Spacing</div>
+                <div className="font-mono" style={{ fontSize: '1.1rem' }}>{getTickSpacing(fee)}</div>
+              </div>
+            </div>
+          </div>
+        )}
+        {poolLoading && (
+          <div className="glass-card" style={{ padding: '1.5rem', textAlign: 'center' }}>
+            <div className="text-secondary">⏳ Loading pool state...</div>
+          </div>
+        )}
+
         {/* Token Pair Selection - Glass Card */}
         <div className="glass-card" style={{ padding: '2rem' }}>
           <div className="section-header" style={{ marginBottom: '1.5rem' }}>
@@ -287,17 +511,17 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
           </div>
           <div className="amount-inputs">
             {[
-              { 
-                token: token0Info, 
-                amount: amount0, 
-                setAmount: setAmount0, 
+              {
+                token: token0Info,
+                amount: amount0,
+                setAmount: handleAmount0Change,
                 balance: balance0,
                 idx: 0
               },
-              { 
-                token: token1Info, 
-                amount: amount1, 
-                setAmount: setAmount1, 
+              {
+                token: token1Info,
+                amount: amount1,
+                setAmount: handleAmount1Change,
                 balance: balance1,
                 idx: 1
               }
@@ -339,6 +563,11 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
                 )}
               </div>
             ))}
+            {currentPrice > 0 && (
+              <div style={{ textAlign: 'center', marginTop: '0.5rem', fontSize: '0.85rem', opacity: 0.7 }}>
+                ↕️ Amounts auto-calculated based on price range
+              </div>
+            )}
           </div>
         </div>
 
@@ -376,6 +605,25 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
             <div className="section-header" style={{ marginBottom: '1rem' }}>
               <h3 style={{ fontSize: '1.1rem' }}>Price Range</h3>
             </div>
+
+            {/* In-Range Indicator */}
+            {currentPrice > 0 && tickLower && tickUpper && (
+              <div style={{
+                marginBottom: '1rem',
+                padding: '0.75rem',
+                borderRadius: '0.5rem',
+                background: positionInRange ? 'rgba(16, 185, 129, 0.1)' : 'rgba(245, 158, 11, 0.1)',
+                border: `1px solid ${positionInRange ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
+                  <span>{positionInRange ? '✅' : '⚠️'}</span>
+                  <span style={{ fontWeight: '500' }}>
+                    {positionInRange ? 'In Range - Earning fees now' : 'Out of Range - No fees until price moves'}
+                  </span>
+                </div>
+              </div>
+            )}
+
             <div className="range-presets" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
               {PRICE_RANGE_PRESETS.map((preset, index) => (
                 <button
@@ -384,8 +632,8 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
                   onClick={() => handleRangePreset(index)}
                   disabled={loading}
                   className={`range-preset ${selectedRangePreset === index ? 'active' : ''}`}
-                  style={{ 
-                    padding: '0.75rem', 
+                  style={{
+                    padding: '0.75rem',
                     textAlign: 'left',
                     background: selectedRangePreset === index ? 'rgba(139, 92, 246, 0.1)' : 'rgba(255,255,255,0.03)',
                     border: selectedRangePreset === index ? '1px solid var(--accent-primary)' : '1px solid transparent'
@@ -398,29 +646,71 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
                 </button>
               ))}
             </div>
-            
+
+            {/* Price Inputs (Human-Readable) */}
+            <div style={{ marginTop: '1rem' }}>
+              <div className="text-secondary" style={{ fontSize: '0.75rem', marginBottom: '0.5rem' }}>💰 Price Range (1 {token0Info?.symbol})</div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <div style={{ flex: 1 }}>
+                  <label className="text-secondary" style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.25rem' }}>Min Price</label>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="e.g., 1800"
+                    value={minPrice}
+                    onChange={(e) => { handleMinPriceChange(e.target.value); setSelectedRangePreset(3); }}
+                    className="range-input font-mono"
+                    style={{ fontSize: '0.9rem', padding: '0.5rem', width: '100%' }}
+                    disabled={loading}
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label className="text-secondary" style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.25rem' }}>Max Price</label>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="e.g., 2200"
+                    value={maxPrice}
+                    onChange={(e) => { handleMaxPriceChange(e.target.value); setSelectedRangePreset(3); }}
+                    className="range-input font-mono"
+                    style={{ fontSize: '0.9rem', padding: '0.5rem', width: '100%' }}
+                    disabled={loading}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Tick Inputs (Auto-calculated) */}
             <div className="range-inputs" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
                <div style={{ flex: 1 }}>
-                  <label className="text-secondary" style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.25rem' }}>Min Tick</label>
+                  <label className="text-secondary" style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.25rem' }}>Min Tick (rounded)</label>
                   <input
                     type="number"
                     value={tickLower}
                     onChange={(e) => { setTickLower(e.target.value); setSelectedRangePreset(3); }}
                     className="range-input font-mono"
-                    style={{ fontSize: '0.9rem', padding: '0.5rem' }}
+                    style={{ fontSize: '0.85rem', padding: '0.5rem', opacity: 0.7 }}
                   />
                </div>
                <div style={{ flex: 1 }}>
-                  <label className="text-secondary" style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.25rem' }}>Max Tick</label>
+                  <label className="text-secondary" style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.25rem' }}>Max Tick (rounded)</label>
                   <input
                     type="number"
                     value={tickUpper}
                     onChange={(e) => { setTickUpper(e.target.value); setSelectedRangePreset(3); }}
                     className="range-input font-mono"
-                    style={{ fontSize: '0.9rem', padding: '0.5rem' }}
+                    style={{ fontSize: '0.85rem', padding: '0.5rem', opacity: 0.7 }}
                   />
                </div>
             </div>
+
+            {/* Liquidity Preview */}
+            {expectedLiquidity > 0n && (
+              <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'rgba(255,255,255,0.03)', borderRadius: '0.5rem' }}>
+                <div className="text-secondary" style={{ fontSize: '0.75rem', marginBottom: '0.25rem' }}>Expected Liquidity</div>
+                <div className="font-mono" style={{ fontSize: '1rem' }}>{expectedLiquidity.toString()}</div>
+              </div>
+            )}
           </div>
         </div>
 
