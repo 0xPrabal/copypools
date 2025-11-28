@@ -406,10 +406,31 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
 
   const handleMax = (tokenIndex: 0 | 1) => {
     if (tokenIndex === 0 && balance0) {
-      setAmount0(balance0)
+      handleAmount0Change(balance0)
     } else if (tokenIndex === 1 && balance1) {
-      setAmount1(balance1)
+      handleAmount1Change(balance1)
     }
+  }
+
+  // Calculate position percentage for visual slider
+  const getCurrentPricePosition = (): number => {
+    if (!currentPrice || !minPrice || !maxPrice) return 50
+
+    const min = parseFloat(minPrice) || 0
+    const max = parseFloat(maxPrice) || 0
+    const current = currentPrice
+
+    if (min >= max) return 50
+    if (current <= min) return 0
+    if (current >= max) return 100
+
+    // Calculate logarithmic position for better visual representation
+    const logMin = Math.log(min)
+    const logMax = Math.log(max)
+    const logCurrent = Math.log(current)
+
+    const position = ((logCurrent - logMin) / (logMax - logMin)) * 100
+    return Math.max(0, Math.min(100, position))
   }
 
   return (
@@ -635,47 +656,209 @@ export const AddLiquidity = (props: AddLiquidityProps = {}) => {
                   style={{
                     padding: '0.75rem',
                     textAlign: 'left',
-                    background: selectedRangePreset === index ? 'rgba(139, 92, 246, 0.1)' : 'rgba(255,255,255,0.03)',
-                    border: selectedRangePreset === index ? '1px solid var(--accent-primary)' : '1px solid transparent'
+                    background: selectedRangePreset === index ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)',
+                    border: selectedRangePreset === index ? '2px solid rgba(16, 185, 129, 0.5)' : '1px solid rgba(255,255,255,0.1)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    position: 'relative'
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span>{preset.icon}</span>
-                    <span className="preset-label" style={{ fontSize: '0.9rem' }}>{preset.label}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <span>{preset.icon}</span>
+                      <span className="preset-label" style={{ fontSize: '0.9rem', fontWeight: selectedRangePreset === index ? '600' : '400' }}>
+                        {preset.label}
+                      </span>
+                    </div>
+                    {selectedRangePreset === index && (
+                      <span style={{ color: 'rgba(16, 185, 129, 1)', fontSize: '1rem' }}>✓</span>
+                    )}
                   </div>
                 </button>
               ))}
             </div>
 
+            {/* Visual Price Range Slider */}
+            {currentPrice > 0 && minPrice && maxPrice && (
+              <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '0.5rem' }}>
+                <div className="text-secondary" style={{ fontSize: '0.75rem', marginBottom: '0.75rem' }}>
+                  Current price: {formatPrice(currentPrice, 6)} {token0Info?.symbol} per {token1Info?.symbol}
+                </div>
+                <div style={{ position: 'relative', height: '50px', display: 'flex', alignItems: 'center', paddingTop: '10px' }}>
+                  {/* Range line */}
+                  <div style={{
+                    position: 'absolute',
+                    left: '60px',
+                    right: '60px',
+                    height: '4px',
+                    background: positionInRange
+                      ? 'linear-gradient(90deg, rgba(16, 185, 129, 0.3) 0%, rgba(16, 185, 129, 0.8) 50%, rgba(16, 185, 129, 0.3) 100%)'
+                      : 'linear-gradient(90deg, rgba(245, 158, 11, 0.3) 0%, rgba(245, 158, 11, 0.8) 50%, rgba(245, 158, 11, 0.3) 100%)',
+                    borderRadius: '2px'
+                  }} />
+
+                  {/* MIN label */}
+                  <div style={{ position: 'absolute', left: '0', textAlign: 'center' }}>
+                    <div style={{
+                      background: 'rgba(16, 185, 129, 0.2)',
+                      border: '2px solid rgba(16, 185, 129, 0.5)',
+                      borderRadius: '6px',
+                      padding: '4px 8px',
+                      fontSize: '0.7rem',
+                      fontWeight: '600',
+                      color: 'rgba(16, 185, 129, 1)'
+                    }}>MIN</div>
+                  </div>
+
+                  {/* Current price indicator - dynamically positioned */}
+                  <div style={{
+                    position: 'absolute',
+                    left: `calc(60px + (100% - 120px) * ${getCurrentPricePosition() / 100})`,
+                    transform: 'translateX(-50%)',
+                    textAlign: 'center',
+                    zIndex: 10
+                  }}>
+                    <div style={{
+                      background: positionInRange ? 'rgba(16, 185, 129, 1)' : 'rgba(245, 158, 11, 1)',
+                      width: '14px',
+                      height: '14px',
+                      borderRadius: '50%',
+                      margin: '0 auto 4px',
+                      boxShadow: positionInRange
+                        ? '0 0 12px rgba(16, 185, 129, 0.8)'
+                        : '0 0 12px rgba(245, 158, 11, 0.8)',
+                      border: '2px solid white'
+                    }} />
+                    <div style={{
+                      fontSize: '0.65rem',
+                      fontWeight: '600',
+                      color: positionInRange ? 'rgba(16, 185, 129, 1)' : 'rgba(245, 158, 11, 1)',
+                      whiteSpace: 'nowrap'
+                    }}>Current</div>
+                  </div>
+
+                  {/* MAX label */}
+                  <div style={{ position: 'absolute', right: '0', textAlign: 'center' }}>
+                    <div style={{
+                      background: 'rgba(16, 185, 129, 0.2)',
+                      border: '2px solid rgba(16, 185, 129, 0.5)',
+                      borderRadius: '6px',
+                      padding: '4px 8px',
+                      fontSize: '0.7rem',
+                      fontWeight: '600',
+                      color: 'rgba(16, 185, 129, 1)'
+                    }}>MAX</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Price Inputs (Human-Readable) */}
             <div style={{ marginTop: '1rem' }}>
-              <div className="text-secondary" style={{ fontSize: '0.75rem', marginBottom: '0.5rem' }}>💰 Price Range (1 {token0Info?.symbol})</div>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <div className="text-secondary" style={{ fontSize: '0.75rem' }}>💰 Set Price Range</div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMinPrice('')
+                    setMaxPrice('')
+                    setTickLower('-887220')
+                    setTickUpper('887220')
+                    setSelectedRangePreset(0)
+                  }}
+                  className="text-secondary"
+                  style={{
+                    fontSize: '0.7rem',
+                    padding: '0.25rem 0.5rem',
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: '4px',
+                    cursor: 'pointer'
+                  }}
+                  disabled={loading}
+                >
+                  Reset
+                </button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: '0.5rem', alignItems: 'end' }}>
                 <div style={{ flex: 1 }}>
-                  <label className="text-secondary" style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.25rem' }}>Min Price</label>
-                  <input
-                    type="number"
-                    step="any"
-                    placeholder="e.g., 1800"
-                    value={minPrice}
-                    onChange={(e) => { handleMinPriceChange(e.target.value); setSelectedRangePreset(3); }}
-                    className="range-input font-mono"
-                    style={{ fontSize: '0.9rem', padding: '0.5rem', width: '100%' }}
-                    disabled={loading}
-                  />
+                  <label className="text-secondary" style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.25rem' }}>
+                    Min Price
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder="0.00"
+                      value={minPrice}
+                      onChange={(e) => { handleMinPriceChange(e.target.value); setSelectedRangePreset(3); }}
+                      className="range-input font-mono"
+                      style={{ fontSize: '0.9rem', padding: '0.5rem', width: '100%', paddingRight: '2rem' }}
+                      disabled={loading}
+                    />
+                    <button
+                      type="button"
+                      className="text-secondary"
+                      style={{
+                        position: 'absolute',
+                        right: '0.5rem',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        fontSize: '0.7rem',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '0.25rem'
+                      }}
+                      title="Set as percentage"
+                    >
+                      %
+                    </button>
+                  </div>
+                  <div className="text-secondary font-mono" style={{ fontSize: '0.65rem', marginTop: '0.25rem' }}>
+                    {token0Info?.symbol} per {token1Info?.symbol}
+                  </div>
                 </div>
+
+                <div style={{ paddingBottom: '1.5rem', fontSize: '1rem', opacity: 0.5 }}>↔</div>
+
                 <div style={{ flex: 1 }}>
-                  <label className="text-secondary" style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.25rem' }}>Max Price</label>
-                  <input
-                    type="number"
-                    step="any"
-                    placeholder="e.g., 2200"
-                    value={maxPrice}
-                    onChange={(e) => { handleMaxPriceChange(e.target.value); setSelectedRangePreset(3); }}
-                    className="range-input font-mono"
-                    style={{ fontSize: '0.9rem', padding: '0.5rem', width: '100%' }}
-                    disabled={loading}
-                  />
+                  <label className="text-secondary" style={{ fontSize: '0.7rem', display: 'block', marginBottom: '0.25rem' }}>
+                    Max Price
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder="0.00"
+                      value={maxPrice}
+                      onChange={(e) => { handleMaxPriceChange(e.target.value); setSelectedRangePreset(3); }}
+                      className="range-input font-mono"
+                      style={{ fontSize: '0.9rem', padding: '0.5rem', width: '100%', paddingRight: '2rem' }}
+                      disabled={loading}
+                    />
+                    <button
+                      type="button"
+                      className="text-secondary"
+                      style={{
+                        position: 'absolute',
+                        right: '0.5rem',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        fontSize: '0.7rem',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '0.25rem'
+                      }}
+                      title="Set as percentage"
+                    >
+                      %
+                    </button>
+                  </div>
+                  <div className="text-secondary font-mono" style={{ fontSize: '0.65rem', marginTop: '0.25rem' }}>
+                    {token0Info?.symbol} per {token1Info?.symbol}
+                  </div>
                 </div>
               </div>
             </div>
