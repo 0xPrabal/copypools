@@ -5,7 +5,6 @@ const nextConfig = {
 
   // Optimize production builds
   reactStrictMode: true,
-  swcMinify: true,
 
   // Production optimizations
   compress: true,
@@ -21,6 +20,38 @@ const nextConfig = {
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000',
     NEXT_PUBLIC_BACKEND_URL: process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3000',
+  },
+
+  // Experimental features to handle problematic dependencies
+  experimental: {
+    serverComponentsExternalPackages: [
+      '@reown/appkit',
+      '@privy-io/react-auth',
+      'pino',
+      'thread-stream',
+    ],
+  },
+
+  // Webpack configuration to exclude test files and resolve issues
+  webpack: (config, { isServer }) => {
+    // Ignore test directories completely
+    config.resolve = config.resolve || {}
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      // Prevent bundling of test files
+      'why-is-node-running': false,
+    }
+
+    // Exclude test files from being processed
+    config.externals = config.externals || []
+    if (isServer) {
+      config.externals.push(
+        'why-is-node-running',
+        'tap'
+      )
+    }
+
+    return config
   },
 
   // Headers for security
