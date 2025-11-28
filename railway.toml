@@ -1,9 +1,0 @@
-[build]
-builder = "dockerfile"
-dockerfilePath = "copypools-nextjs/Dockerfile"
-dockerContext = "copypools-nextjs"
-
-[deploy]
-startCommand = "node server.js"
-restartPolicyType = "on-failure"
-restartPolicyMaxRetries = 10
