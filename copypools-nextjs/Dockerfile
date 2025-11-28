@@ -32,6 +32,9 @@ COPY . .
 # Build Next.js application
 RUN npm run build
 
+# Ensure public directory exists with at least a placeholder
+RUN mkdir -p public && touch public/.gitkeep
+
 # Production stage
 FROM node:20-alpine AS production
 
@@ -45,9 +48,15 @@ RUN addgroup -g 1001 -S nodejs && \
     adduser -S nextjs -u 1001
 
 # Copy built application
-COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+# Copy standalone build first
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+
+# Copy static files
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+# Copy public directory (standalone build already includes it, but copy original if needed)
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+
 COPY --from=builder --chown=nextjs:nodejs /app/package*.json ./
 
 # Switch to non-root user
