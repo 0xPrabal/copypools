@@ -24,17 +24,39 @@ async function bootstrap() {
   app.use(compression());
 
   // Enable CORS for frontend
-  const corsOrigins = process.env.CORS_ORIGIN?.split(',') || [
+  const defaultOrigins = [
     'http://localhost:3001',
     'http://localhost:5173',
     'http://localhost:5174',
     'https://copypools-frontend-production.up.railway.app'
   ];
 
+  const customOrigins = process.env.CORS_ORIGIN?.split(',').filter(o => o.trim()) || [];
+  const corsOrigins = [...new Set([...defaultOrigins, ...customOrigins])];
+
   app.enableCors({
-    origin: process.env.NODE_ENV === 'production'
-      ? corsOrigins
-      : true,
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, Postman, etc.)
+      if (!origin) return callback(null, true);
+
+      // Allow localhost origins in any environment
+      if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+        return callback(null, true);
+      }
+
+      // Check against allowed origins list
+      if (corsOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      // Reject other origins in production
+      if (process.env.NODE_ENV === 'production') {
+        return callback(new Error('Not allowed by CORS'), false);
+      }
+
+      // Allow all in development
+      return callback(null, true);
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
