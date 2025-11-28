@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
-import { useWallet } from '@/lib/hooks/useWallet'
+import { useWallet } from '@/lib/hooks'
 import { apiService } from '@/lib/services/api'
 import { Position } from '@/lib/types'
 

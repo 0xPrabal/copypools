@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { ContractService } from '@/lib/services/contracts'
-import { useWallet } from '@/lib/hooks/useWallet'
+import { useWallet } from '@/lib/hooks'
 import { parseUnits, formatUnits } from 'ethers'
 import { apiService } from '@/lib/services/api'
 

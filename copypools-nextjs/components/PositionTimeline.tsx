@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { apiService } from '@/lib/services/api'
 import { TimelineEvent } from '@/lib/types'
 import { EXPLORER_URLS } from '@/lib/config/constants'
-import { useWallet } from '@/lib/hooks/useWallet'
+import { useWallet } from '@/lib/hooks'
 
 interface PositionTimelineProps {
   positionId: string

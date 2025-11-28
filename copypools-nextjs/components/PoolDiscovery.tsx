@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { formatUnits } from 'ethers'
 
 import { AddLiquidity } from '@/components/AddLiquidity'
-import { useWallet } from '@/lib/hooks/useWallet'
+import { useWallet } from '@/lib/hooks'
 import { apiService } from '@/lib/services/api'
 import { TokenInfoService, TokenInfo } from '@/lib/services/tokenInfo'
 import { Position } from '@/lib/types'
