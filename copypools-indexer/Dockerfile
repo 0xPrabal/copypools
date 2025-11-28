@@ -28,6 +28,10 @@ RUN addgroup -g 1001 -S nodejs && \
 # Copy application
 COPY --from=builder --chown=ponder:nodejs /app ./
 
+# Create directories Ponder needs to write to at runtime
+RUN mkdir -p /app/generated /app/.ponder && \
+    chown -R ponder:nodejs /app
+
 # Switch to non-root user
 USER ponder
 
