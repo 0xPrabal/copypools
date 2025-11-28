@@ -23,6 +23,7 @@ const nextConfig = {
   },
 
   // Server external packages (moved from experimental in Next.js 16)
+  // These packages will not be bundled by Turbopack/Webpack
   serverExternalPackages: [
     '@reown/appkit',
     '@reown/appkit-core',
@@ -34,36 +35,11 @@ const nextConfig = {
     'thread-stream',
     '@walletconnect/ethereum-provider',
     '@walletconnect/universal-provider',
+    '@walletconnect/logger',
   ],
 
-  // Turbopack configuration (Next.js 16 default)
-  turbopack: {
-    resolveAlias: {
-      // Prevent bundling test dependencies
-      'why-is-node-running': false,
-      'tap': false,
-    },
-  },
-
-  // Webpack configuration (fallback for when --webpack flag is used)
-  webpack: (config, { isServer }) => {
-    config.resolve = config.resolve || {}
-    config.resolve.alias = {
-      ...config.resolve.alias,
-      'why-is-node-running': false,
-      'tap': false,
-    }
-
-    config.externals = config.externals || []
-    if (isServer) {
-      config.externals.push(
-        'why-is-node-running',
-        'tap'
-      )
-    }
-
-    return config
-  },
+  // Turbopack configuration (silence the config warning)
+  turbopack: {},
 
   // Headers for security
   async headers() {
