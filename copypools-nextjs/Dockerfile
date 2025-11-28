@@ -59,15 +59,15 @@ COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 COPY --from=builder --chown=nextjs:nodejs /app/package*.json ./
 
+# Set default port (Railway will override with $PORT)
+ENV PORT=3001
+ENV HOSTNAME="0.0.0.0"
+
 # Switch to non-root user
 USER nextjs
 
-# Expose port
+# Expose port (Railway uses dynamic PORT)
 EXPOSE 3001
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3001/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})" || exit 0
 
 # Use dumb-init to handle signals properly
 ENTRYPOINT ["dumb-init", "--"]
