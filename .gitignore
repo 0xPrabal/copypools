@@ -1,64 +1,65 @@
-node_modules
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+
+# Foundry
+packages/contracts/out/
+packages/contracts/cache/
+packages/contracts/broadcast/
+
+# Ponder
+packages/ponder/.ponder/
+packages/ponder/generated/
+
+# Environment files
 .env
-coverage
-coverage.json
-typechain
-typechain-types
-
-# Hardhat files
-cache
-artifacts
-
-# TypeScript
-dist
-*.tsbuildinfo
+.env.local
+.env.*.local
+!.env.example
 
 # IDE
-.idea
-.vscode
+.idea/
+.vscode/
 *.swp
 *.swo
 
-# macOS
+# OS
 .DS_Store
+Thumbs.db
 
-# Build files
-build/
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Documentation files (exclude .md in root, but allow docs/ and backend/)
+# Testing
+coverage/
+.nyc_output/
+
+# Misc
+*.tsbuildinfo
+.vercel
+
+# Old directories (migrated to packages/)
+contracts/
+copypools-backend/
+copypools-indexer/
+copypools-nextjs/
+nginx/
+.openzeppelin/
+
+# Old config files (replaced by monorepo setup)
+hardhat.config.ts
+tsconfig.json
+
+# Documentation (auto-generated)
 *.md
 !README.md
-!docs/**/*.md
-!copypools-backend/**/*.md
-
-# Script files (but not backend scripts)
-scripts/
-!copypools-backend/
-
-# Backend specific
-copypools-backend/node_modules
-copypools-backend/.env
-copypools-backend/dist
-copypools-backend/.ponder
-copypools-backend/prisma/migrations
-*.typeorm.bak
-
-# Next.js
-copypools-nextjs/.next/
-copypools-nextjs/out/
-copypools-nextjs/.swc/
-copypools-nextjs/node_modules
-
-# Next.js build output
-.next/
-out/
-.swc/
-
-# Next.js cache
-.next/cache/
-.next/server/
-.next/static/
-.next/dev/
-
-# Vercel
-.vercel
