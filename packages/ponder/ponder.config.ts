@@ -1,4 +1,5 @@
 import { createConfig } from "ponder";
+import { http, fallback } from "viem";
 import { V4UtilsAbi } from "./abis/V4Utils";
 import { V4CompoundorAbi } from "./abis/V4Compoundor";
 import { V4AutoRangeAbi } from "./abis/V4AutoRange";
@@ -15,9 +16,22 @@ const V4_AUTO_RANGE_ADDRESS = process.env.V4_AUTO_RANGE_ADDRESS || "0xa367181132
 // Start block - set to contract deployment block for faster sync (Base Mainnet deployment: 39369847)
 const START_BLOCK = 39369847;
 
-// RPC URLs - primary from env, with fallbacks
-const BASE_RPC = process.env.PONDER_RPC_URL_8453
-  || "https://base-mainnet.g.alchemy.com/v2/lm1wPdaZN0GlApycTDPKg";
+// Base Mainnet RPC URLs with fallbacks (public RPCs)
+const BASE_RPCS = [
+  process.env.PONDER_RPC_URL_8453,           // Primary from env (e.g., Alchemy)
+  "https://mainnet.base.org",                 // Base Official
+  "https://base.drpc.org",                    // dRPC
+  "https://base-rpc.publicnode.com",          // PublicNode
+  "https://base.meowrpc.com",                 // MeowRPC
+  "https://1rpc.io/base",                     // 1RPC
+  "https://base.llamarpc.com",                // LlamaRPC
+].filter(Boolean) as string[];
+
+// Create fallback transport for Base
+const baseTransport = fallback(
+  BASE_RPCS.map((url) => http(url, { timeout: 30_000, retryCount: 2 })),
+  { rank: true }
+);
 
 export default createConfig({
   database: {
@@ -27,9 +41,9 @@ export default createConfig({
   chains: {
     base: {
       id: 8453,
-      rpc: BASE_RPC,
+      transport: baseTransport,
       pollingInterval: 15_000, // Poll every 15s
-      maxRequestsPerSecond: 10, // Higher rate limit for Alchemy
+      maxRequestsPerSecond: 25, // Higher rate limit with fallbacks
     },
   },
   contracts: {

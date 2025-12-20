@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, http, parseAbi, Address, Hex, Chain, encodeAbiParameters, keccak256 } from 'viem';
+import { createPublicClient, createWalletClient, http, fallback, parseAbi, Address, Hex, Chain, encodeAbiParameters, keccak256 } from 'viem';
 import { mainnet, arbitrum, base, optimism, polygon, sepolia } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 import { config, contracts } from '../config/index.js';
@@ -7,6 +7,7 @@ import { memoryCache, CACHE_KEYS, CACHE_TTL } from './cache.js';
 import { V4CompoundorAbi } from '../abis/V4Compoundor.js';
 import { V4AutoRangeAbi } from '../abis/V4AutoRange.js';
 import { V4UtilsAbi } from '../abis/V4Utils.js';
+import { getValidRpcs } from '../config/rpc.js';
 
 // Chain mapping
 const chains: Record<number, Chain> = {
@@ -20,10 +21,30 @@ const chains: Record<number, Chain> = {
 
 const chain = chains[config.CHAIN_ID] || sepolia;
 
-// Clients
+// Create fallback transport with multiple RPCs
+function createFallbackTransport() {
+  const rpcs = getValidRpcs(config.CHAIN_ID);
+
+  if (rpcs.length === 0) {
+    logger.warn('No valid RPCs found, using default from config');
+    return http(config.RPC_URL);
+  }
+
+  logger.info({ chainId: config.CHAIN_ID, rpcCount: rpcs.length }, 'Creating fallback transport with RPCs');
+  rpcs.forEach((rpc, i) => logger.debug({ index: i, name: rpc.name }, 'RPC endpoint'));
+
+  return fallback(
+    rpcs.map((rpc) => http(rpc.url, { timeout: 10_000 })),
+    { rank: true, retryCount: 2 }
+  );
+}
+
+const transport = createFallbackTransport();
+
+// Clients with fallback RPCs
 export const publicClient = createPublicClient({
   chain,
-  transport: http(config.RPC_URL),
+  transport,
 });
 
 // Safely create wallet client - only if valid private key is provided
@@ -48,7 +69,7 @@ function createWalletClientSafe() {
     return createWalletClient({
       account: privateKeyToAccount(cleanPk as Hex),
       chain,
-      transport: http(config.RPC_URL),
+      transport, // Use same fallback transport
     });
   } catch (err) {
     console.error('Failed to create wallet client:', err);
