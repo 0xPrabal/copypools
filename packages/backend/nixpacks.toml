@@ -1,10 +1,12 @@
 [phases.setup]
-cmds = ["npm install -g yarn"]
+nixPkgs = ["nodejs_20", "yarn"]
 
 [phases.install]
-cmds = ["yarn install --ignore-engines --no-frozen-lockfile"]
+dependsOn = ["setup"]
+cmds = ["yarn install --ignore-engines"]
 
 [phases.build]
+dependsOn = ["install"]
 cmds = ["yarn build"]
 
 [start]
@@ -12,3 +14,4 @@ cmd = "yarn start"
 
 [variables]
 NIXPACKS_NODE_VERSION = "20.18.0"
+CI = "false"
