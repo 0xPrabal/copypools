@@ -2,7 +2,7 @@
 cmds = ["npm install -g yarn"]
 
 [phases.install]
-cmds = ["yarn install --ignore-engines"]
+cmds = ["yarn install --ignore-engines --no-frozen-lockfile"]
 
 [phases.build]
 cmds = ["yarn build"]
