@@ -1,0 +1,24 @@
+FROM node:20-slim
+
+WORKDIR /app
+
+# Copy root package files for yarn workspaces
+COPY package.json yarn.lock ./
+COPY packages/backend/package.json ./packages/backend/
+
+# Install all dependencies (yarn workspaces needs root context)
+RUN yarn install --ignore-engines --frozen-lockfile
+
+# Copy backend source files
+COPY packages/backend/tsconfig.json ./packages/backend/
+COPY packages/backend/src ./packages/backend/src
+
+# Build TypeScript
+WORKDIR /app/packages/backend
+RUN yarn build
+
+# Expose port
+EXPOSE 3001
+
+# Start the server
+CMD ["yarn", "start"]
