@@ -179,7 +179,7 @@ function SmartAnalysisCard({
           <span className={`px-2 py-1 rounded text-xs border ${actionColors[action]}`}>
             {actionLabels[action]}
           </span>
-          {!analysis?.inRange && (
+          {analysis && !analysis.inRange && (
             <span className="px-2 py-1 rounded text-xs bg-red-500/20 text-red-400 border border-red-500/30">
               Out of Range
             </span>
