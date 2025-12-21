@@ -31,6 +31,7 @@ export function useV4Compoundor() {
     };
 
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_COMPOUNDOR,
       abi: V4CompoundorAbi,
       functionName: 'registerPosition',
@@ -53,6 +54,7 @@ export function useV4Compoundor() {
     };
 
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_COMPOUNDOR,
       abi: V4CompoundorAbi,
       functionName: 'updateConfig',
@@ -66,6 +68,7 @@ export function useV4Compoundor() {
    */
   const unregisterPosition = async (tokenId: bigint) => {
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_COMPOUNDOR,
       abi: V4CompoundorAbi,
       functionName: 'unregisterPosition',
@@ -79,6 +82,7 @@ export function useV4Compoundor() {
    */
   const autoCompound = async (tokenId: bigint) => {
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_COMPOUNDOR,
       abi: V4CompoundorAbi,
       functionName: 'autoCompound',
@@ -92,6 +96,7 @@ export function useV4Compoundor() {
    */
   const selfCompound = async (tokenId: bigint) => {
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_COMPOUNDOR,
       abi: V4CompoundorAbi,
       functionName: 'selfCompound',

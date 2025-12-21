@@ -2,9 +2,11 @@ import { Router, Request, Response } from 'express';
 import * as subgraph from '../../services/subgraph.js';
 import * as blockchain from '../../services/blockchain.js';
 import * as database from '../../services/database.js';
+import * as multichain from '../../services/multichain.js';
 import { logger } from '../../utils/logger.js';
 import { memoryCache } from '../../services/cache.js';
 import { config } from '../../config/index.js';
+import { isSupportedChain, getChainConfig } from '../../config/chains.js';
 import {
   analyzePosition,
   calculateVolatility,
@@ -76,7 +78,16 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
     const { address } = req.params;
     const enrich = req.query.enrich !== 'false'; // Default to true
     const noCache = req.query.noCache === 'true'; // Force fresh fetch
-    const chainId = config.CHAIN_ID;
+    const chainId = req.query.chainId ? parseInt(req.query.chainId as string, 10) : config.CHAIN_ID;
+
+    // Check if chain is supported
+    if (!isSupportedChain(chainId)) {
+      routeLogger.debug({ address, chainId }, 'Unsupported chain, returning empty');
+      return res.json([]);
+    }
+
+    // Use legacy single-chain path for primary configured chain (optimized)
+    const useLegacyPath = chainId === config.CHAIN_ID;
 
     // LAYER 1: Check memory cache (15 second TTL)
     const memoryCacheKey = `positions_${address.toLowerCase()}_${chainId}_${enrich}`;
@@ -133,10 +144,19 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
     }
 
     // LAYER 3: Fetch fresh data from chain
-    routeLogger.info({ address, enrich }, 'Fetching positions from chain');
+    routeLogger.info({ address, enrich, chainId, useLegacyPath }, 'Fetching positions from chain');
 
-    const onChainPositions = await blockchain.getPositionsByOwnerOnChain(address);
-    routeLogger.info({ address, count: onChainPositions.length }, 'Found positions on chain');
+    let onChainPositions: any[];
+
+    if (useLegacyPath) {
+      // Use optimized single-chain path for primary configured chain
+      onChainPositions = await blockchain.getPositionsByOwnerOnChain(address);
+    } else {
+      // Use multichain service for other supported chains
+      onChainPositions = await multichain.fetchPositionsForOwner(chainId, address);
+    }
+
+    routeLogger.info({ address, count: onChainPositions.length, chainId }, 'Found positions on chain');
 
     // Enrich positions with automation configs and current tick (in parallel)
     const positions = await Promise.all(
@@ -151,38 +171,40 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
           collectedFeesToken1: '0',
           compoundConfig: null,
           rangeConfig: null,
-          currentTick: 0,
-          inRange: true,
+          currentTick: position.currentTick || 0,
+          inRange: position.inRange ?? true,
         };
 
         if (!enrich) return enrichedPosition;
 
         const tokenId = BigInt(position.tokenId);
 
-        // Fetch configs in parallel
-        const [compoundConfig, rangeConfig] = await Promise.all([
-          blockchain.getCompoundConfig(tokenId).catch(() => null),
-          blockchain.getRangeConfig(tokenId).catch(() => null),
-        ]);
+        if (useLegacyPath) {
+          // Primary chain: full enrichment with automation configs
+          const [compoundConfig, rangeConfig] = await Promise.all([
+            blockchain.getCompoundConfig(tokenId).catch(() => null),
+            blockchain.getRangeConfig(tokenId).catch(() => null),
+          ]);
 
-        if (compoundConfig?.enabled) {
-          enrichedPosition.compoundConfig = compoundConfig;
-        }
-        if (rangeConfig?.enabled) {
-          enrichedPosition.rangeConfig = rangeConfig;
-        }
+          if (compoundConfig?.enabled) {
+            enrichedPosition.compoundConfig = compoundConfig;
+          }
+          if (rangeConfig?.enabled) {
+            enrichedPosition.rangeConfig = rangeConfig;
+          }
 
-        // Get current tick from StateView (more reliable than V4AutoRange contract)
-        if (position.poolKey) {
-          try {
-            const currentTick = await blockchain.getPoolCurrentTick(position.poolKey);
-            enrichedPosition.currentTick = currentTick;
-            enrichedPosition.inRange = currentTick >= position.tickLower && currentTick < position.tickUpper;
-          } catch (e) {
-            // Fallback: keep default values
-            routeLogger.warn({ tokenId: position.tokenId, error: e }, 'Failed to get current tick from StateView');
+          // Get current tick from StateView
+          if (position.poolKey) {
+            try {
+              const currentTick = await blockchain.getPoolCurrentTick(position.poolKey);
+              enrichedPosition.currentTick = currentTick;
+              enrichedPosition.inRange = currentTick >= position.tickLower && currentTick < position.tickUpper;
+            } catch (e) {
+              routeLogger.warn({ tokenId: position.tokenId, error: e }, 'Failed to get current tick from StateView');
+            }
           }
         }
+        // For non-primary chains, multichain.fetchPositionsForOwner already includes currentTick and inRange
 
         return enrichedPosition;
       })

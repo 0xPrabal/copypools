@@ -310,7 +310,7 @@ export function usePositions() {
       try {
         // PRIMARY: Use backend API (uses Alchemy NFT API - very fast!)
         console.log('Fetching positions from backend API...');
-        const backendPositions = await backendApi.getPositionsByOwner(address);
+        const backendPositions = await backendApi.getPositionsByOwner(address, true, chainId);
 
         if (backendPositions.length > 0 || !publicClient) {
           console.log('Got', backendPositions.length, 'positions from backend API');

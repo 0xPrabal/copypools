@@ -57,6 +57,7 @@ export function useTokenApproval(tokenAddress: `0x${string}` | undefined, spende
     }
 
     return writeContract({
+      chainId,
       address: tokenAddress,
       abi: ERC20Abi,
       functionName: 'approve',

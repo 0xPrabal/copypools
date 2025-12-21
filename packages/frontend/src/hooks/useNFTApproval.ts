@@ -91,6 +91,7 @@ export function useNFTApproval(operatorAddress: `0x${string}`) {
     }
 
     return writeContract({
+      chainId,
       address: CONTRACTS.POSITION_MANAGER,
       abi: ERC721_ABI,
       functionName: 'setApprovalForAll',
@@ -119,6 +120,7 @@ export function useNFTApproval(operatorAddress: `0x${string}`) {
     }
 
     return writeContract({
+      chainId,
       address: CONTRACTS.POSITION_MANAGER,
       abi: ERC721_ABI,
       functionName: 'setApprovalForAll',

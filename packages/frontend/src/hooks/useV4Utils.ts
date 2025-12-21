@@ -130,6 +130,7 @@ export function useV4Utils() {
     }
 
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'swapAndMint',
@@ -197,6 +198,7 @@ export function useV4Utils() {
     }
 
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'swapAndIncreaseLiquidity',
@@ -248,6 +250,7 @@ export function useV4Utils() {
     }
 
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'decreaseAndSwap',
@@ -294,6 +297,7 @@ export function useV4Utils() {
     }
 
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'decreaseLiquidity',
@@ -346,6 +350,7 @@ export function useV4Utils() {
     }
 
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'exitToStablecoin',
@@ -383,6 +388,7 @@ export function useV4Utils() {
     }
 
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'collectFees',
@@ -426,6 +432,7 @@ export function useV4Utils() {
     }
 
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'collectAndSwap',
@@ -477,6 +484,7 @@ export function useV4Utils() {
     }
 
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'moveRange',
@@ -510,6 +518,7 @@ export function useV4Utils() {
     }
 
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'sweepToken',

@@ -39,6 +39,7 @@ export function useV4AutoRange() {
     };
 
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_AUTO_RANGE,
       abi: V4AutoRangeAbi,
       functionName: 'configureRange',
@@ -65,6 +66,7 @@ export function useV4AutoRange() {
     };
 
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_AUTO_RANGE,
       abi: V4AutoRangeAbi,
       functionName: 'updateRangeConfig',
@@ -78,6 +80,7 @@ export function useV4AutoRange() {
    */
   const removeRange = async (tokenId: bigint) => {
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_AUTO_RANGE,
       abi: V4AutoRangeAbi,
       functionName: 'removeRange',
@@ -91,6 +94,7 @@ export function useV4AutoRange() {
    */
   const executeRebalance = async (tokenId: bigint) => {
     return writeContract({
+      chainId,
       address: CONTRACTS.V4_AUTO_RANGE,
       abi: V4AutoRangeAbi,
       functionName: 'executeRebalance',

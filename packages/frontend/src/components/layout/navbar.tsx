@@ -22,11 +22,11 @@ export function Navbar() {
 
   // Prefetch positions when wallet connects (warms up backend cache)
   useEffect(() => {
-    if (address && authenticated) {
+    if (address && authenticated && chainId) {
       // Prefetch in background - this warms up the backend cache
-      backendApi.getPositionsByOwner(address, true).catch(() => {});
+      backendApi.getPositionsByOwner(address, true, chainId).catch(() => {});
     }
-  }, [address, authenticated]);
+  }, [address, authenticated, chainId]);
 
   const currentNetwork = chainId === CHAIN_IDS.BASE ? 'Base' : chainId === CHAIN_IDS.SEPOLIA ? 'Sepolia' : 'Unknown';
   const networkColor = chainId === CHAIN_IDS.BASE ? 'text-blue-400' : 'text-purple-400';

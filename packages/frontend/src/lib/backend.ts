@@ -47,10 +47,14 @@ export interface BackendPosition {
 
 export const backendApi = {
   // Get positions by owner address - uses Alchemy NFT API (fast!)
-  async getPositionsByOwner(address: string, enrich = true): Promise<BackendPosition[]> {
+  // Pass chainId to ensure backend returns data for correct chain (or empty if chain not supported)
+  async getPositionsByOwner(address: string, enrich = true, chainId?: number): Promise<BackendPosition[]> {
     try {
+      const params = new URLSearchParams({ enrich: String(enrich) });
+      if (chainId) params.set('chainId', String(chainId));
+
       const response = await fetch(
-        `${BACKEND_URL}/api/positions/owner/${address}?enrich=${enrich}`
+        `${BACKEND_URL}/api/positions/owner/${address}?${params.toString()}`
       );
       if (!response.ok) throw new Error('Failed to fetch positions');
       return response.json();
