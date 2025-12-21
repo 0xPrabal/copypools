@@ -67,14 +67,14 @@ export default createConfig({
     base: {
       id: 8453,
       transport: baseTransport,
-      pollingInterval: 15_000,
-      maxRequestsPerSecond: 25,
+      pollingInterval: 60_000, // Poll every 60s (reduced from 15s to save RPC calls)
+      maxRequestsPerSecond: 10, // Reduced rate limit
     },
     sepolia: {
       id: 11155111,
       transport: sepoliaTransport,
-      pollingInterval: 15_000,
-      maxRequestsPerSecond: 10,
+      pollingInterval: 60_000, // Poll every 60s
+      maxRequestsPerSecond: 5, // Lower rate for testnet
     },
   },
   contracts: {

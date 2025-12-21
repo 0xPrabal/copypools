@@ -15,9 +15,9 @@ export function ClientProviders({ children }: { children: React.ReactNode }) {
         defaultOptions: {
           queries: {
             // Stale-while-revalidate: show cached data immediately, refresh in background
-            staleTime: 30 * 1000, // Data considered fresh for 30 seconds
-            gcTime: 5 * 60 * 1000, // Keep unused data in cache for 5 minutes (formerly cacheTime)
-            refetchOnWindowFocus: true, // Refresh when user comes back to tab
+            staleTime: 2 * 60 * 1000, // Data considered fresh for 2 minutes (optimized from 30s)
+            gcTime: 10 * 60 * 1000, // Keep unused data in cache for 10 minutes
+            refetchOnWindowFocus: false, // Disabled to reduce RPC calls (was major source of requests)
             refetchOnReconnect: true, // Refresh when internet reconnects
             retry: 2, // Retry failed requests twice
             retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000),

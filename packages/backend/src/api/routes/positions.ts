@@ -20,9 +20,9 @@ import {
 const router = Router();
 const routeLogger = logger.child({ route: 'positions' });
 
-// Cache settings
-const MEMORY_CACHE_TTL = 15 * 1000; // 15 seconds for in-memory
-const DB_CACHE_STALE_MINUTES = 2; // Consider DB cache stale after 2 minutes
+// Cache settings (optimized to reduce RPC calls)
+const MEMORY_CACHE_TTL = 60 * 1000; // 60 seconds for in-memory (optimized from 15s)
+const DB_CACHE_STALE_MINUTES = 5; // Consider DB cache stale after 5 minutes (optimized from 2min)
 
 // Get position by token ID - fetches directly from chain
 router.get('/:tokenId', async (req: Request, res: Response) => {

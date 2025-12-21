@@ -382,8 +382,8 @@ export function usePositions() {
       }
     },
     enabled: !!address,
-    staleTime: 30000, // Consider data stale after 30 seconds (faster now!)
-    refetchInterval: 60000, // Refetch every 1 minute
+    staleTime: 2 * 60 * 1000, // Data fresh for 2 minutes (optimized from 30s)
+    refetchInterval: 5 * 60 * 1000, // Refetch every 5 minutes (optimized from 1 min)
   });
 }
 
@@ -954,6 +954,6 @@ export function usePoolLiquidity(poolId: string | undefined) {
       }
     },
     enabled: !!publicClient && !!poolId && publicClient.chain?.id === chainId,
-    staleTime: 30000,
+    staleTime: 2 * 60 * 1000, // Data fresh for 2 minutes
   });
 }
