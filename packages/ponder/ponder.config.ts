@@ -16,9 +16,11 @@ const V4_AUTO_RANGE_ADDRESS = process.env.V4_AUTO_RANGE_ADDRESS || "0xa367181132
 // Start block - set to contract deployment block for faster sync (Base Mainnet deployment: 39369847)
 const START_BLOCK = 39369847;
 
-// Base Mainnet RPC URLs with fallbacks (public RPCs)
+// Base Mainnet RPC URLs with fallbacks
 const BASE_RPCS = [
-  process.env.PONDER_RPC_URL_8453,           // Primary from env (e.g., Alchemy)
+  process.env.INFURA_BASE_RPC_URL,            // Infura (primary)
+  process.env.QUICKNODE_BASE_RPC_URL,         // QuickNode
+  process.env.PONDER_RPC_URL_8453,            // From env (e.g., Alchemy)
   "https://mainnet.base.org",                 // Base Official
   "https://base.drpc.org",                    // dRPC
   "https://base-rpc.publicnode.com",          // PublicNode

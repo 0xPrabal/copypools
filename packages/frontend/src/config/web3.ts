@@ -4,7 +4,8 @@ import { sepolia, base } from 'wagmi/chains';
 
 // Sepolia RPC URLs - CORS-friendly only for browser requests
 const sepoliaRpcs = [
-  process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL,             // Primary from env (Alchemy/Infura)
+  process.env.NEXT_PUBLIC_QUICKNODE_SEPOLIA_RPC_URL,   // QuickNode (primary)
+  process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL,             // Alchemy/Infura
   "https://ethereum-sepolia-rpc.publicnode.com",       // PublicNode (CORS friendly)
   "https://rpc.sepolia.org",                           // Sepolia.org
   "https://rpc2.sepolia.org",                          // Sepolia.org 2
@@ -12,7 +13,9 @@ const sepoliaRpcs = [
 
 // Base Mainnet RPC URLs - CORS-friendly only for browser requests
 const baseRpcs = [
-  process.env.NEXT_PUBLIC_BASE_RPC_URL,                // Primary from env (Alchemy/Infura)
+  process.env.NEXT_PUBLIC_INFURA_BASE_RPC_URL,         // Infura (primary)
+  process.env.NEXT_PUBLIC_QUICKNODE_BASE_RPC_URL,      // QuickNode
+  process.env.NEXT_PUBLIC_BASE_RPC_URL,                // Alchemy
   "https://base-rpc.publicnode.com",                   // PublicNode (CORS friendly)
   "https://base.meowrpc.com",                          // MeowRPC (CORS friendly)
   "https://base.llamarpc.com",                         // LlamaRPC (CORS friendly)
