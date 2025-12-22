@@ -1,6 +1,7 @@
 import { logger } from '../utils/logger.js';
 import * as subgraph from './subgraph.js';
 import * as blockchain from './blockchain.js';
+import { calculateUSDMetrics, USDMetrics } from './price.js';
 
 const analyticsLogger = logger.child({ module: 'analytics' });
 
@@ -35,6 +36,8 @@ export interface PositionAnalytics {
     dailyFeeRate: string;
     isInRange: boolean;
   };
+  // USD-based metrics
+  usdMetrics?: USDMetrics;
 }
 
 export interface PortfolioAnalytics {
@@ -67,7 +70,11 @@ export interface ProtocolAnalytics {
 }
 
 // Calculate position analytics
-export async function getPositionAnalytics(tokenId: string): Promise<PositionAnalytics | null> {
+export async function getPositionAnalytics(
+  tokenId: string,
+  chainId: number = 8453,
+  includeUSD: boolean = true
+): Promise<PositionAnalytics | null> {
   try {
     const positionResult = await subgraph.getPosition(tokenId);
     const position = (positionResult as any)?.position;
@@ -78,8 +85,10 @@ export async function getPositionAnalytics(tokenId: string): Promise<PositionAna
 
     // Get on-chain pending fees
     let unrealizedFees = { token0: '0', token1: '0' };
+    let pendingFeesBigInt = { amount0: 0n, amount1: 0n };
     try {
       const fees = await blockchain.getPendingFees(BigInt(tokenId));
+      pendingFeesBigInt = fees;
       unrealizedFees = {
         token0: fees.amount0.toString(),
         token1: fees.amount1.toString(),
@@ -99,9 +108,10 @@ export async function getPositionAnalytics(tokenId: string): Promise<PositionAna
     const totalDeposited = deposited0 + deposited1;
     const totalFees = collectedFees0 + collectedFees1 + BigInt(unrealizedFees.token0) + BigInt(unrealizedFees.token1);
 
+    const createdAt = parseInt(position.createdAtTimestamp || '0');
+
     if (totalDeposited > 0n) {
       // Calculate days since creation
-      const createdAt = parseInt(position.createdAtTimestamp || '0');
       const now = Math.floor(Date.now() / 1000);
       const daysActive = Math.max(1, (now - createdAt) / 86400);
 
@@ -115,6 +125,34 @@ export async function getPositionAnalytics(tokenId: string): Promise<PositionAna
 
     // Check if in range (would need current tick from pool)
     const isInRange = position.tickLower <= 0 && position.tickUpper >= 0; // Placeholder
+
+    // Calculate USD metrics if requested
+    let usdMetrics: USDMetrics | undefined = undefined;
+    if (includeUSD && position.pool) {
+      try {
+        // Get pool data for sqrtPriceX96
+        const positionInfo = await blockchain.getPositionInfo(BigInt(tokenId));
+
+        if (positionInfo?.poolKey) {
+          const slot0 = await blockchain.getPoolSlot0(positionInfo.poolKey);
+
+          usdMetrics = await calculateUSDMetrics(
+            BigInt(position.liquidity || '0'),
+            slot0.sqrtPriceX96,
+            position.tickLower,
+            position.tickUpper,
+            positionInfo.poolKey.currency0,
+            positionInfo.poolKey.currency1,
+            chainId,
+            pendingFeesBigInt,
+            { amount0: collectedFees0, amount1: collectedFees1 },
+            createdAt
+          );
+        }
+      } catch (e) {
+        analyticsLogger.debug({ tokenId, error: e }, 'Could not calculate USD metrics');
+      }
+    }
 
     return {
       tokenId,
@@ -143,6 +181,7 @@ export async function getPositionAnalytics(tokenId: string): Promise<PositionAna
         dailyFeeRate,
         isInRange,
       },
+      usdMetrics,
     };
   } catch (error) {
     analyticsLogger.error({ tokenId, error }, 'Failed to get position analytics');

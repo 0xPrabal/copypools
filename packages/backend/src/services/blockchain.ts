@@ -320,6 +320,29 @@ export async function getPoolCurrentTick(poolKey: {
   return tick;
 }
 
+// Get pool slot0 data including sqrtPriceX96 and tick
+export async function getPoolSlot0(poolKey: {
+  currency0: string;
+  currency1: string;
+  fee: number;
+  tickSpacing: number;
+  hooks: string;
+}): Promise<{ sqrtPriceX96: bigint; tick: number }> {
+  const poolId = computePoolId(poolKey);
+
+  const result = await publicClient.readContract({
+    address: contracts.stateView as Address,
+    abi: StateViewABI,
+    functionName: 'getSlot0',
+    args: [poolId as `0x${string}`],
+  }) as [bigint, number, number, number];
+
+  return {
+    sqrtPriceX96: result[0],
+    tick: result[1],
+  };
+}
+
 // Get position status (in range, current tick, ticks)
 export async function getPositionStatus(tokenId: bigint): Promise<{
   inRange: boolean;

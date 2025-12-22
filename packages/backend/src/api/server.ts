@@ -11,6 +11,7 @@ import { lendingRouter } from './routes/lending.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { positionCacheRouter } from './routes/position-cache.js';
 import { healthRouter } from './routes/health.js';
+import { pricesRouter } from './routes/prices.js';
 import { initializeDatabase, healthCheck as dbHealthCheck, getStats as dbStats } from '../services/database.js';
 import { memoryCache } from '../services/cache.js';
 import { rpcManager } from '../services/rpc-manager.js';
@@ -85,6 +86,7 @@ export function createServer() {
   app.use('/api/lending', lendingRouter);
   app.use('/api/notifications', notificationsRouter);
   app.use('/api/position-cache', positionCacheRouter);
+  app.use('/api/prices', pricesRouter);
 
   // Error handling
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {

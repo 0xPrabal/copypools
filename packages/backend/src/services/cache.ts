@@ -93,6 +93,8 @@ export const CACHE_KEYS = {
   indexerState: () => 'indexer_state',
   poolTick: (poolId: string) => `pool_tick_${poolId}`,
   positionInfo: (tokenId: string) => `position_info_${tokenId}`,
+  tokenPrice: (chainId: number, address: string) =>
+    `price_${chainId}_${address.toLowerCase()}`,
 };
 
 // Default TTLs
@@ -102,4 +104,5 @@ export const CACHE_TTL = {
   POOL_DATA: 5 * 60 * 1000, // 5 minutes - pools don't change often
   POOL_TICK: 15 * 1000, // 15 seconds - current tick changes frequently but not every call
   POSITION_INFO: 60 * 1000, // 60 seconds - position tick range doesn't change
+  TOKEN_PRICE: 5 * 60 * 1000, // 5 minutes - prices don't need real-time accuracy
 };

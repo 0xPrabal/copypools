@@ -16,6 +16,12 @@ import {
   PositionAnalysis,
   RebalanceDecision,
 } from '../../services/smart-rebalance.js';
+import {
+  calculatePositionValueUSD,
+  getBatchPrices,
+  getTokenInfo,
+  tickToSqrtRatioX96,
+} from '../../services/price.js';
 
 const router = Router();
 const routeLogger = logger.child({ route: 'positions' });
@@ -28,6 +34,8 @@ const DB_CACHE_STALE_MINUTES = 5; // Consider DB cache stale after 5 minutes (op
 router.get('/:tokenId', async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
+    const includeUSD = req.query.includeUSD !== 'false'; // Default to true
+    const chainId = req.query.chainId ? parseInt(req.query.chainId as string, 10) : config.CHAIN_ID;
 
     // Fetch position directly from PositionManager on chain
     const position = await blockchain.getPositionInfo(BigInt(tokenId));
@@ -52,14 +60,41 @@ router.get('/:tokenId', async (req: Request, res: Response) => {
     }
 
     // Get pending fees if registered for compounding
+    let pendingFees = { amount0: 0n, amount1: 0n };
     try {
-      const pendingFees = await blockchain.getPendingFees(BigInt(tokenId));
+      pendingFees = await blockchain.getPendingFees(BigInt(tokenId));
       (position as any).pendingFees = {
         amount0: pendingFees.amount0.toString(),
         amount1: pendingFees.amount1.toString(),
       };
     } catch (e) {
       // Position might not be registered for compounding
+    }
+
+    // Add USD values if requested and position has pool data
+    if (includeUSD && position.poolKey) {
+      try {
+        // Get pool slot0 for sqrtPriceX96
+        const slot0 = await blockchain.getPoolSlot0(position.poolKey);
+
+        // Calculate USD values
+        const usdValues = await calculatePositionValueUSD(
+          BigInt(position.liquidity),
+          slot0.sqrtPriceX96,
+          position.tickLower,
+          position.tickUpper,
+          position.poolKey.currency0,
+          position.poolKey.currency1,
+          chainId,
+          pendingFees
+        );
+
+        (position as any).usdValues = usdValues;
+      } catch (e) {
+        routeLogger.warn({ tokenId, error: e }, 'Failed to calculate USD values');
+        (position as any).usdValues = null;
+        (position as any).usdError = 'Failed to fetch prices';
+      }
     }
 
     res.json(position);
@@ -251,10 +286,13 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
   }
 });
 
-// Get position analytics
+// Get position analytics with USD metrics
 router.get('/:tokenId/analytics', async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
+    const includeUSD = req.query.includeUSD !== 'false'; // Default to true
+    const chainId = req.query.chainId ? parseInt(req.query.chainId as string, 10) : config.CHAIN_ID;
+
     const result = await subgraph.getPosition(tokenId);
 
     if (!(result as any).position) {
@@ -271,7 +309,7 @@ router.get('/:tokenId/analytics', async (req: Request, res: Response) => {
     const fees0 = BigInt(position.collectedFeesToken0 || '0');
     const fees1 = BigInt(position.collectedFeesToken1 || '0');
 
-    const analytics = {
+    const analytics: any = {
       tokenId,
       pool: position.pool,
       totalDeposited: {
@@ -291,8 +329,51 @@ router.get('/:tokenId/analytics', async (req: Request, res: Response) => {
         lower: position.tickLower,
         upper: position.tickUpper,
       },
-      inRange: position.pool.tick >= position.tickLower && position.pool.tick < position.tickUpper,
+      inRange: position.pool?.tick >= position.tickLower && position.pool?.tick < position.tickUpper,
     };
+
+    // Add USD metrics if requested
+    if (includeUSD) {
+      try {
+        const positionInfo = await blockchain.getPositionInfo(BigInt(tokenId));
+
+        if (positionInfo?.poolKey) {
+          const slot0 = await blockchain.getPoolSlot0(positionInfo.poolKey);
+
+          // Get pending fees
+          let pendingFees = { amount0: 0n, amount1: 0n };
+          try {
+            pendingFees = await blockchain.getPendingFees(BigInt(tokenId));
+          } catch (e) {
+            // Position might not be registered for compounding
+          }
+
+          // Import and use calculateUSDMetrics
+          const { calculateUSDMetrics } = await import('../../services/price.js');
+
+          const createdAt = parseInt(position.createdAtTimestamp || '0');
+
+          const usdMetrics = await calculateUSDMetrics(
+            BigInt(position.liquidity || '0'),
+            slot0.sqrtPriceX96,
+            position.tickLower,
+            position.tickUpper,
+            positionInfo.poolKey.currency0,
+            positionInfo.poolKey.currency1,
+            chainId,
+            pendingFees,
+            { amount0: fees0, amount1: fees1 },
+            createdAt
+          );
+
+          analytics.usdMetrics = usdMetrics;
+        }
+      } catch (e) {
+        routeLogger.warn({ tokenId, error: e }, 'Failed to calculate USD metrics');
+        analytics.usdMetrics = null;
+        analytics.usdError = 'Failed to fetch prices';
+      }
+    }
 
     res.json(analytics);
   } catch (error) {
