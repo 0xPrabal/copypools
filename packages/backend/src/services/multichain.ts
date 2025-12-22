@@ -1,11 +1,14 @@
 /**
  * Multi-chain blockchain service
- * Creates and caches viem clients per chain on demand
+ * Uses RPC manager for circuit breaker, rate limiting, and health monitoring
  */
 
-import { createPublicClient, http, fallback, PublicClient, Chain, parseAbi } from 'viem';
-import { base, sepolia } from 'viem/chains';
-import { getChainConfig, isSupportedChain, type SupportedChainId } from '../config/chains.js';
+import { PublicClient, parseAbi } from 'viem';
+import { getChainConfig, isSupportedChain } from '../config/chains.js';
+import { rpcManager, executeBatch } from './rpc-manager.js';
+import { logger } from '../utils/logger.js';
+
+const multichainLogger = logger.child({ module: 'multichain' });
 
 // Minimal ABIs for multichain operations
 const PositionManagerABI = [
@@ -45,51 +48,29 @@ const PositionManagerABI = [
   },
 ] as const;
 
+// Import viem functions at module level (not dynamic import)
+import { encodeAbiParameters, keccak256 } from 'viem';
+
 const StateViewABI = parseAbi([
   'function getSlot0(bytes32 poolId) external view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)',
 ]);
 
-// Chain definitions
-const CHAIN_DEFINITIONS: Record<SupportedChainId, Chain> = {
-  8453: base,
-  11155111: sepolia,
-};
-
-// Cache for public clients per chain
-const clientCache = new Map<number, PublicClient>();
-
 /**
- * Get or create a public client for a specific chain
+ * Get a health-aware public client for a specific chain
+ * Uses RPC manager with circuit breaker and rate limiting
  */
 export function getPublicClient(chainId: number): PublicClient | null {
   if (!isSupportedChain(chainId)) {
+    multichainLogger.debug({ chainId }, 'Chain not supported');
     return null;
   }
 
-  // Return cached client if available
-  if (clientCache.has(chainId)) {
-    return clientCache.get(chainId)!;
-  }
-
-  const chainConfig = getChainConfig(chainId);
-  if (!chainConfig || chainConfig.rpcUrls.length === 0) {
+  try {
+    return rpcManager.getClient(chainId);
+  } catch (error) {
+    multichainLogger.error({ chainId, error }, 'Failed to get client for chain');
     return null;
   }
-
-  // Create fallback transport with multiple RPCs
-  const transport = fallback(
-    chainConfig.rpcUrls.map((url) => http(url, { timeout: 30_000, retryCount: 2 })),
-    { rank: true }
-  );
-
-  // Create and cache the client
-  const client = createPublicClient({
-    chain: CHAIN_DEFINITIONS[chainId as SupportedChainId],
-    transport,
-  });
-
-  clientCache.set(chainId, client);
-  return client;
 }
 
 /**
@@ -152,8 +133,7 @@ export async function getPoolCurrentTick(chainId: number, poolKey: any): Promise
     throw new Error(`Chain ${chainId} not supported`);
   }
 
-  // Compute poolId
-  const { encodeAbiParameters, keccak256 } = await import('viem');
+  // Compute poolId using module-level imports (no dynamic import)
   const poolIdBytes = keccak256(
     encodeAbiParameters(
       [
@@ -192,12 +172,14 @@ function parsePositionInfo(positionInfo: bigint): { tickLower: number; tickUpper
 
 /**
  * Fetch all positions for an owner on a specific chain using Alchemy NFT API
+ * Uses rate-limited batch execution for optimal RPC usage
  */
 export async function fetchPositionsForOwner(chainId: number, ownerAddress: string) {
   const client = getPublicClient(chainId);
   const chainConfig = getChainConfig(chainId);
 
   if (!client || !chainConfig) {
+    multichainLogger.debug({ chainId, ownerAddress }, 'Chain not configured');
     return [];
   }
 
@@ -209,34 +191,43 @@ export async function fetchPositionsForOwner(chainId: number, ownerAddress: stri
       const [, network, apiKey] = alchemyMatch;
       try {
         const nftApiUrl = `https://${network}.g.alchemy.com/nft/v3/${apiKey}/getNFTsForOwner?owner=${ownerAddress}&contractAddresses[]=${chainConfig.contracts.POSITION_MANAGER}&withMetadata=false`;
-        const response = await fetch(nftApiUrl);
+        const response = await fetch(nftApiUrl, { signal: AbortSignal.timeout(10000) });
+
         if (response.ok) {
           const data = await response.json() as { ownedNfts?: Array<{ tokenId: string }> };
           const tokenIds = data.ownedNfts?.map((nft) => nft.tokenId) || [];
 
-          // Fetch position details for each token
-          const positions = await Promise.all(
-            tokenIds.map(async (tokenId: string) => {
-              try {
-                const info = await getPositionInfo(chainId, BigInt(tokenId));
-                const currentTick = await getPoolCurrentTick(chainId, info.poolKey);
-                const inRange = currentTick >= info.tickLower && currentTick < info.tickUpper;
-                return { ...info, currentTick, inRange };
-              } catch {
-                return null;
-              }
-            })
+          multichainLogger.debug({ chainId, ownerAddress, count: tokenIds.length }, 'Found positions via Alchemy');
+
+          // Use rate-limited batch execution
+          const positions = await executeBatch(
+            tokenIds,
+            async (tokenId: string) => {
+              const info = await getPositionInfo(chainId, BigInt(tokenId));
+              const currentTick = await getPoolCurrentTick(chainId, info.poolKey);
+              const inRange = currentTick >= info.tickLower && currentTick < info.tickUpper;
+              return { ...info, currentTick, inRange };
+            },
+            { batchSize: 5, delayBetweenBatches: 200 }
           );
 
           return positions.filter(Boolean);
         }
       } catch (e) {
-        console.warn('Alchemy NFT API failed, falling back to RPC scan');
+        multichainLogger.warn({ chainId, ownerAddress, error: e }, 'Alchemy NFT API failed');
       }
     }
   }
 
-  // Fallback: Would need to scan events or use a different method
-  // For now, return empty if Alchemy not available
+  // Fallback: Return empty if Alchemy not available
+  // Could implement event scanning here if needed
+  multichainLogger.debug({ chainId, ownerAddress }, 'No Alchemy API available, returning empty');
   return [];
+}
+
+/**
+ * Invalidate client cache for a chain (useful when RPCs fail)
+ */
+export function invalidateChainClient(chainId: number): void {
+  rpcManager.invalidateClient(chainId);
 }

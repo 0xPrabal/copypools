@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, http, fallback, parseAbi, Address, Hex, Chain, encodeAbiParameters, keccak256 } from 'viem';
+import { createPublicClient, createWalletClient, http, fallback, parseAbi, Address, Hex, Chain, encodeAbiParameters, keccak256, PublicClient, WalletClient, Transport } from 'viem';
 import { mainnet, arbitrum, base, optimism, polygon, sepolia } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 import { config, contracts } from '../config/index.js';
@@ -7,7 +7,7 @@ import { memoryCache, CACHE_KEYS, CACHE_TTL } from './cache.js';
 import { V4CompoundorAbi } from '../abis/V4Compoundor.js';
 import { V4AutoRangeAbi } from '../abis/V4AutoRange.js';
 import { V4UtilsAbi } from '../abis/V4Utils.js';
-import { getValidRpcs } from '../config/rpc.js';
+import { rpcManager, executeBatch } from './rpc-manager.js';
 
 // Chain mapping
 const chains: Record<number, Chain> = {
@@ -21,39 +21,28 @@ const chains: Record<number, Chain> = {
 
 const chain = chains[config.CHAIN_ID] || sepolia;
 
-// Create fallback transport with multiple RPCs
-function createFallbackTransport() {
-  const rpcs = getValidRpcs(config.CHAIN_ID);
-
-  if (rpcs.length === 0) {
-    logger.warn('No valid RPCs found, using default from config');
-    return http(config.RPC_URL);
-  }
-
-  logger.info({ chainId: config.CHAIN_ID, rpcCount: rpcs.length }, 'Creating fallback transport with RPCs');
-  rpcs.forEach((rpc, i) => logger.debug({ index: i, name: rpc.name }, 'RPC endpoint'));
-
-  return fallback(
-    rpcs.map((rpc) => http(rpc.url, { timeout: 10_000 })),
-    { rank: true, retryCount: 2 }
-  );
+/**
+ * Get public client with circuit breaker and health monitoring
+ * Uses the RPC manager for automatic failover and rate limiting
+ */
+function getClient(): PublicClient {
+  return rpcManager.getClient(config.CHAIN_ID);
 }
 
-const transport = createFallbackTransport();
+// Export public client getter (for backwards compatibility)
+// Note: This now returns a health-aware client that may change on RPC failures
+export const publicClient = getClient();
 
-// Clients with fallback RPCs
-export const publicClient = createPublicClient({
-  chain,
-  transport,
-});
+// Wallet client type
+type AppWalletClient = WalletClient<Transport, Chain> | null;
 
 // Safely create wallet client - only if valid private key is provided
-function createWalletClientSafe() {
+function createWalletClientSafe(): AppWalletClient {
   const pk = config.PRIVATE_KEY;
 
   // Check if private key is valid (must be 64 hex chars with optional 0x prefix)
   if (!pk) {
-    console.log('No PRIVATE_KEY provided - wallet client disabled');
+    logger.info('No PRIVATE_KEY provided - wallet client disabled');
     return null;
   }
 
@@ -61,23 +50,30 @@ function createWalletClientSafe() {
 
   // Validate it's a proper 32-byte hex string
   if (!/^0x[0-9a-fA-F]{64}$/.test(cleanPk)) {
-    console.error('Invalid PRIVATE_KEY format - must be 64 hex characters. Wallet client disabled.');
+    logger.error('Invalid PRIVATE_KEY format - must be 64 hex characters. Wallet client disabled.');
     return null;
   }
 
   try {
+    // Create wallet transport using healthy RPCs from RPC manager
+    const { getValidRpcs } = require('../config/rpc.js');
+    const rpcs = getValidRpcs(config.CHAIN_ID);
+    const walletTransport = rpcs.length > 0
+      ? fallback(rpcs.map((rpc: { url: string }) => http(rpc.url, { timeout: 30_000 })), { rank: true })
+      : http(config.RPC_URL, { timeout: 30_000 });
+
     return createWalletClient({
       account: privateKeyToAccount(cleanPk as Hex),
       chain,
-      transport, // Use same fallback transport
-    });
+      transport: walletTransport,
+    }) as AppWalletClient;
   } catch (err) {
-    console.error('Failed to create wallet client:', err);
+    logger.error({ err }, 'Failed to create wallet client');
     return null;
   }
 }
 
-export const walletClient = createWalletClientSafe();
+export const walletClient: AppWalletClient = createWalletClientSafe();
 
 // Use local ABIs
 const V4CompoundorABI = V4CompoundorAbi;
@@ -863,7 +859,7 @@ export async function getPositionInfo(tokenId: bigint): Promise<OnChainPosition 
 /**
  * Get all positions for an owner with full info
  * This fetches directly from chain, not from Ponder
- * Uses parallel fetching for better performance
+ * Uses rate-limited batch execution for optimal RPC usage
  */
 export async function getPositionsByOwnerOnChain(ownerAddress: string): Promise<OnChainPosition[]> {
   const tokenIds = await getPositionTokenIds(ownerAddress);
@@ -872,22 +868,20 @@ export async function getPositionsByOwnerOnChain(ownerAddress: string): Promise<
     return [];
   }
 
-  // Fetch all positions in parallel (batched to avoid overwhelming RPC)
-  const BATCH_SIZE = 10;
-  const positions: OnChainPosition[] = [];
+  // Use rate-limited batch execution with controlled concurrency
+  const results = await executeBatch(
+    tokenIds,
+    async (tokenId) => getPositionInfo(tokenId),
+    { batchSize: 5, delayBetweenBatches: 200 } // Reduced batch size, added delay
+  );
 
-  for (let i = 0; i < tokenIds.length; i += BATCH_SIZE) {
-    const batch = tokenIds.slice(i, i + BATCH_SIZE);
-    const batchResults = await Promise.all(
-      batch.map(tokenId => getPositionInfo(tokenId).catch(() => null))
-    );
+  // Filter out null results
+  return results.filter((p): p is OnChainPosition => p !== null);
+}
 
-    for (const position of batchResults) {
-      if (position) {
-        positions.push(position);
-      }
-    }
-  }
-
-  return positions;
+/**
+ * Get RPC health statistics for monitoring
+ */
+export function getRpcHealthStats() {
+  return rpcManager.getStats();
 }

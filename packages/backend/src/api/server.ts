@@ -10,8 +10,10 @@ import { automationRouter } from './routes/automation.js';
 import { lendingRouter } from './routes/lending.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { positionCacheRouter } from './routes/position-cache.js';
+import { healthRouter } from './routes/health.js';
 import { initializeDatabase, healthCheck as dbHealthCheck, getStats as dbStats } from '../services/database.js';
 import { memoryCache } from '../services/cache.js';
+import { rpcManager } from '../services/rpc-manager.js';
 import {
   apiRateLimiter,
   securityHeaders,
@@ -37,18 +39,18 @@ export function createServer() {
     next();
   });
 
-  // Simple health check (for load balancers)
-  app.get('/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
-  });
+  // Health check routes (includes RPC health, rate limiting, cache status)
+  app.use('/health', healthRouter);
 
-  // Detailed health check (for monitoring)
+  // Legacy detailed health check (for backwards compatibility)
   app.get('/health/detailed', async (_req: Request, res: Response) => {
     const dbHealth = await dbHealthCheck();
     const dbPoolStats = await dbStats();
     const cacheStats = memoryCache.getStats();
+    const rpcStats = rpcManager.getStats();
 
-    const isHealthy = dbHealth.healthy;
+    const hasHealthyRpc = rpcStats.rpcs.some(chain => chain.healthy > 0);
+    const isHealthy = dbHealth.healthy && hasHealthyRpc;
 
     res.status(isHealthy ? 200 : 503).json({
       status: isHealthy ? 'healthy' : 'degraded',
@@ -61,6 +63,11 @@ export function createServer() {
         },
         cache: {
           size: cacheStats.size,
+        },
+        rpc: {
+          status: hasHealthyRpc ? 'healthy' : 'degraded',
+          chains: rpcStats.rpcs,
+          rateLimit: rpcStats.rateLimit,
         },
       },
       memory: {
