@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useChainId, useSwitchChain } from 'wagmi';
 import { CHAIN_IDS } from '@/config/contracts';
 
@@ -125,7 +125,7 @@ export function useChainGuard(options: UseChainGuardOptions): UseChainGuardRetur
     if (isCorrectChain) return true;
 
     try {
-      await switchChainAsync({ chainId: targetChainId });
+      await switchChainAsync({ chainId: targetChainId as 8453 | 11155111 });
       return true;
     } catch (error) {
       console.error('Failed to switch chain:', error);
@@ -156,20 +156,39 @@ export function useChainGuard(options: UseChainGuardOptions): UseChainGuardRetur
     [isCorrectChain, onChainMismatch]
   );
 
-  // Execute pending operation after successful chain switch
-  const executePendingOperation = useCallback(async () => {
-    if (pendingOperation && isCorrectChain) {
-      try {
-        const result = await pendingOperation();
-        closeSwitchModal();
-        return result;
-      } catch (error) {
-        console.error('Operation failed after chain switch:', error);
-        closeSwitchModal();
-        throw error;
-      }
+  // Track if we were previously on wrong chain (to detect switch completion)
+  const wasOnWrongChain = useRef(false);
+
+  // Update ref when chain correctness changes
+  useEffect(() => {
+    if (!isCorrectChain) {
+      wasOnWrongChain.current = true;
     }
-  }, [pendingOperation, isCorrectChain, closeSwitchModal]);
+  }, [isCorrectChain]);
+
+  // Execute pending operation after successful chain switch
+  useEffect(() => {
+    const executePending = async () => {
+      // Only execute if:
+      // 1. We're now on correct chain
+      // 2. We have a pending operation
+      // 3. We were previously on wrong chain (to avoid running on initial mount)
+      if (isCorrectChain && pendingOperation && wasOnWrongChain.current) {
+        wasOnWrongChain.current = false;
+        const operation = pendingOperation;
+        setPendingOperation(null);
+        setIsModalOpen(false);
+
+        try {
+          await operation();
+        } catch (error) {
+          console.error('Pending operation failed after chain switch:', error);
+        }
+      }
+    };
+
+    executePending();
+  }, [isCorrectChain, pendingOperation]);
 
   return {
     currentChainId,
@@ -201,7 +220,7 @@ export function useRequireChain(targetChainId: number) {
     if (isCorrectChain) return true;
 
     try {
-      await switchChainAsync({ chainId: targetChainId });
+      await switchChainAsync({ chainId: targetChainId as 8453 | 11155111 });
       return true;
     } catch {
       return false;
