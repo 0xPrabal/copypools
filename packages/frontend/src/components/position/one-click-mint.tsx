@@ -213,19 +213,27 @@ export function OneClickMint({ onSuccess }: OneClickMintProps) {
   const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
   const isNativeInput = inputToken.address.toLowerCase() === ZERO_ADDRESS;
 
-  // Read native ETH balance
+  // Read native ETH balance - with aggressive caching
   const { data: ethBalance } = useBalance({
     address: address,
-    query: { enabled: !!address && isNativeInput },
+    query: {
+      enabled: !!address && isNativeInput,
+      staleTime: 30_000, // Fresh for 30 seconds
+      refetchInterval: false, // No auto-refresh
+    },
   });
 
-  // Read ERC20 token balance
+  // Read ERC20 token balance - with aggressive caching
   const { data: tokenBalance } = useReadContract({
     address: inputToken.address as `0x${string}`,
     abi: ERC20Abi,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
-    query: { enabled: !!address && !isNativeInput },
+    query: {
+      enabled: !!address && !isNativeInput,
+      staleTime: 30_000, // Fresh for 30 seconds
+      refetchInterval: false, // No auto-refresh
+    },
   });
 
   const balance = isNativeInput ? ethBalance?.value : tokenBalance as bigint | undefined;

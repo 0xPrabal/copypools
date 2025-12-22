@@ -26,6 +26,8 @@ export function useTokenApproval(tokenAddress: `0x${string}` | undefined, spende
     args: tokenAddress && userAddress ? [userAddress, spenderAddress] : undefined,
     query: {
       enabled: !isNativeToken && !!tokenAddress && !!userAddress,
+      staleTime: 60_000, // Fresh for 1 minute
+      refetchInterval: false, // No auto-refresh
     },
   });
 

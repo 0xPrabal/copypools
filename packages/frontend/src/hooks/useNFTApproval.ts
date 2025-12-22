@@ -68,6 +68,8 @@ export function useNFTApproval(operatorAddress: `0x${string}`) {
     args: userAddress ? [userAddress, operatorAddress] : undefined,
     query: {
       enabled: !!userAddress,
+      staleTime: 60_000, // Fresh for 1 minute
+      refetchInterval: false, // No auto-refresh
     },
   });
 

@@ -14,13 +14,14 @@ export function ClientProviders({ children }: { children: React.ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            // Stale-while-revalidate: show cached data immediately, refresh in background
-            staleTime: 2 * 60 * 1000, // Data considered fresh for 2 minutes (optimized from 30s)
-            gcTime: 10 * 60 * 1000, // Keep unused data in cache for 10 minutes
-            refetchOnWindowFocus: false, // Disabled to reduce RPC calls (was major source of requests)
-            refetchOnReconnect: true, // Refresh when internet reconnects
-            retry: 2, // Retry failed requests twice
-            retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000),
+            // Aggressive caching to minimize RPC calls
+            staleTime: 5 * 60 * 1000, // Data fresh for 5 minutes
+            gcTime: 30 * 60 * 1000, // Keep unused data in cache for 30 minutes
+            refetchOnWindowFocus: false, // Disabled - major source of requests
+            refetchOnReconnect: false, // Disabled - user can manually refresh
+            refetchOnMount: false, // Don't refetch if data exists
+            retry: 1, // Only retry once
+            retryDelay: 2000, // Wait 2 seconds before retry
           },
         },
       })
