@@ -203,12 +203,36 @@ export function useZapLiquidity() {
       );
 
       // Read pool slot0
-      const slot0 = await publicClient?.readContract({
-        address: CONTRACTS.STATE_VIEW,
-        abi: StateViewAbi,
-        functionName: 'getSlot0',
-        args: [poolId],
-      });
+      console.log('=== Zap Debug ===');
+      console.log('ChainId:', chainId);
+      console.log('StateView:', CONTRACTS.STATE_VIEW);
+      console.log('PoolId:', poolId);
+      console.log('Token0:', sortedToken0.address);
+      console.log('Token1:', sortedToken1.address);
+      console.log('Fee:', fee, 'TickSpacing:', tickSpacing);
+
+      if (!publicClient) {
+        throw new Error('Public client not available. Please check your wallet connection.');
+      }
+
+      let slot0;
+      try {
+        slot0 = await publicClient.readContract({
+          address: CONTRACTS.STATE_VIEW,
+          abi: StateViewAbi,
+          functionName: 'getSlot0',
+          args: [poolId],
+        });
+      } catch (err: any) {
+        console.error('getSlot0 error:', err);
+        // Check if pool doesn't exist
+        if (err.message?.includes('zero data') || err.message?.includes('0x')) {
+          throw new Error(`Pool does not exist on chain ${chainId}. The pool with tokens ${sortedToken0.symbol}/${sortedToken1.symbol} and fee ${fee / 10000}% may not be initialized.`);
+        }
+        throw err;
+      }
+
+      console.log('Slot0 result:', slot0);
 
       if (!slot0) {
         throw new Error('Pool not found or not initialized');
@@ -370,12 +394,35 @@ export function useZapLiquidity() {
       );
 
       // Read pool slot0
-      const slot0 = await publicClient?.readContract({
-        address: CONTRACTS.STATE_VIEW,
-        abi: StateViewAbi,
-        functionName: 'getSlot0',
-        args: [poolId],
-      });
+      console.log('=== ExecuteZap Debug ===');
+      console.log('ChainId:', chainId);
+      console.log('StateView:', CONTRACTS.STATE_VIEW);
+      console.log('PoolId:', poolId);
+      console.log('Token0:', sortedToken0.address);
+      console.log('Token1:', sortedToken1.address);
+      console.log('Fee:', fee, 'TickSpacing:', tickSpacing);
+
+      if (!publicClient) {
+        throw new Error('Public client not available. Please check your wallet connection.');
+      }
+
+      let slot0;
+      try {
+        slot0 = await publicClient.readContract({
+          address: CONTRACTS.STATE_VIEW,
+          abi: StateViewAbi,
+          functionName: 'getSlot0',
+          args: [poolId],
+        });
+      } catch (err: any) {
+        console.error('getSlot0 error in executeZap:', err);
+        if (err.message?.includes('zero data') || err.message?.includes('0x')) {
+          throw new Error(`Pool does not exist on chain ${chainId}. Please select a pool that is initialized.`);
+        }
+        throw err;
+      }
+
+      console.log('Slot0 result:', slot0);
 
       if (!slot0) {
         throw new Error('Pool not found');
