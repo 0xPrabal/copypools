@@ -592,7 +592,14 @@ export function getHealthyClient(chainId: number): PublicClient {
 }
 
 /**
- * Execute an operation with rate limiting (for batch operations)
+ * Execute an operation with rate limit monitoring.
+ *
+ * NOTE: This function does NOT acquire a rate limit token because RPC calls
+ * made through getHealthyClient() are already rate-limited via the transport's
+ * onFetchRequest callback. Acquiring here would cause double token consumption.
+ *
+ * Use this for monitoring queue status during batch operations.
+ * For non-RPC operations that need rate limiting, call rpcManager.acquireRateLimit() directly.
  */
 export async function withRateLimit<T>(operation: () => Promise<T>): Promise<T> {
   const limiter = rpcManager.getRateLimitStats();
@@ -602,8 +609,8 @@ export async function withRateLimit<T>(operation: () => Promise<T>): Promise<T> 
     rpcLogger.warn({ queueLength: limiter.queueLength }, 'Rate limit queue building up');
   }
 
-  // Acquire rate limit token before executing operation
-  await rpcManager.acquireRateLimit();
+  // Do NOT acquire token here - RPC transport already handles rate limiting
+  // in onFetchRequest callback. Acquiring here would cause double consumption.
 
   return operation();
 }
