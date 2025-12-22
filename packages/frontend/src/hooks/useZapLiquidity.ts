@@ -100,7 +100,7 @@ async function getSwapQuote(
   priceImpact: number;
 } | null> {
   try {
-    const response = await fetch(`${BACKEND_URL}/api/swap/quote`, {
+    const response = await fetch(`${BACKEND_URL}/api/exchange/quote`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

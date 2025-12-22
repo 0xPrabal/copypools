@@ -88,7 +88,7 @@ export function createServer() {
   app.use('/api/notifications', notificationsRouter);
   app.use('/api/position-cache', positionCacheRouter);
   app.use('/api/prices', pricesRouter);
-  app.use('/api/swap', swapRouter);
+  app.use('/api/exchange', swapRouter); // Named 'exchange' to avoid ad blocker blocking 'swap' URLs
 
   // Error handling
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
