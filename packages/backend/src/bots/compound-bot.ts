@@ -68,16 +68,22 @@ async function processCompound(position: CompoundablePosition): Promise<boolean>
 }
 
 async function runCompoundBot(): Promise<void> {
-  botLogger.info('Starting compound bot run');
+  botLogger.debug('Starting compound bot run');
 
   try {
-    // Check gas price
-    const gasPrice = await blockchain.getGasPrice();
-    botLogger.debug({ gasPrice: gasPrice.toString() }, 'Current gas price');
-
-    // Get compoundable positions from subgraph
+    // Get compoundable positions from subgraph FIRST (before gas check to save RPC calls)
     const result = await subgraph.getCompoundablePositions('0');
     const positions = (result as any).compoundConfigs || [];
+
+    // Early exit if no positions to process
+    if (positions.length === 0) {
+      botLogger.debug('No compoundable positions, skipping gas check');
+      return;
+    }
+
+    // Only check gas price if we have positions to process
+    const gasPrice = await blockchain.getGasPrice();
+    botLogger.debug({ gasPrice: gasPrice.toString() }, 'Current gas price');
 
     botLogger.info({ count: positions.length }, 'Found compoundable positions');
 
@@ -128,13 +134,15 @@ async function runCompoundBot(): Promise<void> {
 
 export function startCompoundBot(): CronJob {
   const intervalMs = config.COMPOUND_INTERVAL_MS;
-  const cronExpression = `*/${Math.floor(intervalMs / 1000)} * * * * *`;
+  // Convert to minutes for cron expression (minimum 1 minute)
+  const intervalMinutes = Math.max(1, Math.floor(intervalMs / 60000));
+  const cronExpression = `*/${intervalMinutes} * * * *`; // Every X minutes
 
   const job = new CronJob(cronExpression, runCompoundBot, null, false);
 
   if (config.BOT_ENABLED) {
     job.start();
-    botLogger.info({ intervalMs }, 'Compound bot started');
+    botLogger.info({ intervalMs, intervalMinutes }, 'Compound bot started');
   }
 
   return job;

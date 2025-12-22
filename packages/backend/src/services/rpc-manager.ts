@@ -21,16 +21,16 @@ const CONFIG = {
   // Circuit Breaker
   FAILURE_THRESHOLD: 3,           // Failures before marking RPC as unhealthy
   SUCCESS_THRESHOLD: 2,           // Successes before marking RPC as healthy again
-  HEALTH_CHECK_INTERVAL: 60_000,  // Check unhealthy RPCs every 60s
-  CIRCUIT_RESET_TIMEOUT: 300_000, // Try unhealthy RPCs again after 5 minutes
+  HEALTH_CHECK_INTERVAL: 300_000, // Check unhealthy RPCs every 5 minutes (was 60s)
+  CIRCUIT_RESET_TIMEOUT: 600_000, // Try unhealthy RPCs again after 10 minutes (was 5min)
 
-  // Rate Limiting (Token Bucket)
-  TOKENS_PER_SECOND: 15,          // Max RPC calls per second globally
-  BUCKET_SIZE: 50,                // Max burst capacity
-  REFILL_INTERVAL: 100,           // Refill tokens every 100ms
+  // Rate Limiting (Token Bucket) - optimized for low usage
+  TOKENS_PER_SECOND: 5,           // Max RPC calls per second globally (was 15)
+  BUCKET_SIZE: 20,                // Max burst capacity (was 50)
+  REFILL_INTERVAL: 200,           // Refill tokens every 200ms (was 100ms)
 
   // Client Cache
-  CLIENT_TTL: 300_000,            // Refresh clients every 5 minutes
+  CLIENT_TTL: 600_000,            // Refresh clients every 10 minutes (was 5min)
   REQUEST_TIMEOUT: 30_000,        // 30 second timeout for all RPC calls
   RETRY_COUNT: 2,                 // Retry failed requests twice
 };
@@ -445,9 +445,18 @@ class RpcManager {
             await this.rateLimiter.acquire();
           },
           onFetchResponse: async (response) => {
-            // Track success
+            // Track success or failure based on response status
             if (response.ok) {
               this.healthTracker.recordSuccess(chainId, rpc.url, 0);
+            } else {
+              // Record failure for non-OK HTTP responses (4xx, 5xx)
+              this.healthTracker.recordFailure(
+                chainId,
+                rpc.url,
+                `HTTP ${response.status}: ${response.statusText}`
+              );
+              // Invalidate client cache to force RPC re-selection on next call
+              this.clientCache.invalidate(chainId);
             }
           },
         })
@@ -505,6 +514,13 @@ class RpcManager {
    */
   getRateLimitStats(): { tokens: number; queueLength: number } {
     return this.rateLimiter.getStats();
+  }
+
+  /**
+   * Acquire a rate limit token (blocks until available)
+   */
+  async acquireRateLimit(): Promise<void> {
+    return this.rateLimiter.acquire();
   }
 
   /**
@@ -585,6 +601,9 @@ export async function withRateLimit<T>(operation: () => Promise<T>): Promise<T> 
   if (limiter.queueLength > 10) {
     rpcLogger.warn({ queueLength: limiter.queueLength }, 'Rate limit queue building up');
   }
+
+  // Acquire rate limit token before executing operation
+  await rpcManager.acquireRateLimit();
 
   return operation();
 }

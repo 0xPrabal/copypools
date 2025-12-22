@@ -36,12 +36,12 @@ const configSchema = z.object({
   ZEROX_API_KEY: z.string().optional(),
   COINGECKO_API_KEY: z.string().optional(),
 
-  // Bot Configuration
+  // Bot Configuration (optimized for low RPC usage)
   BOT_ENABLED: z.string().transform((v) => v === 'true').default('false'),
-  COMPOUND_INTERVAL_MS: z.string().transform(Number).default('60000'),
-  AUTO_EXIT_INTERVAL_MS: z.string().transform(Number).default('30000'),
-  AUTO_RANGE_INTERVAL_MS: z.string().transform(Number).default('60000'),
-  LIQUIDATION_INTERVAL_MS: z.string().transform(Number).default('30000'),
+  COMPOUND_INTERVAL_MS: z.string().transform(Number).default('300000'),      // 5 minutes (was 60s)
+  AUTO_EXIT_INTERVAL_MS: z.string().transform(Number).default('300000'),     // 5 minutes (was 30s)
+  AUTO_RANGE_INTERVAL_MS: z.string().transform(Number).default('300000'),    // 5 minutes (was 60s)
+  LIQUIDATION_INTERVAL_MS: z.string().transform(Number).default('300000'),   // 5 minutes (was 30s)
 
   // Gas Settings
   MAX_GAS_PRICE_GWEI: z.string().transform(Number).default('100'),

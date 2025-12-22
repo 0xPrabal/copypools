@@ -221,7 +221,7 @@ async function runLiveIndexer(): Promise<void> {
 
   let lastProcessedBlock = await publicClient.getBlockNumber();
 
-  // Poll for new blocks every 20 seconds
+  // Poll for new blocks every 2 minutes (optimized from 20s to reduce RPC calls)
   setInterval(async () => {
     try {
       const currentBlock = await publicClient.getBlockNumber();
@@ -242,7 +242,7 @@ async function runLiveIndexer(): Promise<void> {
     } catch (error) {
       indexerLogger.error({ error }, 'Live indexer error');
     }
-  }, 20000); // 20 seconds
+  }, 120000); // 2 minutes (optimized from 20s)
 }
 
 // Start the position indexer

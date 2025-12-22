@@ -467,13 +467,15 @@ async function runAutoRangeBot(): Promise<void> {
 
 export function startAutoRangeBot(): CronJob {
   const intervalMs = config.AUTO_RANGE_INTERVAL_MS;
-  const cronExpression = `*/${Math.floor(intervalMs / 1000)} * * * * *`;
+  // Convert to minutes for cron expression (minimum 1 minute)
+  const intervalMinutes = Math.max(1, Math.floor(intervalMs / 60000));
+  const cronExpression = `*/${intervalMinutes} * * * *`; // Every X minutes
 
   const job = new CronJob(cronExpression, runAutoRangeBot, null, false);
 
   if (config.BOT_ENABLED) {
     job.start();
-    botLogger.info({ intervalMs }, 'Smart auto-range bot started');
+    botLogger.info({ intervalMs, intervalMinutes }, 'Smart auto-range bot started');
   }
 
   return job;
