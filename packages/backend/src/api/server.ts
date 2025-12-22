@@ -12,6 +12,7 @@ import { notificationsRouter } from './routes/notifications.js';
 import { positionCacheRouter } from './routes/position-cache.js';
 import { healthRouter } from './routes/health.js';
 import { pricesRouter } from './routes/prices.js';
+import { swapRouter } from './routes/swap.js';
 import { initializeDatabase, healthCheck as dbHealthCheck, getStats as dbStats } from '../services/database.js';
 import { memoryCache } from '../services/cache.js';
 import { rpcManager } from '../services/rpc-manager.js';
@@ -87,6 +88,7 @@ export function createServer() {
   app.use('/api/notifications', notificationsRouter);
   app.use('/api/position-cache', positionCacheRouter);
   app.use('/api/prices', pricesRouter);
+  app.use('/api/swap', swapRouter);
 
   // Error handling
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {

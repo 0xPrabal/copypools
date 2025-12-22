@@ -1,0 +1,298 @@
+import { Router, Request, Response } from 'express';
+import axios from 'axios';
+import { config } from '../../config/index.js';
+import { logger } from '../../utils/logger.js';
+
+const swapRouter = Router();
+const swapLogger = logger.child({ module: 'swap-api' });
+
+// Chain-specific 0x API URLs
+const ZEROX_API_URLS: Record<number, string> = {
+  1: 'https://api.0x.org', // Mainnet
+  8453: 'https://base.api.0x.org', // Base
+  11155111: 'https://sepolia.api.0x.org', // Sepolia
+};
+
+// WETH addresses per chain
+const WETH_ADDRESSES: Record<number, string> = {
+  1: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+  8453: '0x4200000000000000000000000000000000000006',
+  11155111: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9',
+};
+
+interface SwapQuoteRequest {
+  sellToken: string;
+  buyToken: string;
+  sellAmount: string;
+  chainId: number;
+  slippagePercentage?: string;
+}
+
+interface SwapQuoteResponse {
+  router: string;
+  data: string;
+  expectedOutput: string;
+  priceImpact: number;
+  gasEstimate?: string;
+}
+
+/**
+ * Get swap quote from 0x API
+ * POST /api/swap/quote
+ */
+swapRouter.post('/quote', async (req: Request, res: Response) => {
+  try {
+    const {
+      sellToken,
+      buyToken,
+      sellAmount,
+      chainId,
+      slippagePercentage = '0.01', // 1% default
+    } = req.body as SwapQuoteRequest;
+
+    // Validate required fields
+    if (!sellToken || !buyToken || !sellAmount || !chainId) {
+      return res.status(400).json({
+        error: 'Missing required fields: sellToken, buyToken, sellAmount, chainId',
+      });
+    }
+
+    // Check if 0x API key is configured
+    if (!config.ZEROX_API_KEY) {
+      swapLogger.warn('0x API key not configured');
+      return res.status(503).json({
+        error: 'Swap service unavailable - API key not configured',
+      });
+    }
+
+    // Get chain-specific API URL
+    const apiUrl = ZEROX_API_URLS[chainId];
+    if (!apiUrl) {
+      return res.status(400).json({
+        error: `Unsupported chain ID: ${chainId}`,
+      });
+    }
+
+    // Handle native ETH - convert to WETH for 0x API
+    const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+    const weth = WETH_ADDRESSES[chainId];
+
+    const normalizedSellToken = sellToken.toLowerCase() === ZERO_ADDRESS.toLowerCase()
+      ? weth
+      : sellToken;
+    const normalizedBuyToken = buyToken.toLowerCase() === ZERO_ADDRESS.toLowerCase()
+      ? weth
+      : buyToken;
+
+    swapLogger.info({
+      sellToken: normalizedSellToken,
+      buyToken: normalizedBuyToken,
+      sellAmount,
+      chainId,
+    }, 'Fetching 0x swap quote');
+
+    // Call 0x API
+    const response = await axios.get(`${apiUrl}/swap/v1/quote`, {
+      headers: {
+        '0x-api-key': config.ZEROX_API_KEY,
+      },
+      params: {
+        sellToken: normalizedSellToken,
+        buyToken: normalizedBuyToken,
+        sellAmount,
+        slippagePercentage,
+        skipValidation: true, // Skip on-chain validation for quote
+      },
+    });
+
+    const data = response.data;
+
+    const quoteResponse: SwapQuoteResponse = {
+      router: data.to,
+      data: data.data,
+      expectedOutput: data.buyAmount,
+      priceImpact: parseFloat(data.estimatedPriceImpact || '0'),
+      gasEstimate: data.estimatedGas,
+    };
+
+    swapLogger.info({
+      expectedOutput: quoteResponse.expectedOutput,
+      priceImpact: quoteResponse.priceImpact,
+    }, '0x quote received');
+
+    return res.json(quoteResponse);
+  } catch (error: any) {
+    if (axios.isAxiosError(error)) {
+      swapLogger.error({
+        status: error.response?.status,
+        data: error.response?.data,
+      }, '0x API error');
+
+      // Return specific error from 0x
+      if (error.response?.status === 400) {
+        return res.status(400).json({
+          error: error.response?.data?.reason || 'Invalid swap parameters',
+          validationErrors: error.response?.data?.validationErrors,
+        });
+      }
+
+      return res.status(error.response?.status || 500).json({
+        error: 'Failed to get swap quote',
+        details: error.response?.data?.reason,
+      });
+    }
+
+    swapLogger.error({ error }, 'Swap quote failed');
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Get swap price (lightweight, for UI estimates)
+ * GET /api/swap/price
+ */
+swapRouter.get('/price', async (req: Request, res: Response) => {
+  try {
+    const { sellToken, buyToken, sellAmount, chainId } = req.query;
+
+    if (!sellToken || !buyToken || !sellAmount || !chainId) {
+      return res.status(400).json({
+        error: 'Missing required query params: sellToken, buyToken, sellAmount, chainId',
+      });
+    }
+
+    if (!config.ZEROX_API_KEY) {
+      return res.status(503).json({ error: 'Swap service unavailable' });
+    }
+
+    const apiUrl = ZEROX_API_URLS[Number(chainId)];
+    if (!apiUrl) {
+      return res.status(400).json({ error: `Unsupported chain ID: ${chainId}` });
+    }
+
+    // Handle native ETH
+    const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+    const weth = WETH_ADDRESSES[Number(chainId)];
+
+    const normalizedSellToken = (sellToken as string).toLowerCase() === ZERO_ADDRESS.toLowerCase()
+      ? weth
+      : sellToken;
+    const normalizedBuyToken = (buyToken as string).toLowerCase() === ZERO_ADDRESS.toLowerCase()
+      ? weth
+      : buyToken;
+
+    const response = await axios.get(`${apiUrl}/swap/v1/price`, {
+      headers: {
+        '0x-api-key': config.ZEROX_API_KEY,
+      },
+      params: {
+        sellToken: normalizedSellToken,
+        buyToken: normalizedBuyToken,
+        sellAmount,
+      },
+    });
+
+    return res.json({
+      buyAmount: response.data.buyAmount,
+      price: response.data.price,
+      estimatedPriceImpact: response.data.estimatedPriceImpact,
+    });
+  } catch (error: any) {
+    swapLogger.error({ error }, 'Swap price failed');
+    return res.status(500).json({ error: 'Failed to get swap price' });
+  }
+});
+
+/**
+ * Calculate optimal zap amounts for a position
+ * POST /api/swap/zap-calculate
+ */
+swapRouter.post('/zap-calculate', async (req: Request, res: Response) => {
+  try {
+    const {
+      inputToken,
+      inputAmount,
+      token0,
+      token1,
+      sqrtPriceX96,
+      tickLower,
+      tickUpper,
+      chainId,
+    } = req.body;
+
+    if (!inputToken || !inputAmount || !token0 || !token1 || !sqrtPriceX96 || tickLower === undefined || tickUpper === undefined || !chainId) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+      });
+    }
+
+    // Calculate optimal ratio based on current price and range
+    const Q96 = BigInt(2) ** BigInt(96);
+    const sqrtPrice = BigInt(sqrtPriceX96);
+    const price = Number((sqrtPrice * sqrtPrice * BigInt(10) ** BigInt(18)) / Q96 / Q96) / 1e18;
+
+    const sqrtRatioA = Math.sqrt(1.0001 ** tickLower);
+    const sqrtRatioB = Math.sqrt(1.0001 ** tickUpper);
+    const sqrtPriceNum = Math.sqrt(price);
+
+    let ratio0: number;
+    let ratio1: number;
+
+    if (sqrtPriceNum <= sqrtRatioA) {
+      ratio0 = 100;
+      ratio1 = 0;
+    } else if (sqrtPriceNum >= sqrtRatioB) {
+      ratio0 = 0;
+      ratio1 = 100;
+    } else {
+      const amount0 = (1 / sqrtPriceNum - 1 / sqrtRatioB) * 1e18;
+      const amount1 = (sqrtPriceNum - sqrtRatioA) * 1e18;
+      const total = amount0 * price + amount1;
+      ratio0 = Math.round((amount0 * price / total) * 100);
+      ratio1 = 100 - ratio0;
+    }
+
+    // Determine if input is token0 or token1
+    const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+    const weth = WETH_ADDRESSES[chainId];
+
+    const normalizedInput = inputToken.toLowerCase() === ZERO_ADDRESS.toLowerCase()
+      ? weth.toLowerCase()
+      : inputToken.toLowerCase();
+    const normalizedToken0 = token0.toLowerCase() === ZERO_ADDRESS.toLowerCase()
+      ? weth.toLowerCase()
+      : token0.toLowerCase();
+
+    const inputIsToken0 = normalizedInput === normalizedToken0;
+
+    // Calculate swap amount
+    const inputAmountBn = BigInt(inputAmount);
+    let swapAmount: bigint;
+    let swapFromToken: string;
+    let swapToToken: string;
+
+    if (inputIsToken0) {
+      swapAmount = (inputAmountBn * BigInt(ratio1)) / 100n;
+      swapFromToken = token0;
+      swapToToken = token1;
+    } else {
+      swapAmount = (inputAmountBn * BigInt(ratio0)) / 100n;
+      swapFromToken = token1;
+      swapToToken = token0;
+    }
+
+    return res.json({
+      ratio0,
+      ratio1,
+      swapAmount: swapAmount.toString(),
+      swapFromToken,
+      swapToToken,
+      remainingInput: (inputAmountBn - swapAmount).toString(),
+    });
+  } catch (error: any) {
+    swapLogger.error({ error }, 'Zap calculation failed');
+    return res.status(500).json({ error: 'Failed to calculate zap amounts' });
+  }
+});
+
+export { swapRouter };

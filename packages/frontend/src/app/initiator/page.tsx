@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useAccount, useReadContract, useBalance, useChainId } from 'wagmi';
-import { Plus, Loader2, AlertCircle, Info } from 'lucide-react';
+import { Plus, Loader2, AlertCircle, Info, Zap, Settings } from 'lucide-react';
 import { parseUnits, formatUnits, keccak256, encodeAbiParameters } from 'viem';
 import { useV4Utils } from '@/hooks/useV4Utils';
 import { useTokenApproval } from '@/hooks/useTokenApproval';
@@ -11,6 +11,7 @@ import { getContracts, CHAIN_IDS } from '@/config/contracts';
 import ERC20Abi from '@/abis/ERC20.json';
 import StateViewAbi from '@/abis/StateView.json';
 import { getTickSpacing, calculateTickRange, getFullRangeTicks, getTickFromSqrtPrice } from '@/utils/tickMath';
+import { OneClickMint } from '@/components/position/one-click-mint';
 
 // Tokens per chain - Comprehensive list from Uniswap default token list
 const TOKENS_BY_CHAIN: Record<number, Array<{ symbol: string; address: string; decimals: number; isNative?: boolean }>> = {
@@ -75,6 +76,7 @@ export default function InitiatorPage() {
   const CONTRACTS = getContracts(chainId);
   const { showToast } = useToast();
   const [step, setStep] = useState(1);
+  const [mode, setMode] = useState<'zap' | 'advanced'>('zap');
 
   // Get tokens for current chain
   const TOKENS = useMemo(() => TOKENS_BY_CHAIN[chainId] || TOKENS_BY_CHAIN[CHAIN_IDS.BASE], [chainId]);
@@ -439,32 +441,65 @@ export default function InitiatorPage() {
         </p>
       </div>
 
-      {/* Step Indicator */}
-      <div className="flex items-center gap-4 mb-8">
-        {[1, 2, 3].map((s) => (
-          <div key={s} className="flex items-center flex-1">
-            <div
-              className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
-                s <= step
-                  ? 'bg-primary-500 text-white'
-                  : 'bg-gray-800 text-gray-400'
-              }`}
-            >
-              {s}
-            </div>
-            {s < 3 && (
-              <div
-                className={`flex-1 h-1 mx-2 ${
-                  s < step ? 'bg-primary-500' : 'bg-gray-800'
-                }`}
-              />
-            )}
-          </div>
-        ))}
+      {/* Mode Toggle */}
+      <div className="flex items-center gap-2 mb-8 p-1 bg-gray-800/50 rounded-xl w-fit">
+        <button
+          onClick={() => setMode('zap')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+            mode === 'zap'
+              ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          <Zap size={16} />
+          One-Click Zap
+        </button>
+        <button
+          onClick={() => setMode('advanced')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+            mode === 'advanced'
+              ? 'bg-primary-500 text-white shadow-lg'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          <Settings size={16} />
+          Advanced
+        </button>
       </div>
 
+      {/* One-Click Zap Mode */}
+      {mode === 'zap' && (
+        <OneClickMint />
+      )}
+
+      {/* Advanced Mode - Step Indicator */}
+      {mode === 'advanced' && (
+        <div className="flex items-center gap-4 mb-8">
+          {[1, 2, 3].map((s) => (
+            <div key={s} className="flex items-center flex-1">
+              <div
+                className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
+                  s <= step
+                    ? 'bg-primary-500 text-white'
+                    : 'bg-gray-800 text-gray-400'
+                }`}
+              >
+                {s}
+              </div>
+              {s < 3 && (
+                <div
+                  className={`flex-1 h-1 mx-2 ${
+                    s < step ? 'bg-primary-500' : 'bg-gray-800'
+                  }`}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Step 1: Select Pool */}
-      {step === 1 && (
+      {mode === 'advanced' && step === 1 && (
         <div className="card space-y-6">
           <div>
             <h2 className="text-xl font-semibold mb-4">Select Pool</h2>
@@ -537,7 +572,7 @@ export default function InitiatorPage() {
       )}
 
       {/* Step 2: Set Price Range */}
-      {step === 2 && (
+      {mode === 'advanced' && step === 2 && (
         <div className="card space-y-6">
           <div>
             <h2 className="text-xl font-semibold mb-4">Set Price Range</h2>
@@ -633,7 +668,7 @@ export default function InitiatorPage() {
       )}
 
       {/* Step 3: Deposit Amounts */}
-      {step === 3 && (
+      {mode === 'advanced' && step === 3 && (
         <div className="card space-y-6">
           <div>
             <h2 className="text-xl font-semibold mb-4">Deposit Amounts</h2>
@@ -790,7 +825,7 @@ export default function InitiatorPage() {
       )}
 
       {/* Help Section - Chain-specific info */}
-      {chainId === CHAIN_IDS.SEPOLIA && (
+      {mode === 'advanced' && chainId === CHAIN_IDS.SEPOLIA && (
         <div className="card mt-8 border-blue-500/20 bg-blue-500/5">
           <div className="flex items-start gap-3">
             <AlertCircle className="text-blue-400 mt-1" size={20} />
@@ -828,7 +863,7 @@ export default function InitiatorPage() {
         </div>
       )}
 
-      {chainId === CHAIN_IDS.BASE && (
+      {mode === 'advanced' && chainId === CHAIN_IDS.BASE && (
         <div className="card mt-8 border-blue-500/20 bg-blue-500/5">
           <div className="flex items-start gap-3">
             <Info className="text-blue-400 mt-1" size={20} />
