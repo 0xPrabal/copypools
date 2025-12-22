@@ -592,16 +592,13 @@ export function getHealthyClient(chainId: number): PublicClient {
 }
 
 /**
- * Execute an operation with rate limit monitoring.
+ * Execute a non-RPC operation with rate limiting.
  *
- * NOTE: This function does NOT acquire a rate limit token because RPC calls
- * made through getHealthyClient() are already rate-limited via the transport's
- * onFetchRequest callback. Acquiring here would cause double token consumption.
- *
- * Use this for monitoring queue status during batch operations.
- * For non-RPC operations that need rate limiting, call rpcManager.acquireRateLimit() directly.
+ * Use this for external API calls (e.g., 0x API, subgraph) that should share
+ * the global rate limit pool. Do NOT use for RPC operations through
+ * getHealthyClient() as those are already rate-limited at the transport layer.
  */
-export async function withRateLimit<T>(operation: () => Promise<T>): Promise<T> {
+export async function withExternalRateLimit<T>(operation: () => Promise<T>): Promise<T> {
   const limiter = rpcManager.getRateLimitStats();
 
   // Log warning if queue is building up
@@ -609,9 +606,21 @@ export async function withRateLimit<T>(operation: () => Promise<T>): Promise<T> 
     rpcLogger.warn({ queueLength: limiter.queueLength }, 'Rate limit queue building up');
   }
 
-  // Do NOT acquire token here - RPC transport already handles rate limiting
-  // in onFetchRequest callback. Acquiring here would cause double consumption.
+  // Acquire rate limit token before executing non-RPC operation
+  await rpcManager.acquireRateLimit();
 
+  return operation();
+}
+
+/**
+ * @deprecated Use withExternalRateLimit for non-RPC operations.
+ * RPC operations through getHealthyClient() are automatically rate-limited.
+ *
+ * This function is kept for backward compatibility but does nothing.
+ */
+export async function withRateLimit<T>(operation: () => Promise<T>): Promise<T> {
+  // No-op: RPC calls are rate-limited at transport layer
+  // Non-RPC calls should use withExternalRateLimit instead
   return operation();
 }
 
