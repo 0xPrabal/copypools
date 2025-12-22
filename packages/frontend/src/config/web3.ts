@@ -23,15 +23,30 @@ const baseRpcs = [
 
 export const config = createConfig({
   chains: [base, sepolia],
+  // Reduce polling frequency
+  pollingInterval: 30_000, // Poll every 30 seconds instead of default 4 seconds
+  batch: {
+    multicall: {
+      wait: 100, // Batch calls within 100ms window
+    },
+  },
   transports: {
     // Disable ranking to prevent constant net_listening polls (~5k requests/hour)
     // Fallback will still work - just uses RPCs in order instead of by latency
     [sepolia.id]: fallback(
-      sepoliaRpcs.map(url => http(url, { timeout: 20_000 })),
+      sepoliaRpcs.map(url => http(url, {
+        timeout: 20_000,
+        batch: true, // Enable batching
+        retryDelay: 1000,
+      })),
       { rank: false, retryCount: 2 }
     ),
     [base.id]: fallback(
-      baseRpcs.map(url => http(url, { timeout: 20_000 })),
+      baseRpcs.map(url => http(url, {
+        timeout: 20_000,
+        batch: true, // Enable batching
+        retryDelay: 1000,
+      })),
       { rank: false, retryCount: 2 }
     ),
   },
