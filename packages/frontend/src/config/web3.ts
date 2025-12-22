@@ -24,8 +24,16 @@ const baseRpcs = [
 export const config = createConfig({
   chains: [base, sepolia],
   transports: {
-    [sepolia.id]: fallback(sepoliaRpcs.map(url => http(url)), { rank: true, retryCount: 2 }),
-    [base.id]: fallback(baseRpcs.map(url => http(url)), { rank: true, retryCount: 2 }),
+    // Disable ranking to prevent constant net_listening polls (~5k requests/hour)
+    // Fallback will still work - just uses RPCs in order instead of by latency
+    [sepolia.id]: fallback(
+      sepoliaRpcs.map(url => http(url, { timeout: 20_000 })),
+      { rank: false, retryCount: 2 }
+    ),
+    [base.id]: fallback(
+      baseRpcs.map(url => http(url, { timeout: 20_000 })),
+      { rank: false, retryCount: 2 }
+    ),
   },
 });
 

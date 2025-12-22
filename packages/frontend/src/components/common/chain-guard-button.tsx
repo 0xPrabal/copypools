@@ -80,10 +80,14 @@ export function ChainGuardButton({
     }
   };
 
-  const handleSwitchSuccess = () => {
+  const handleSwitchSuccess = async () => {
     // Execute the action after successful switch
     setShowModal(false);
-    onClick();
+    try {
+      await onClick();
+    } catch (error) {
+      console.error('Transaction failed after chain switch:', error);
+    }
   };
 
   return (
@@ -169,9 +173,13 @@ export function withChainGuard<P extends { onClick?: () => void }>(
           isSwitching={isSwitching}
           switchError={null}
           onSwitch={handleSwitch}
-          onSwitchSuccess={() => {
+          onSwitchSuccess={async () => {
             setShowModal(false);
-            props.onClick?.();
+            try {
+              await props.onClick?.();
+            } catch (error) {
+              console.error('Transaction failed after chain switch:', error);
+            }
           }}
         />
       </>
