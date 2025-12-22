@@ -8,6 +8,12 @@ import V4UtilsAbi from '@/abis/V4Utils.json';
 import StateViewAbi from '@/abis/StateView.json';
 import { getTickSpacing, calculateTickRange, getFullRangeTicks } from '@/utils/tickMath';
 
+// Known 0x Exchange Proxy addresses
+const ZEROX_EXCHANGE_PROXY: Record<number, `0x${string}`> = {
+  [CHAIN_IDS.BASE]: '0xDef1C0ded9bec7F1a1670819833240f027b25EfF',
+  [CHAIN_IDS.SEPOLIA]: '0xDef1C0ded9bec7F1a1670819833240f027b25EfF',
+};
+
 // WETH addresses per chain
 const WETH_ADDRESSES: Record<number, `0x${string}`> = {
   [CHAIN_IDS.BASE]: '0x4200000000000000000000000000000000000006',
@@ -135,6 +141,24 @@ export function useZapLiquidity() {
 
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [zapError, setZapError] = useState<string | null>(null);
+
+  /**
+   * Check if a router is approved on V4Utils
+   */
+  const checkRouterApproved = useCallback(async (router: `0x${string}`): Promise<boolean> => {
+    try {
+      const isApproved = await publicClient?.readContract({
+        address: CONTRACTS.V4_UTILS,
+        abi: V4UtilsAbi,
+        functionName: 'approvedRouters',
+        args: [router],
+      });
+      return isApproved as boolean;
+    } catch (error) {
+      console.warn('Failed to check router approval:', error);
+      return false;
+    }
+  }, [publicClient, CONTRACTS]);
 
   /**
    * Get a quote for the zap operation
@@ -417,11 +441,23 @@ export function useZapLiquidity() {
 
         const quote = await getSwapQuote(sellToken, buyToken, swapAmount, chainId);
         if (quote) {
+          // Check if the router is approved on V4Utils
+          const routerApproved = await checkRouterApproved(quote.router as `0x${string}`);
+          if (!routerApproved) {
+            const knownProxy = ZEROX_EXCHANGE_PROXY[chainId];
+            throw new Error(
+              `Swap router (${quote.router}) is not approved on V4Utils. ` +
+              `The contract owner needs to call setRouterApproval(${knownProxy || quote.router}, true) to enable One-Click Zap.`
+            );
+          }
+
           // Encode router and data for V4Utils contract
           swapData = encodeAbiParameters(
             [{ type: 'address' }, { type: 'bytes' }],
             [quote.router, quote.data]
           ) as `0x${string}`;
+        } else {
+          throw new Error('Failed to get swap quote from 0x. Please try again.');
         }
       }
 
@@ -499,11 +535,12 @@ export function useZapLiquidity() {
       setZapError(err.message || 'Failed to execute zap');
       throw err;
     }
-  }, [chainId, CONTRACTS, publicClient, writeContract]);
+  }, [chainId, CONTRACTS, publicClient, writeContract, checkRouterApproved]);
 
   return {
     getZapQuote,
     executeZap,
+    checkRouterApproved,
     hash,
     isPending,
     isConfirming,

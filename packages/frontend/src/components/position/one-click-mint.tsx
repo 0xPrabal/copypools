@@ -19,6 +19,12 @@ import { useToast } from '@/components/common/toast';
 import { getContracts, CHAIN_IDS } from '@/config/contracts';
 import ERC20Abi from '@/abis/ERC20.json';
 
+// Known 0x Exchange Proxy addresses
+const ZEROX_EXCHANGE_PROXY: Record<number, `0x${string}`> = {
+  [CHAIN_IDS.BASE]: '0xDef1C0ded9bec7F1a1670819833240f027b25EfF',
+  [CHAIN_IDS.SEPOLIA]: '0xDef1C0ded9bec7F1a1670819833240f027b25EfF',
+};
+
 // Token lists per chain
 const TOKENS_BY_CHAIN: Record<number, ZapToken[]> = {
   [CHAIN_IDS.BASE]: [
@@ -169,6 +175,7 @@ export function OneClickMint({ onSuccess }: OneClickMintProps) {
   const {
     getZapQuote,
     executeZap,
+    checkRouterApproved,
     hash,
     isPending,
     isConfirming,
@@ -176,6 +183,31 @@ export function OneClickMint({ onSuccess }: OneClickMintProps) {
     error,
     quoteLoading,
   } = useZapLiquidity();
+
+  // Router approval status
+  const [routerApproved, setRouterApproved] = useState<boolean | null>(null);
+  const [checkingRouter, setCheckingRouter] = useState(false);
+
+  // Check router approval on mount and chain change
+  useEffect(() => {
+    const checkRouter = async () => {
+      const proxy = ZEROX_EXCHANGE_PROXY[chainId];
+      if (!proxy) {
+        setRouterApproved(false);
+        return;
+      }
+      setCheckingRouter(true);
+      try {
+        const approved = await checkRouterApproved(proxy);
+        setRouterApproved(approved);
+      } catch (err) {
+        console.warn('Failed to check router approval:', err);
+        setRouterApproved(null);
+      }
+      setCheckingRouter(false);
+    };
+    checkRouter();
+  }, [chainId, checkRouterApproved]);
 
   // Check if input token is native ETH
   const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
@@ -556,13 +588,23 @@ export function OneClickMint({ onSuccess }: OneClickMintProps) {
           ) : (
             <button
               onClick={handleZap}
-              disabled={isProcessing || !inputAmount || !quote}
-              className="btn-primary w-full py-4 flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500"
+              disabled={isProcessing || !inputAmount || !quote || routerApproved === false}
+              className="btn-primary w-full py-4 flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 disabled:opacity-50"
             >
               {isProcessing ? (
                 <>
                   <Loader2 className="animate-spin" size={18} />
                   {isPending ? 'Confirm in Wallet...' : 'Creating Position...'}
+                </>
+              ) : checkingRouter ? (
+                <>
+                  <Loader2 className="animate-spin" size={18} />
+                  Checking Router...
+                </>
+              ) : routerApproved === false ? (
+                <>
+                  <AlertCircle size={18} />
+                  Router Not Approved
                 </>
               ) : (
                 <>
@@ -573,6 +615,22 @@ export function OneClickMint({ onSuccess }: OneClickMintProps) {
             </button>
           )}
         </div>
+
+        {/* Router Warning */}
+        {routerApproved === false && (
+          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4 flex items-start gap-3 animate-fade-in">
+            <AlertCircle className="text-yellow-400 mt-0.5 flex-shrink-0" size={18} />
+            <div>
+              <p className="text-sm font-medium text-yellow-300 mb-1">
+                Swap Router Not Approved
+              </p>
+              <p className="text-xs text-yellow-200/80">
+                One-Click Zap requires the 0x Exchange Proxy to be approved on the V4Utils contract.
+                The contract owner needs to call <code className="bg-yellow-500/20 px-1 rounded">setRouterApproval({ZEROX_EXCHANGE_PROXY[chainId]?.slice(0, 10)}..., true)</code> to enable this feature.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Info Box */}
         <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-3 flex items-start gap-2">
