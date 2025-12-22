@@ -37,25 +37,29 @@ const BASE_RPCS = [
   "https://base.llamarpc.com",
 ].filter(Boolean) as string[];
 
-// Sepolia RPC URLs with fallbacks
+// Sepolia RPC URLs with fallbacks - prioritize reliable public RPCs
 const SEPOLIA_RPCS = [
   process.env.QUICKNODE_SEPOLIA_RPC_URL,
+  process.env.ALCHEMY_SEPOLIA_RPC_URL,
+  process.env.INFURA_SEPOLIA_RPC_URL,
   process.env.PONDER_RPC_URL_11155111,
-  "https://rpc.sepolia.org",
-  "https://ethereum-sepolia-rpc.publicnode.com",
-  "https://sepolia.drpc.org",
-  "https://rpc2.sepolia.org",
+  "https://ethereum-sepolia-rpc.publicnode.com",  // PublicNode - reliable
+  "https://sepolia.gateway.tenderly.co",          // Tenderly - good limits
+  "https://rpc.ankr.com/eth_sepolia",             // Ankr - decent limits
+  "https://sepolia.drpc.org",                     // dRPC
+  "https://rpc.sepolia.org",                      // Official - rate limited
+  "https://rpc2.sepolia.org",                     // Official backup
 ].filter(Boolean) as string[];
 
-// Create fallback transports
+// Create fallback transports - disable ranking to prevent constant RPC pinging
 const baseTransport = fallback(
-  BASE_RPCS.map((url) => http(url, { timeout: 30_000, retryCount: 2 })),
-  { rank: true }
+  BASE_RPCS.map((url) => http(url, { timeout: 30_000, retryCount: 3 })),
+  { rank: false, retryCount: 3 }  // Disable ranking to reduce RPC requests
 );
 
 const sepoliaTransport = fallback(
-  SEPOLIA_RPCS.map((url) => http(url, { timeout: 30_000, retryCount: 2 })),
-  { rank: true }
+  SEPOLIA_RPCS.map((url) => http(url, { timeout: 30_000, retryCount: 3 })),
+  { rank: false, retryCount: 3 }  // Disable ranking to reduce RPC requests
 );
 
 export default createConfig({
@@ -73,8 +77,8 @@ export default createConfig({
     sepolia: {
       id: 11155111,
       transport: sepoliaTransport,
-      pollingInterval: 120_000, // Poll every 2 minutes (optimized from 60s)
-      maxRequestsPerSecond: 2,  // Further reduced for testnet (was 5)
+      pollingInterval: 300_000, // Poll every 5 minutes (reduced for testnet)
+      maxRequestsPerSecond: 1,  // Very low rate for free public RPCs
     },
   },
   contracts: {
