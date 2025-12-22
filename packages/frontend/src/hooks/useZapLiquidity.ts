@@ -20,8 +20,8 @@ const WETH_ADDRESSES: Record<number, `0x${string}`> = {
   [CHAIN_IDS.SEPOLIA]: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9',
 };
 
-// Backend API URL
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+// Backend API URL - use same env var as backend.ts
+const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 export interface ZapToken {
   symbol: string;
