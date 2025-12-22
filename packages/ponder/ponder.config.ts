@@ -1,5 +1,4 @@
 import { createConfig } from "ponder";
-import { http, fallback } from "viem";
 import { V4UtilsAbi } from "./abis/V4Utils";
 import { V4CompoundorAbi } from "./abis/V4Compoundor";
 import { V4AutoRangeAbi } from "./abis/V4AutoRange";
@@ -24,43 +23,29 @@ const SEPOLIA_START_BLOCK = 7500000; // Adjust to actual deployment block
 // Positions are fetched directly from chain in the backend API
 // This Ponder instance only indexes our custom contracts (V4Utils, V4Compoundor, V4AutoRange)
 
-// Base Mainnet RPC URLs with fallbacks
+// Base Mainnet RPC URLs - Ponder will load balance across these
 const BASE_RPCS = [
   process.env.INFURA_BASE_RPC_URL,
   process.env.QUICKNODE_BASE_RPC_URL,
   process.env.PONDER_RPC_URL_8453,
   "https://mainnet.base.org",
-  "https://base.drpc.org",
   "https://base-rpc.publicnode.com",
   "https://base.meowrpc.com",
   "https://1rpc.io/base",
   "https://base.llamarpc.com",
 ].filter(Boolean) as string[];
 
-// Sepolia RPC URLs with fallbacks - prioritize reliable public RPCs
+// Sepolia RPC URLs - Ponder will load balance across these
 const SEPOLIA_RPCS = [
   process.env.QUICKNODE_SEPOLIA_RPC_URL,
   process.env.ALCHEMY_SEPOLIA_RPC_URL,
   process.env.INFURA_SEPOLIA_RPC_URL,
   process.env.PONDER_RPC_URL_11155111,
-  "https://ethereum-sepolia-rpc.publicnode.com",  // PublicNode - reliable
-  "https://sepolia.gateway.tenderly.co",          // Tenderly - good limits
-  "https://rpc.ankr.com/eth_sepolia",             // Ankr - decent limits
-  "https://sepolia.drpc.org",                     // dRPC
-  "https://rpc.sepolia.org",                      // Official - rate limited
-  "https://rpc2.sepolia.org",                     // Official backup
+  "https://ethereum-sepolia-rpc.publicnode.com",
+  "https://rpc.ankr.com/eth_sepolia",
+  "https://sepolia.drpc.org",
+  "https://rpc.sepolia.org",
 ].filter(Boolean) as string[];
-
-// Create fallback transports - disable ranking to prevent constant RPC pinging
-const baseTransport = fallback(
-  BASE_RPCS.map((url) => http(url, { timeout: 30_000, retryCount: 3 })),
-  { rank: false, retryCount: 3 }  // Disable ranking to reduce RPC requests
-);
-
-const sepoliaTransport = fallback(
-  SEPOLIA_RPCS.map((url) => http(url, { timeout: 30_000, retryCount: 3 })),
-  { rank: false, retryCount: 3 }  // Disable ranking to reduce RPC requests
-);
 
 export default createConfig({
   database: {
@@ -70,15 +55,15 @@ export default createConfig({
   chains: {
     base: {
       id: 8453,
-      transport: baseTransport,
-      pollingInterval: 120_000, // Poll every 2 minutes (optimized from 60s)
-      maxRequestsPerSecond: 3,  // Further reduced rate limit (was 10)
+      rpc: BASE_RPCS.length > 0 ? BASE_RPCS : "https://mainnet.base.org",
+      pollingInterval: 120_000, // Poll every 2 minutes
+      maxRequestsPerSecond: 3,
     },
     sepolia: {
       id: 11155111,
-      transport: sepoliaTransport,
-      pollingInterval: 300_000, // Poll every 5 minutes (reduced for testnet)
-      maxRequestsPerSecond: 1,  // Very low rate for free public RPCs
+      rpc: SEPOLIA_RPCS.length > 0 ? SEPOLIA_RPCS : "https://ethereum-sepolia-rpc.publicnode.com",
+      pollingInterval: 300_000, // Poll every 5 minutes (testnet)
+      maxRequestsPerSecond: 1,
     },
   },
   contracts: {
