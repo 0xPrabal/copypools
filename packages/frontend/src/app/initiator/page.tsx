@@ -89,6 +89,7 @@ export default function InitiatorPage() {
   const [maxPrice, setMaxPrice] = useState('');
   const [amount0, setAmount0] = useState('');
   const [amount1, setAmount1] = useState('');
+  const [activeInput, setActiveInput] = useState<'amount0' | 'amount1' | null>(null);
 
   // Reset tokens when chain changes
   useEffect(() => {
@@ -195,13 +196,14 @@ export default function InitiatorPage() {
     )
   ) : null;
 
-  const { data: slot0Data } = useReadContract({
+  const { data: slot0Data, isLoading: isLoadingSlot0 } = useReadContract({
     address: CONTRACTS.STATE_VIEW,
     abi: StateViewAbi,
     functionName: 'getSlot0',
     args: poolId ? [poolId] : undefined,
     query: {
-      enabled: !!poolId && step === 3,
+      // Load slot0 data as soon as we have tokens and a range strategy selected (step 2+)
+      enabled: !!poolId && step >= 2,
     },
   });
 
@@ -253,6 +255,150 @@ export default function InitiatorPage() {
 
     return { price: displayPrice, isRealistic, warning, rawPrice: adjustedPrice };
   })();
+
+  // Calculate token ratio based on current price and tick range
+  const calculatePairedAmount = useMemo(() => {
+    if (!currentSqrtPriceX96 || currentSqrtPriceX96 === BigInt(0) || !token0Data || !token1Data || !minPrice) {
+      return null;
+    }
+
+    const tickSpacing = getTickSpacing(fee);
+    let tickLower: number;
+    let tickUpper: number;
+
+    if (minPrice === 'full') {
+      [tickLower, tickUpper] = getFullRangeTicks(tickSpacing);
+    } else if (minPrice === 'wide') {
+      [tickLower, tickUpper] = calculateTickRange(currentTick, tickSpacing, 2000);
+    } else if (minPrice === 'concentrated') {
+      [tickLower, tickUpper] = calculateTickRange(currentTick, tickSpacing, 100);
+    } else {
+      return null;
+    }
+
+    // Calculate sqrt prices for range bounds
+    const sqrtPriceLower = Math.sqrt(1.0001 ** tickLower);
+    const sqrtPriceUpper = Math.sqrt(1.0001 ** tickUpper);
+    const Q96 = BigInt(2) ** BigInt(96);
+    const sqrtPriceCurrent = Number(currentSqrtPriceX96) / Number(Q96);
+
+    // Determine if we're in range
+    const currentTickNum = currentTick;
+
+    // Get sorted token data for proper calculation
+    const sortedToken0Data = sortedToken0 === token0 ? token0Data : token1Data;
+    const sortedToken1Data = sortedToken0 === token0 ? token1Data : token0Data;
+    const isSorted = sortedToken0 === token0;
+
+    return {
+      // Calculate amount1 from amount0
+      fromAmount0ToAmount1: (inputAmount0: string): string => {
+        if (!inputAmount0 || parseFloat(inputAmount0) === 0) return '';
+
+        const amount0Wei = parseFloat(inputAmount0);
+
+        // If current tick is below range, only token0 is needed
+        if (currentTickNum <= tickLower) {
+          return '0';
+        }
+        // If current tick is above range, only token1 is needed
+        if (currentTickNum >= tickUpper) {
+          return ''; // Can't calculate - need to show that position is out of range
+        }
+
+        // Within range: calculate ratio
+        // amount0 = L * (1/sqrtP - 1/sqrtPu)
+        // amount1 = L * (sqrtP - sqrtPl)
+        // ratio = amount1/amount0 = (sqrtP - sqrtPl) / (1/sqrtP - 1/sqrtPu)
+        const numerator = sqrtPriceCurrent - sqrtPriceLower;
+        const denominator = (1 / sqrtPriceCurrent) - (1 / sqrtPriceUpper);
+
+        if (denominator === 0) return '';
+
+        const ratio = numerator / denominator;
+
+        // Adjust for decimal differences between tokens
+        const decimalAdjustment = Math.pow(10, sortedToken0Data.decimals - sortedToken1Data.decimals);
+        const amount1 = amount0Wei * ratio * decimalAdjustment;
+
+        // If tokens were swapped in sorting, swap the result
+        if (!isSorted) {
+          return (amount0Wei / ratio / decimalAdjustment).toFixed(6);
+        }
+
+        return amount1.toFixed(6);
+      },
+      // Calculate amount0 from amount1
+      fromAmount1ToAmount0: (inputAmount1: string): string => {
+        if (!inputAmount1 || parseFloat(inputAmount1) === 0) return '';
+
+        const amount1Wei = parseFloat(inputAmount1);
+
+        // If current tick is below range, only token0 is needed
+        if (currentTickNum <= tickLower) {
+          return ''; // Can't calculate - only token0 needed
+        }
+        // If current tick is above range, only token1 is needed
+        if (currentTickNum >= tickUpper) {
+          return '0';
+        }
+
+        // Within range: calculate ratio
+        const numerator = sqrtPriceCurrent - sqrtPriceLower;
+        const denominator = (1 / sqrtPriceCurrent) - (1 / sqrtPriceUpper);
+
+        if (numerator === 0) return '';
+
+        const ratio = numerator / denominator;
+
+        // Adjust for decimal differences between tokens
+        const decimalAdjustment = Math.pow(10, sortedToken0Data.decimals - sortedToken1Data.decimals);
+        const amount0 = amount1Wei / ratio / decimalAdjustment;
+
+        // If tokens were swapped in sorting, swap the result
+        if (!isSorted) {
+          return (amount1Wei * ratio * decimalAdjustment).toFixed(6);
+        }
+
+        return amount0.toFixed(6);
+      },
+      tickLower,
+      tickUpper,
+      sqrtPriceCurrent,
+      sqrtPriceLower,
+      sqrtPriceUpper,
+    };
+  }, [currentSqrtPriceX96, currentTick, token0Data, token1Data, minPrice, fee, sortedToken0, token0]);
+
+  // Auto-calculate paired token amount when user types
+  // Use refs to prevent infinite loops
+  const isAutoCalculating = useMemo(() => ({ current: false }), []);
+
+  useEffect(() => {
+    if (!calculatePairedAmount || !activeInput || isAutoCalculating.current) return;
+
+    isAutoCalculating.current = true;
+
+    if (activeInput === 'amount0' && amount0) {
+      const calculatedAmount1 = calculatePairedAmount.fromAmount0ToAmount1(amount0);
+      if (calculatedAmount1 !== '' && calculatedAmount1 !== amount1) {
+        // Trim trailing zeros for cleaner display
+        const trimmed = parseFloat(calculatedAmount1).toString();
+        setAmount1(trimmed);
+      }
+    } else if (activeInput === 'amount1' && amount1) {
+      const calculatedAmount0 = calculatePairedAmount.fromAmount1ToAmount0(amount1);
+      if (calculatedAmount0 !== '' && calculatedAmount0 !== amount0) {
+        const trimmed = parseFloat(calculatedAmount0).toString();
+        setAmount0(trimmed);
+      }
+    }
+
+    // Reset flag after a short delay to allow the state to settle
+    setTimeout(() => {
+      isAutoCalculating.current = false;
+    }, 100);
+  }, [amount0, amount1, activeInput, calculatePairedAmount, isAutoCalculating]);
 
   // Handle transaction success
   useEffect(() => {
@@ -705,9 +851,14 @@ export default function InitiatorPage() {
           <div className="space-y-4">
             <div>
               <div className="flex justify-between items-center mb-2">
-                <label className="block text-sm font-medium">
-                  {token0Data?.symbol} Amount
-                </label>
+                <div className="flex items-center gap-2">
+                  <label className="block text-sm font-medium">
+                    {token0Data?.symbol} Amount
+                  </label>
+                  {activeInput === 'amount1' && amount1 && calculatePairedAmount && (
+                    <span className="text-xs bg-primary-500/20 text-primary-400 px-1.5 py-0.5 rounded">Auto</span>
+                  )}
+                </div>
                 {balance0 != null && token0Data && (
                   <span className="text-xs text-gray-400">
                     Balance: {parseFloat(formatUnits(BigInt(balance0.toString()), token0Data.decimals)).toFixed(4)}
@@ -717,10 +868,16 @@ export default function InitiatorPage() {
               <input
                 type="number"
                 value={amount0}
-                onChange={(e) => setAmount0(e.target.value)}
+                onChange={(e) => {
+                  setActiveInput('amount0');
+                  setAmount0(e.target.value);
+                }}
+                onFocus={() => setActiveInput('amount0')}
                 placeholder="0.00"
                 step="0.01"
-                className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-primary-500"
+                className={`w-full px-4 py-3 bg-gray-800 border rounded-lg focus:outline-none focus:border-primary-500 ${
+                  activeInput === 'amount1' && amount1 ? 'border-primary-500/50' : 'border-gray-700'
+                }`}
               />
               {balance0 != null && token0Data && amount0 && parseUnits(amount0, token0Data.decimals) > BigInt(balance0.toString()) && (
                 <div className="flex items-center gap-1 mt-1 text-red-400 text-xs">
@@ -732,9 +889,14 @@ export default function InitiatorPage() {
 
             <div>
               <div className="flex justify-between items-center mb-2">
-                <label className="block text-sm font-medium">
-                  {token1Data?.symbol} Amount
-                </label>
+                <div className="flex items-center gap-2">
+                  <label className="block text-sm font-medium">
+                    {token1Data?.symbol} Amount
+                  </label>
+                  {activeInput === 'amount0' && amount0 && calculatePairedAmount && (
+                    <span className="text-xs bg-primary-500/20 text-primary-400 px-1.5 py-0.5 rounded">Auto</span>
+                  )}
+                </div>
                 {balance1 != null && token1Data && (
                   <span className="text-xs text-gray-400">
                     Balance: {parseFloat(formatUnits(BigInt(balance1.toString()), token1Data.decimals)).toFixed(4)}
@@ -744,10 +906,16 @@ export default function InitiatorPage() {
               <input
                 type="number"
                 value={amount1}
-                onChange={(e) => setAmount1(e.target.value)}
+                onChange={(e) => {
+                  setActiveInput('amount1');
+                  setAmount1(e.target.value);
+                }}
+                onFocus={() => setActiveInput('amount1')}
                 placeholder="0.00"
                 step="0.01"
-                className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-primary-500"
+                className={`w-full px-4 py-3 bg-gray-800 border rounded-lg focus:outline-none focus:border-primary-500 ${
+                  activeInput === 'amount0' && amount0 ? 'border-primary-500/50' : 'border-gray-700'
+                }`}
               />
               {balance1 != null && token1Data && amount1 && parseUnits(amount1, token1Data.decimals) > BigInt(balance1.toString()) && (
                 <div className="flex items-center gap-1 mt-1 text-red-400 text-xs">
@@ -757,6 +925,14 @@ export default function InitiatorPage() {
               )}
             </div>
           </div>
+
+          {/* Loading state for pool data */}
+          {isLoadingSlot0 && (
+            <div className="flex items-center gap-2 text-xs text-gray-400">
+              <Loader2 className="animate-spin" size={12} />
+              <span>Loading pool data...</span>
+            </div>
+          )}
 
           <div className="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-2">
             <div className="flex justify-between text-sm">
