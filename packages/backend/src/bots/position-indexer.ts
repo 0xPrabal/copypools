@@ -168,12 +168,12 @@ async function runIndexer(): Promise<void> {
   // Get current chain block
   const latestBlock = await publicClient.getBlockNumber();
 
-  // Get start block from state or use ~3 days back
-  // Base produces ~2 blocks/second, so 3 days ≈ 518,400 blocks
-  // Ensure we don't go below block 0 (for test environments or low block numbers)
-  const threeDaysAgo = latestBlock > 520000n ? latestBlock - 520000n : 0n;
+  // Get start block from state or use V4 PositionManager deployment block
+  // V4 was deployed on Base mainnet around block 39369847 (Jan 2025)
+  // This ensures we catch ALL positions, not just recent ones
+  const V4_DEPLOYMENT_BLOCK = 39369847n;
   let state = await getIndexerState();
-  let currentBlock = state?.lastIndexedBlock || threeDaysAgo;
+  let currentBlock = state?.lastIndexedBlock || V4_DEPLOYMENT_BLOCK;
 
   indexerLogger.info(
     { startBlock: currentBlock.toString(), latestBlock: latestBlock.toString() },
@@ -221,7 +221,7 @@ async function runLiveIndexer(): Promise<void> {
 
   let lastProcessedBlock = await publicClient.getBlockNumber();
 
-  // Poll for new blocks every 2 minutes (optimized from 20s to reduce RPC calls)
+  // Poll for new blocks every 1 minute for faster position updates
   setInterval(async () => {
     try {
       const currentBlock = await publicClient.getBlockNumber();
@@ -242,7 +242,7 @@ async function runLiveIndexer(): Promise<void> {
     } catch (error) {
       indexerLogger.error({ error }, 'Live indexer error');
     }
-  }, 300000); // 5 minutes (optimized from 2 min)
+  }, 60000); // 1 minute (optimized for faster position updates)
 }
 
 // Start the position indexer

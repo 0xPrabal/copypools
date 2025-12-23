@@ -17,6 +17,60 @@ router.get('/status', async (_req: Request, res: Response) => {
   res.json({ available });
 });
 
+// Trigger on-demand indexing for a specific address
+// This allows users to populate their position cache without waiting for the background indexer
+router.post('/index/:address/:chainId', validateAddress, validateChainId, async (req: Request, res: Response) => {
+  try {
+    const { address, chainId } = req.params;
+    const chainIdNum = parseInt(chainId, 10);
+
+    if (!address || isNaN(chainIdNum)) {
+      return res.status(400).json({ error: 'Invalid address or chainId' });
+    }
+
+    routeLogger.info({ address, chainId: chainIdNum }, 'Starting on-demand position indexing');
+
+    // Import blockchain service dynamically to get position token IDs
+    const { getPositionTokenIds } = await import('../../services/blockchain.js');
+
+    // This will use Alchemy NFT API or scan recent blocks and save to cache
+    const tokenIds = await getPositionTokenIds(address);
+
+    // If we found tokens, save them to the database cache
+    if (tokenIds.length > 0) {
+      const { createPublicClient, http } = await import('viem');
+      const { base } = await import('viem/chains');
+      const { config } = await import('../../config/index.js');
+
+      const client = createPublicClient({
+        chain: base,
+        transport: http(config.RPC_URL),
+      });
+      const currentBlock = await client.getBlockNumber();
+
+      await database.savePositionCache(
+        address,
+        chainIdNum,
+        currentBlock.toString(),
+        tokenIds.map(id => id.toString())
+      );
+    }
+
+    routeLogger.info({ address, chainId: chainIdNum, tokenCount: tokenIds.length }, 'On-demand indexing complete');
+
+    res.json({
+      success: true,
+      address,
+      chainId: chainIdNum,
+      tokenIds: tokenIds.map(id => id.toString()),
+      message: `Found ${tokenIds.length} position(s) and cached successfully`,
+    });
+  } catch (error) {
+    routeLogger.error({ error, params: req.params }, 'Failed to index positions on-demand');
+    res.status(500).json({ error: 'Failed to index positions' });
+  }
+});
+
 // Get position cache for an address and chain
 router.get('/:address/:chainId', validateAddress, validateChainId, async (req: Request, res: Response) => {
   try {

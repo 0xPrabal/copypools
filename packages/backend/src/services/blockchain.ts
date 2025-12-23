@@ -697,100 +697,209 @@ export interface OnChainPosition {
 }
 
 /**
- * Get all position token IDs owned by an address using Alchemy NFT API
- * This is much more efficient than scanning Transfer events
+ * Get all position token IDs owned by an address using multiple strategies:
+ * 1. Ponder indexed positions - fastest, includes ALL ownership changes (0 RPC calls)
+ * 2. Database cache (from position-indexer) - fast (0 RPC calls)
+ * 3. Alchemy NFT API - fast
+ * 4. RPC event scanning (recent 1000 blocks only) - slowest fallback
  */
 export async function getPositionTokenIds(ownerAddress: string): Promise<bigint[]> {
+  // LAYER 0: Query Ponder's position table first (0 RPC calls)
+  // Ponder indexes PositionManager Transfer events for complete ownership tracking
+  try {
+    const subgraph = await import('./subgraph.js');
+    const ponderResult = await subgraph.getPositionsByOwner(ownerAddress);
+    if (ponderResult.positions?.items?.length > 0) {
+      const tokenIds = ponderResult.positions.items.map((p: { tokenId: string }) => BigInt(p.tokenId));
+      logger.info({ owner: ownerAddress, count: tokenIds.length, source: 'ponder' }, 'Found position token IDs from Ponder');
+      return tokenIds;
+    }
+  } catch (error) {
+    logger.debug({ error, owner: ownerAddress }, 'Ponder query failed, trying other methods');
+  }
+
+  // LAYER 1: Check database position cache (from position-indexer)
+  // This is a backup in case Ponder is not running
+  try {
+    const { getPositionCache } = await import('./database.js');
+    const dbCache = await getPositionCache(ownerAddress, config.CHAIN_ID);
+    if (dbCache && dbCache.tokenIds.length > 0) {
+      const tokenIds = dbCache.tokenIds.map(id => BigInt(id));
+      logger.info({ owner: ownerAddress, count: tokenIds.length, source: 'database_cache' }, 'Found position token IDs from database cache');
+      return tokenIds;
+    }
+  } catch (error) {
+    logger.debug({ error, owner: ownerAddress }, 'Database cache not available, trying other methods');
+  }
+
   const apiKey = getAlchemyApiKey();
   const chainName = getAlchemyChainName();
 
-  // If Alchemy API is available, use NFT API for efficiency
+  // LAYER 2: If Alchemy API is available, use NFT API for efficiency
   if (apiKey) {
-    try {
-      const url = `https://${chainName}.g.alchemy.com/nft/v3/${apiKey}/getNFTsForOwner?owner=${ownerAddress}&contractAddresses[]=${POSITION_MANAGER_ADDRESS}&withMetadata=false`;
+    const url = `https://${chainName}.g.alchemy.com/nft/v3/${apiKey}/getNFTsForOwner?owner=${ownerAddress}&contractAddresses[]=${POSITION_MANAGER_ADDRESS}&withMetadata=false`;
 
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Alchemy NFT API error: ${response.status}`);
+    // Retry with exponential backoff for rate limits (429)
+    const maxRetries = 3;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const response = await fetch(url);
+
+        // Handle rate limiting with retry
+        if (response.status === 429) {
+          const retryAfter = response.headers.get('Retry-After');
+          const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : Math.pow(2, attempt) * 1000;
+          logger.warn({ owner: ownerAddress, attempt, waitTime }, 'Alchemy NFT API rate limited, retrying...');
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          continue;
+        }
+
+        if (!response.ok) {
+          throw new Error(`Alchemy NFT API error: ${response.status}`);
+        }
+
+        const data = await response.json() as { ownedNfts: Array<{ tokenId: string }> };
+        const tokenIds = data.ownedNfts.map((nft) => BigInt(nft.tokenId));
+
+        logger.info({ owner: ownerAddress, count: tokenIds.length }, 'Found position token IDs from Alchemy NFT API');
+
+        // Save to database cache for next time
+        try {
+          const { savePositionCache } = await import('./database.js');
+          const currentBlock = await publicClient.getBlockNumber();
+          await savePositionCache(ownerAddress, config.CHAIN_ID, currentBlock.toString(), tokenIds.map(id => id.toString()));
+        } catch (e) {
+          // Ignore cache save errors
+        }
+
+        return tokenIds;
+      } catch (error) {
+        if (attempt === maxRetries - 1) {
+          logger.warn({ error, owner: ownerAddress }, 'Alchemy NFT API failed after retries, falling back to event scanning');
+        }
       }
-
-      const data = await response.json() as { ownedNfts: Array<{ tokenId: string }> };
-      const tokenIds = data.ownedNfts.map((nft) => BigInt(nft.tokenId));
-
-      logger.info({ owner: ownerAddress, count: tokenIds.length }, 'Found position token IDs from Alchemy NFT API');
-      return tokenIds;
-    } catch (error) {
-      logger.warn({ error, owner: ownerAddress }, 'Alchemy NFT API failed, falling back to event scanning');
     }
   }
 
-  // Fallback: Scan Transfer events (works with any RPC but slower)
+  // LAYER 3: Fallback - Scan ONLY recent Transfer events
+  // Only scan last 1000 blocks as a fast fallback, not full history
+  // If Ponder and position_cache are properly running, this should rarely be needed
   try {
-    const currentBlock = await publicClient.getBlockNumber();
-    // Use a recent start block to avoid scanning millions of blocks
-    // V4 PositionManager on Base mainnet was deployed around block 39369847
-    const startBlock = BigInt(39369847);
+    // Check memory cache first - positions don't change often
+    const cacheKey = `position_tokens_${ownerAddress.toLowerCase()}`;
+    const cached = memoryCache.get<bigint[]>(cacheKey);
+    if (cached) {
+      logger.debug({ owner: ownerAddress, count: cached.length }, 'Position tokens from memory cache');
+      return cached;
+    }
 
-    // Use larger batch sizes since we're scanning fewer blocks
-    const BATCH_SIZE = BigInt(50000);
+    const currentBlock = await publicClient.getBlockNumber();
+
+    // Only scan recent blocks (last 1000) as a fast fallback
+    // Full history scanning should be handled by Ponder or position-indexer
+    const RECENT_BLOCKS = BigInt(1000);
+    const startBlock = currentBlock > RECENT_BLOCKS ? currentBlock - RECENT_BLOCKS : BigInt(0);
+
+    // Smaller batch size to avoid 413 errors and stay under rate limits
+    const BATCH_SIZE = BigInt(500);
     const ownedTokens = new Set<bigint>();
 
+    // Time limit to prevent request timeout (10 seconds max for recent scan)
+    const startTime = Date.now();
+    const MAX_SCAN_TIME_MS = 10000;
+
+    logger.info({ owner: ownerAddress, startBlock: startBlock.toString(), currentBlock: currentBlock.toString() }, 'Scanning recent blocks for positions (last 1000 blocks only)');
+
+    let lastScannedBlock = startBlock;
+
     for (let fromBlock = startBlock; fromBlock <= currentBlock; fromBlock += BATCH_SIZE) {
+      // Check time limit to prevent request timeout
+      if (Date.now() - startTime > MAX_SCAN_TIME_MS) {
+        logger.warn({ owner: ownerAddress, scannedBlocks: (fromBlock - startBlock).toString(), found: ownedTokens.size }, 'Scan time limit reached, returning partial results');
+        break;
+      }
+
       const toBlock = fromBlock + BATCH_SIZE - BigInt(1) > currentBlock
         ? currentBlock
         : fromBlock + BATCH_SIZE - BigInt(1);
 
-      // Get Transfer events where 'to' is the owner (mints and receives)
-      const transferToLogs = await publicClient.getLogs({
-        address: POSITION_MANAGER_ADDRESS,
-        event: {
-          type: 'event',
-          name: 'Transfer',
-          inputs: [
-            { indexed: true, name: 'from', type: 'address' },
-            { indexed: true, name: 'to', type: 'address' },
-            { indexed: true, name: 'tokenId', type: 'uint256' },
-          ],
-        },
-        args: {
-          to: ownerAddress as Address,
-        },
-        fromBlock,
-        toBlock,
-      });
+      try {
+        // Get Transfer events where 'to' is the owner (mints and receives)
+        const transferToLogs = await publicClient.getLogs({
+          address: POSITION_MANAGER_ADDRESS,
+          event: {
+            type: 'event',
+            name: 'Transfer',
+            inputs: [
+              { indexed: true, name: 'from', type: 'address' },
+              { indexed: true, name: 'to', type: 'address' },
+              { indexed: true, name: 'tokenId', type: 'uint256' },
+            ],
+          },
+          args: {
+            to: ownerAddress as Address,
+          },
+          fromBlock,
+          toBlock,
+        });
 
-      // Get Transfer events where 'from' is the owner (transfers out and burns)
-      const transferFromLogs = await publicClient.getLogs({
-        address: POSITION_MANAGER_ADDRESS,
-        event: {
-          type: 'event',
-          name: 'Transfer',
-          inputs: [
-            { indexed: true, name: 'from', type: 'address' },
-            { indexed: true, name: 'to', type: 'address' },
-            { indexed: true, name: 'tokenId', type: 'uint256' },
-          ],
-        },
-        args: {
-          from: ownerAddress as Address,
-        },
-        fromBlock,
-        toBlock,
-      });
+        // Get Transfer events where 'from' is the owner (transfers out and burns)
+        const transferFromLogs = await publicClient.getLogs({
+          address: POSITION_MANAGER_ADDRESS,
+          event: {
+            type: 'event',
+            name: 'Transfer',
+            inputs: [
+              { indexed: true, name: 'from', type: 'address' },
+              { indexed: true, name: 'to', type: 'address' },
+              { indexed: true, name: 'tokenId', type: 'uint256' },
+            ],
+          },
+          args: {
+            from: ownerAddress as Address,
+          },
+          fromBlock,
+          toBlock,
+        });
 
-      // Add tokens received
-      for (const log of transferToLogs) {
-        ownedTokens.add(log.args.tokenId as bigint);
+        // Add tokens received
+        for (const log of transferToLogs) {
+          ownedTokens.add(log.args.tokenId as bigint);
+        }
+
+        // Remove tokens sent away
+        for (const log of transferFromLogs) {
+          ownedTokens.delete(log.args.tokenId as bigint);
+        }
+
+        lastScannedBlock = toBlock;
+      } catch (batchError) {
+        logger.warn({ error: batchError, fromBlock: fromBlock.toString(), toBlock: toBlock.toString() }, 'Batch scan failed, continuing...');
+        // Continue with next batch instead of failing completely
       }
 
-      // Remove tokens sent away
-      for (const log of transferFromLogs) {
-        ownedTokens.delete(log.args.tokenId as bigint);
+      // Add delay between batches to avoid rate limiting
+      if (fromBlock + BATCH_SIZE < currentBlock) {
+        await new Promise(resolve => setTimeout(resolve, 50));
       }
     }
 
     const tokenIds = Array.from(ownedTokens);
-    logger.info({ owner: ownerAddress, count: tokenIds.length }, 'Found position token IDs from events');
+
+    // Cache for 5 minutes to avoid re-scanning
+    memoryCache.set(cacheKey, tokenIds, 5 * 60 * 1000);
+
+    logger.info({ owner: ownerAddress, count: tokenIds.length, scannedTo: lastScannedBlock.toString(), source: 'recent_scan' }, 'Found position token IDs from recent block scanning');
+
+    // Save to database cache for next time (only if we found something or completed the scan)
+    if (tokenIds.length > 0 || lastScannedBlock >= currentBlock - BATCH_SIZE) {
+      try {
+        const { savePositionCache } = await import('./database.js');
+        await savePositionCache(ownerAddress, config.CHAIN_ID, lastScannedBlock.toString(), tokenIds.map(id => id.toString()));
+      } catch (e) {
+        // Ignore cache save errors
+      }
+    }
 
     return tokenIds;
   } catch (error) {

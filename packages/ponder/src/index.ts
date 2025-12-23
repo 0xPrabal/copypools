@@ -828,6 +828,157 @@ ponder.on("V4AutoRange:Rebalanced", async ({ event, context }) => {
   }
 });
 
-// NOTE: PositionManager events are NOT indexed here to save RPC costs
-// Positions are fetched directly from chain by the backend API
-// This Ponder instance only indexes our custom contracts (V4Utils, V4Compoundor, V4AutoRange)
+// ============ PositionManager Event Handlers ============
+// Index ERC721 Transfer events to track ALL position ownership
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+// Handle PositionManager Transfer events for comprehensive position tracking
+// This catches: mints (from = 0x0), transfers, and burns (to = 0x0)
+ponder.on("PositionManager:Transfer", async ({ event, context }) => {
+  try {
+    const { from, to, tokenId } = event.args;
+    const positionId = tokenId.toString();
+    const timestamp = event.block.timestamp.toString();
+    const blockNumber = event.block.number.toString();
+
+    // MINT: from = 0x0 (position created)
+    if (from.toLowerCase() === ZERO_ADDRESS) {
+      // Check if position already exists (from V4Utils:PositionMinted)
+      const existing = await context.db.find(position, { id: positionId });
+
+      if (!existing) {
+        // Create minimal position record - pool info may be enriched by V4Utils:PositionMinted
+        // if both events fire in same transaction
+        try {
+          await context.db.insert(position).values({
+            id: positionId,
+            tokenId: positionId,
+            owner: to.toLowerCase(),
+            poolId: "unknown", // Will be updated by V4Utils:PositionMinted or on-chain fetch
+            tickLower: 0,
+            tickUpper: 0,
+            liquidity: "0",
+            depositedToken0: "0",
+            depositedToken1: "0",
+            withdrawnToken0: "0",
+            withdrawnToken1: "0",
+            collectedFeesToken0: "0",
+            collectedFeesToken1: "0",
+            createdAtTimestamp: timestamp,
+            createdAtBlockNumber: blockNumber,
+          });
+        } catch (err: any) {
+          // Handle race condition with V4Utils:PositionMinted
+          if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
+            throw err;
+          }
+        }
+
+        // Update protocol stats for new position
+        const stats = await getOrCreateProtocolStats(context, timestamp, blockNumber);
+        if (stats) {
+          await context.db.update(protocolStats, { id: "1" }).set({
+            totalPositions: stats.totalPositions + 1,
+            activePositions: stats.activePositions + 1,
+            lastUpdateTimestamp: timestamp,
+            lastUpdateBlockNumber: blockNumber,
+          });
+        }
+
+        // Update daily stats
+        const daily = await getOrCreateDailyStats(context, event.block.timestamp);
+        if (daily) {
+          await context.db.update(dailyStats, { id: daily.id }).set({
+            positionsCreated: daily.positionsCreated + 1,
+          });
+        }
+
+        // Create or update account for new owner
+        const acc = await getOrCreateAccount(context, to, timestamp);
+        if (acc) {
+          await context.db.update(account, { id: to.toLowerCase() }).set({
+            totalPositions: acc.totalPositions + 1,
+            lastActiveTimestamp: timestamp,
+          });
+        }
+      }
+      return;
+    }
+
+    // BURN: to = 0x0 (position destroyed)
+    if (to.toLowerCase() === ZERO_ADDRESS) {
+      const existing = await context.db.find(position, { id: positionId });
+      if (existing) {
+        await context.db.update(position, { id: positionId }).set({
+          closedAtTimestamp: timestamp,
+          liquidity: "0",
+        });
+
+        // Update protocol stats
+        const stats = await context.db.find(protocolStats, { id: "1" });
+        if (stats && stats.activePositions > 0) {
+          await context.db.update(protocolStats, { id: "1" }).set({
+            activePositions: stats.activePositions - 1,
+            lastUpdateTimestamp: timestamp,
+            lastUpdateBlockNumber: blockNumber,
+          });
+        }
+
+        // Update daily stats
+        const daily = await getOrCreateDailyStats(context, event.block.timestamp);
+        if (daily) {
+          await context.db.update(dailyStats, { id: daily.id }).set({
+            positionsClosed: daily.positionsClosed + 1,
+          });
+        }
+
+        // Update account stats
+        if (existing.owner) {
+          const acc = await context.db.find(account, { id: existing.owner });
+          if (acc && acc.totalPositions > 0) {
+            await context.db.update(account, { id: existing.owner }).set({
+              totalPositions: acc.totalPositions - 1,
+              lastActiveTimestamp: timestamp,
+            });
+          }
+        }
+      }
+      return;
+    }
+
+    // TRANSFER: ownership change (neither mint nor burn)
+    const existing = await context.db.find(position, { id: positionId });
+    if (existing) {
+      const previousOwner = existing.owner;
+
+      // Update position owner
+      await context.db.update(position, { id: positionId }).set({
+        owner: to.toLowerCase(),
+      });
+
+      // Update old owner's position count
+      if (previousOwner) {
+        const oldAcc = await context.db.find(account, { id: previousOwner });
+        if (oldAcc && oldAcc.totalPositions > 0) {
+          await context.db.update(account, { id: previousOwner }).set({
+            totalPositions: oldAcc.totalPositions - 1,
+            lastActiveTimestamp: timestamp,
+          });
+        }
+      }
+
+      // Update new owner's position count
+      const newAcc = await getOrCreateAccount(context, to, timestamp);
+      if (newAcc) {
+        await context.db.update(account, { id: to.toLowerCase() }).set({
+          totalPositions: newAcc.totalPositions + 1,
+          lastActiveTimestamp: timestamp,
+        });
+      }
+    }
+  } catch (error) {
+    console.error(`Error handling PositionManager:Transfer for tokenId ${event.args.tokenId}:`, error);
+    throw error;
+  }
+});

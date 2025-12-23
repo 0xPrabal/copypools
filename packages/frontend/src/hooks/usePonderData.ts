@@ -448,12 +448,16 @@ async function fetchPositionsDirectRPC(
 
   if (Number(balance) === 0) return [];
 
-  // Only scan last 500k blocks to avoid timeout
+  // OPTIMIZED: Only scan last 50k blocks (~7 hours on Base) to avoid 413/timeout errors
+  // Older positions should be indexed by the backend
   const currentBlock = await publicClient.getBlockNumber();
-  const startBlock = currentBlock - 500000n > 0n ? currentBlock - 500000n : 0n;
+  const startBlock = currentBlock - 50000n > 0n ? currentBlock - 50000n : 0n;
 
   const userTokenIds = new Set<bigint>();
-  const chunkSize = 100000n;
+  // Smaller chunk size to avoid 413 "request too large" errors
+  const chunkSize = 10000n;
+
+  console.log(`Scanning blocks ${startBlock} to ${currentBlock} for positions...`);
 
   for (let fromBlock = startBlock; fromBlock < currentBlock; fromBlock += chunkSize) {
     const toBlock = fromBlock + chunkSize > currentBlock ? currentBlock : fromBlock + chunkSize;
@@ -482,8 +486,12 @@ async function fetchPositionsDirectRPC(
       for (const log of transfersOut) {
         if (log.args.tokenId) userTokenIds.delete(log.args.tokenId);
       }
+
+      // Small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 100));
     } catch (e) {
       console.warn('Error scanning blocks:', e);
+      // Continue with next chunk instead of failing completely
     }
   }
 

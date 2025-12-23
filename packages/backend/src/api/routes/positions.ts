@@ -178,7 +178,47 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
       }
     }
 
-    // LAYER 3: Fetch fresh data from chain
+    // LAYER 3: Check Ponder's indexed position table (0 RPC calls)
+    // Ponder indexes positions from V4Utils:PositionMinted events
+    try {
+      const ponderResult = await subgraph.getPositionsByOwner(address);
+      if (ponderResult.positions?.items?.length > 0) {
+        routeLogger.info({ address, count: ponderResult.positions.items.length, layer: 'ponder' }, 'Found positions in Ponder');
+
+        // Transform Ponder format to API format
+        const positions = ponderResult.positions.items
+          .filter((p: any) => BigInt(p.liquidity || '0') > 0n)
+          .map((ponderPos: any) => ({
+            tokenId: ponderPos.tokenId,
+            owner: ponderPos.owner,
+            poolId: ponderPos.poolId,
+            poolKey: {
+              currency0: ponderPos.poolId?.split('-')[0] || '',
+              currency1: ponderPos.poolId?.split('-')[1] || '',
+              fee: parseInt(ponderPos.poolId?.split('-')[2] || '0'),
+              tickSpacing: 0, // Will be enriched if needed
+              hooks: '0x0000000000000000000000000000000000000000',
+            },
+            tickLower: ponderPos.tickLower,
+            tickUpper: ponderPos.tickUpper,
+            liquidity: ponderPos.liquidity,
+            currentTick: 0, // Not stored in Ponder
+            inRange: true,
+            compoundConfig: ponderPos.compoundConfig,
+            rangeConfig: ponderPos.rangeConfig,
+            depositedToken0: ponderPos.depositedToken0 || '0',
+            depositedToken1: ponderPos.depositedToken1 || '0',
+          }));
+
+        // Store in memory cache
+        memoryCache.set(memoryCacheKey, positions, MEMORY_CACHE_TTL);
+        return res.json(positions);
+      }
+    } catch (ponderError) {
+      routeLogger.debug({ error: ponderError, address }, 'Ponder query failed, falling back to chain');
+    }
+
+    // LAYER 4: Fetch fresh data from chain (requires RPC calls)
     routeLogger.info({ address, enrich, chainId, useLegacyPath }, 'Fetching positions from chain');
 
     let onChainPositions: any[];
