@@ -12,11 +12,11 @@ const SEPOLIA_RPCS = [
 ].filter(Boolean) as string[];
 
 const BASE_RPCS = [
-  process.env.NEXT_PUBLIC_INFURA_BASE_RPC_URL,
-  process.env.NEXT_PUBLIC_QUICKNODE_BASE_RPC_URL,
-  process.env.NEXT_PUBLIC_BASE_RPC_URL,
-  "https://mainnet.base.org",
+  process.env.NEXT_PUBLIC_QUICKNODE_BASE_RPC_URL, // QuickNode first - most reliable
+  process.env.NEXT_PUBLIC_BASE_RPC_URL,           // Secondary RPC
+  "https://mainnet.base.org",                      // Public fallbacks
   "https://base-rpc.publicnode.com",
+  process.env.NEXT_PUBLIC_INFURA_BASE_RPC_URL,    // Infura last - rate limited
 ].filter(Boolean) as string[];
 
 export const config = createConfig({

@@ -129,10 +129,14 @@ export async function startServer() {
   }
 
   const app = createServer();
-  const port = parseInt(config.PORT);
+  // Railway sets PORT env var - use it directly, fallback to config
+  const port = parseInt(process.env.PORT || config.PORT);
+  const host = '0.0.0.0'; // Explicitly bind to all interfaces for Railway
 
-  app.listen(port, () => {
-    apiLogger.info({ port }, 'API server started');
+  apiLogger.info({ port, host, envPort: process.env.PORT, configPort: config.PORT }, 'Starting HTTP server...');
+
+  app.listen(port, host, () => {
+    apiLogger.info({ port, host }, 'API server started and listening');
   });
 
   return app;
