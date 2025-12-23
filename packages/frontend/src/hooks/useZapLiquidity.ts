@@ -8,7 +8,14 @@ import V4UtilsAbi from '@/abis/V4Utils.json';
 import StateViewAbi from '@/abis/StateView.json';
 import { getTickSpacing, calculateTickRange, getFullRangeTicks } from '@/utils/tickMath';
 
-// Known 0x Exchange Proxy addresses
+// 0x AllowanceHolder addresses (v2 API)
+// This is the router address that needs to be approved on V4Utils
+const ZEROX_ALLOWANCE_HOLDER: Record<number, `0x${string}`> = {
+  [CHAIN_IDS.BASE]: '0x0000000000001fF3684f28c67538d4D072C22734',
+  [CHAIN_IDS.SEPOLIA]: '0x0000000000001fF3684f28c67538d4D072C22734',
+};
+
+// Legacy Exchange Proxy (kept for reference)
 const ZEROX_EXCHANGE_PROXY: Record<number, `0x${string}`> = {
   [CHAIN_IDS.BASE]: '0xDef1C0ded9bec7F1a1670819833240f027b25EfF',
   [CHAIN_IDS.SEPOLIA]: '0xDef1C0ded9bec7F1a1670819833240f027b25EfF',
@@ -93,7 +100,8 @@ async function getSwapQuote(
   sellToken: string,
   buyToken: string,
   sellAmount: bigint,
-  chainId: number
+  chainId: number,
+  taker: string // Required for 0x API v2
 ): Promise<{
   router: `0x${string}`;
   data: `0x${string}`;
@@ -109,6 +117,7 @@ async function getSwapQuote(
         buyToken,
         sellAmount: sellAmount.toString(),
         chainId,
+        taker, // Required for 0x API v2
       }),
     });
 
@@ -315,7 +324,7 @@ export function useZapLiquidity() {
           ? weth
           : swapToToken.address;
 
-        const quote = await getSwapQuote(sellTokenAddress, buyTokenAddress, swapAmount, chainId);
+        const quote = await getSwapQuote(sellTokenAddress, buyTokenAddress, swapAmount, chainId, params.recipient);
         if (quote) {
           expectedSwapOutput = quote.expectedOutput;
           priceImpact = quote.priceImpact;
@@ -487,15 +496,15 @@ export function useZapLiquidity() {
         const sellToken = swapFromAddress.toLowerCase() === ZERO_ADDRESS ? weth : swapFromAddress;
         const buyToken = swapToAddress.toLowerCase() === ZERO_ADDRESS ? weth : swapToAddress;
 
-        const quote = await getSwapQuote(sellToken, buyToken, swapAmount, chainId);
+        const quote = await getSwapQuote(sellToken, buyToken, swapAmount, chainId, recipient);
         if (quote) {
           // Check if the router is approved on V4Utils
           const routerApproved = await checkRouterApproved(quote.router as `0x${string}`);
           if (!routerApproved) {
-            const knownProxy = ZEROX_EXCHANGE_PROXY[chainId];
+            const allowanceHolder = ZEROX_ALLOWANCE_HOLDER[chainId];
             throw new Error(
               `Swap router (${quote.router}) is not approved on V4Utils. ` +
-              `The contract owner needs to call setRouterApproval(${knownProxy || quote.router}, true) to enable One-Click Zap.`
+              `The contract owner needs to call setRouterApproval(${allowanceHolder || quote.router}, true) to enable One-Click Zap.`
             );
           }
 

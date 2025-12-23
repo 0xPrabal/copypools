@@ -6,12 +6,11 @@ import { logger } from '../../utils/logger.js';
 const swapRouter = Router();
 const swapLogger = logger.child({ module: 'swap-api' });
 
-// Chain-specific 0x API URLs
-const ZEROX_API_URLS: Record<number, string> = {
-  1: 'https://api.0x.org', // Mainnet
-  8453: 'https://base.api.0x.org', // Base
-  11155111: 'https://sepolia.api.0x.org', // Sepolia
-};
+// 0x API v2 unified endpoint
+const ZEROX_API_URL = 'https://api.0x.org';
+
+// Supported chains for 0x API v2
+const SUPPORTED_CHAINS = [1, 8453, 11155111]; // Mainnet, Base, Sepolia
 
 // WETH addresses per chain
 const WETH_ADDRESSES: Record<number, string> = {
@@ -26,6 +25,7 @@ interface SwapQuoteRequest {
   sellAmount: string;
   chainId: number;
   slippagePercentage?: string;
+  taker?: string; // Required for v2 API
 }
 
 interface SwapQuoteResponse {
@@ -48,12 +48,13 @@ swapRouter.post('/quote', async (req: Request, res: Response) => {
       sellAmount,
       chainId,
       slippagePercentage = '0.01', // 1% default
+      taker,
     } = req.body as SwapQuoteRequest;
 
     // Validate required fields
-    if (!sellToken || !buyToken || !sellAmount || !chainId) {
+    if (!sellToken || !buyToken || !sellAmount || !chainId || !taker) {
       return res.status(400).json({
-        error: 'Missing required fields: sellToken, buyToken, sellAmount, chainId',
+        error: 'Missing required fields: sellToken, buyToken, sellAmount, chainId, taker',
       });
     }
 
@@ -65,9 +66,8 @@ swapRouter.post('/quote', async (req: Request, res: Response) => {
       });
     }
 
-    // Get chain-specific API URL
-    const apiUrl = ZEROX_API_URLS[chainId];
-    if (!apiUrl) {
+    // Check if chain is supported
+    if (!SUPPORTED_CHAINS.includes(chainId)) {
       return res.status(400).json({
         error: `Unsupported chain ID: ${chainId}`,
       });
@@ -89,30 +89,33 @@ swapRouter.post('/quote', async (req: Request, res: Response) => {
       buyToken: normalizedBuyToken,
       sellAmount,
       chainId,
-    }, 'Fetching 0x swap quote');
+    }, 'Fetching 0x swap quote (v2 API)');
 
-    // Call 0x API
-    const response = await axios.get(`${apiUrl}/swap/v1/quote`, {
+    // Call 0x API v2 - using allowance-holder flow
+    const response = await axios.get(`${ZEROX_API_URL}/swap/allowance-holder/quote`, {
       headers: {
         '0x-api-key': config.ZEROX_API_KEY,
+        '0x-version': 'v2',
       },
       params: {
+        chainId,
         sellToken: normalizedSellToken,
         buyToken: normalizedBuyToken,
         sellAmount,
-        slippagePercentage,
-        skipValidation: true, // Skip on-chain validation for quote
+        taker, // Required for v2 API
+        slippageBps: Math.round(parseFloat(slippagePercentage) * 10000), // Convert to basis points
       },
     });
 
     const data = response.data;
 
+    // v2 API response structure
     const quoteResponse: SwapQuoteResponse = {
-      router: data.to,
-      data: data.data,
+      router: data.transaction?.to || data.to,
+      data: data.transaction?.data || data.data,
       expectedOutput: data.buyAmount,
       priceImpact: parseFloat(data.estimatedPriceImpact || '0'),
-      gasEstimate: data.estimatedGas,
+      gasEstimate: data.transaction?.gas || data.gas,
     };
 
     swapLogger.info({
@@ -165,14 +168,14 @@ swapRouter.get('/price', async (req: Request, res: Response) => {
       return res.status(503).json({ error: 'Swap service unavailable' });
     }
 
-    const apiUrl = ZEROX_API_URLS[Number(chainId)];
-    if (!apiUrl) {
+    const chainIdNum = Number(chainId);
+    if (!SUPPORTED_CHAINS.includes(chainIdNum)) {
       return res.status(400).json({ error: `Unsupported chain ID: ${chainId}` });
     }
 
     // Handle native ETH
     const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
-    const weth = WETH_ADDRESSES[Number(chainId)];
+    const weth = WETH_ADDRESSES[chainIdNum];
 
     const normalizedSellToken = (sellToken as string).toLowerCase() === ZERO_ADDRESS.toLowerCase()
       ? weth
@@ -181,11 +184,14 @@ swapRouter.get('/price', async (req: Request, res: Response) => {
       ? weth
       : buyToken;
 
-    const response = await axios.get(`${apiUrl}/swap/v1/price`, {
+    // Use 0x API v2 price endpoint
+    const response = await axios.get(`${ZEROX_API_URL}/swap/allowance-holder/price`, {
       headers: {
         '0x-api-key': config.ZEROX_API_KEY,
+        '0x-version': 'v2',
       },
       params: {
+        chainId: chainIdNum,
         sellToken: normalizedSellToken,
         buyToken: normalizedBuyToken,
         sellAmount,
