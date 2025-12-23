@@ -727,10 +727,12 @@ export async function getPositionTokenIds(ownerAddress: string): Promise<bigint[
   // Fallback: Scan Transfer events (works with any RPC but slower)
   try {
     const currentBlock = await publicClient.getBlockNumber();
-    const startBlock = BigInt(9772678); // Start block
+    // Use a recent start block to avoid scanning millions of blocks
+    // V4 PositionManager on Base mainnet was deployed around block 39369847
+    const startBlock = BigInt(39369847);
 
-    // For free tier RPCs, batch in small chunks
-    const BATCH_SIZE = BigInt(10000);
+    // Use larger batch sizes since we're scanning fewer blocks
+    const BATCH_SIZE = BigInt(50000);
     const ownedTokens = new Set<bigint>();
 
     for (let fromBlock = startBlock; fromBlock <= currentBlock; fromBlock += BATCH_SIZE) {

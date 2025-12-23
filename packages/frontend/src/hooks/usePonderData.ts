@@ -288,7 +288,7 @@ const TRANSFER_EVENT_ABI = {
 
 // Start blocks for position scanning (when V4 PositionManager was deployed)
 const POSITION_MANAGER_START_BLOCKS: Record<number, bigint> = {
-  [CHAIN_IDS.BASE]: 25800000n, // Base mainnet V4 deployment
+  [CHAIN_IDS.BASE]: 39369847n, // Base mainnet V4 PositionManager (recent positions)
   [CHAIN_IDS.SEPOLIA]: 7540000n, // Sepolia V4 deployment
 };
 
