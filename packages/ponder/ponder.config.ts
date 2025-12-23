@@ -23,27 +23,27 @@ const SEPOLIA_START_BLOCK = 7500000; // Adjust to actual deployment block
 // Positions are fetched directly from chain in the backend API
 // This Ponder instance only indexes our custom contracts (V4Utils, V4Compoundor, V4AutoRange)
 
-// Base Mainnet RPC URLs - Ponder will load balance across these
+// Base Mainnet RPC URLs - Prioritize paid/reliable RPCs first
+// IMPORTANT: Keep list short to avoid spreading requests across too many endpoints
 const BASE_RPCS = [
-  process.env.INFURA_BASE_RPC_URL,
+  // Paid RPCs first (more reliable, higher limits)
   process.env.QUICKNODE_BASE_RPC_URL,
+  process.env.INFURA_BASE_RPC_URL,
   process.env.PONDER_RPC_URL_8453,
+  // Reliable free RPCs as fallback (avoid rate-limited ones like llamarpc)
   "https://mainnet.base.org",
   "https://base-rpc.publicnode.com",
-  "https://base.meowrpc.com",
-  "https://1rpc.io/base",
-  "https://base.llamarpc.com",
 ].filter(Boolean) as string[];
 
 // Sepolia RPC URLs - Ponder will load balance across these
 const SEPOLIA_RPCS = [
+  // Paid RPCs first
   process.env.QUICKNODE_SEPOLIA_RPC_URL,
   process.env.ALCHEMY_SEPOLIA_RPC_URL,
   process.env.INFURA_SEPOLIA_RPC_URL,
   process.env.PONDER_RPC_URL_11155111,
+  // Free fallbacks
   "https://ethereum-sepolia-rpc.publicnode.com",
-  "https://rpc.ankr.com/eth_sepolia",
-  "https://sepolia.drpc.org",
   "https://rpc.sepolia.org",
 ].filter(Boolean) as string[];
 
@@ -56,13 +56,13 @@ export default createConfig({
     base: {
       id: 8453,
       rpc: BASE_RPCS.length > 0 ? BASE_RPCS : "https://mainnet.base.org",
-      pollingInterval: 120_000, // Poll every 2 minutes
-      maxRequestsPerSecond: 3,
+      pollingInterval: 180_000, // Poll every 3 minutes (reduced from 2 to save RPC)
+      maxRequestsPerSecond: 1, // Reduced from 3 - be very conservative to avoid rate limits
     },
     sepolia: {
       id: 11155111,
       rpc: SEPOLIA_RPCS.length > 0 ? SEPOLIA_RPCS : "https://ethereum-sepolia-rpc.publicnode.com",
-      pollingInterval: 300_000, // Poll every 5 minutes (testnet)
+      pollingInterval: 600_000, // Poll every 10 minutes (testnet - reduced activity)
       maxRequestsPerSecond: 1,
     },
   },

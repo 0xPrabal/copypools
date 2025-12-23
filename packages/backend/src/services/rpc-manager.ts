@@ -461,7 +461,7 @@ class RpcManager {
           },
         })
       ),
-      { rank: true }
+      { rank: false } // Disabled to prevent net_listening health check spam
     );
 
     const client = createPublicClient({

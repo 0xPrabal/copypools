@@ -59,7 +59,7 @@ function createWalletClientSafe(): AppWalletClient {
     const { getValidRpcs } = require('../config/rpc.js');
     const rpcs = getValidRpcs(config.CHAIN_ID);
     const walletTransport = rpcs.length > 0
-      ? fallback(rpcs.map((rpc: { url: string }) => http(rpc.url, { timeout: 30_000 })), { rank: true })
+      ? fallback(rpcs.map((rpc: { url: string }) => http(rpc.url, { timeout: 30_000 })), { rank: false })
       : http(config.RPC_URL, { timeout: 30_000 });
 
     return createWalletClient({
