@@ -1,0 +1,20 @@
+{
+  "name": "@revert-v4/contracts",
+  "version": "1.0.0",
+  "description": "Revert V4 Contract ABIs and Addresses",
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts"
+    },
+    "./abi/*": "./*.json"
+  },
+  "files": [
+    "*.json",
+    "*.ts",
+    "!tsconfig.json"
+  ]
+}

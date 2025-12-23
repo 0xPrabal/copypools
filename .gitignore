@@ -13,6 +13,7 @@ out/
 packages/contracts/out/
 packages/contracts/cache/
 packages/contracts/broadcast/
+packages/contracts/lib/
 
 # Ponder
 packages/ponder/.ponder/
@@ -49,7 +50,7 @@ coverage/
 .vercel
 
 # Old directories (migrated to packages/)
-contracts/
+/contracts/
 copypools-backend/
 copypools-indexer/
 copypools-nextjs/
