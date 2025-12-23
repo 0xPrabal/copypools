@@ -462,6 +462,11 @@ export function useZapLiquidity() {
       // Calculate optimal ratio
       const { ratio0, ratio1 } = calculateOptimalRatio(sqrtPriceX96, tickLower, tickUpper);
 
+      console.log('=== Zap Debug ===');
+      console.log('sqrtPriceX96:', sqrtPriceX96.toString());
+      console.log('tickLower:', tickLower, 'tickUpper:', tickUpper);
+      console.log('ratio0:', ratio0, 'ratio1:', ratio1);
+
       // Handle native ETH
       const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
       const weth = WETH_ADDRESSES[chainId];
@@ -486,6 +491,10 @@ export function useZapLiquidity() {
         swapAmount = (inputAmountWei * BigInt(ratio0)) / 100n;
         swapSourceCurrency = sortedToken1.address;
       }
+
+      console.log('inputMatchesToken0:', inputMatchesToken0);
+      console.log('inputAmountWei:', inputAmountWei.toString());
+      console.log('swapAmount:', swapAmount.toString());
 
       // Get swap data from 0x API
       let swapData: `0x${string}` = '0x';
@@ -561,6 +570,13 @@ export function useZapLiquidity() {
       // Calculate ETH value to send
       const inputIsNative = inputToken.address.toLowerCase() === ZERO_ADDRESS;
       const ethValue = inputIsNative ? inputAmountWei : 0n;
+
+      console.log('=== Final Params ===');
+      console.log('amount0Desired:', amount0Desired.toString());
+      console.log('amount1Desired:', amount1Desired.toString());
+      console.log('swapSourceAmount:', swapAmount.toString());
+      console.log('swapSourceCurrency:', swapSourceCurrency);
+      console.log('ethValue:', ethValue.toString());
 
       // Estimate gas
       let gasLimit = 5000000n;
