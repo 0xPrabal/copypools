@@ -21,7 +21,8 @@ const WETH_ADDRESSES: Record<number, `0x${string}`> = {
 };
 
 // Backend API URL - use same env var as backend.ts
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+// Remove trailing slash to prevent double-slash in URLs
+const BACKEND_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001').replace(/\/$/, '');
 
 export interface ZapToken {
   symbol: string;

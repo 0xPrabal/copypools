@@ -29,7 +29,13 @@ export function createServer() {
 
   // Production middleware
   app.use(securityHeaders);
-  app.use(cors());
+  // CORS - allow all origins explicitly for production
+  app.use(cors({
+    origin: true, // Reflect the request origin
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  }));
   app.use(compression() as unknown as RequestHandler); // Gzip compression for all responses
   app.use(express.json({ limit: '1mb' }));
   app.use(requestTimeout(30000)); // 30 second timeout
