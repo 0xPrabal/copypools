@@ -1,4 +1,5 @@
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+// Remove trailing slash to prevent double-slash in URLs
+const BACKEND_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001').replace(/\/$/, '');
 
 export interface BotStatus {
   isRunning: boolean;
