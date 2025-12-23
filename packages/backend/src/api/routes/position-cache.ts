@@ -34,16 +34,20 @@ router.post('/index/:address/:chainId', validateAddress, validateChainId, async 
     const { getPositionTokenIds } = await import('../../services/blockchain.js');
 
     // This will use Alchemy NFT API or scan recent blocks and save to cache
-    const tokenIds = await getPositionTokenIds(address);
+    // Pass chainId so it uses the correct position manager address and cache
+    const tokenIds = await getPositionTokenIds(address, chainIdNum);
 
     // If we found tokens, save them to the database cache
     if (tokenIds.length > 0) {
       const { createPublicClient, http } = await import('viem');
-      const { base } = await import('viem/chains');
+      const { base, sepolia } = await import('viem/chains');
       const { config } = await import('../../config/index.js');
 
+      // Select chain based on chainIdNum
+      const chain = chainIdNum === 8453 ? base : chainIdNum === 11155111 ? sepolia : base;
+
       const client = createPublicClient({
-        chain: base,
+        chain,
         transport: http(config.RPC_URL),
       });
       const currentBlock = await client.getBlockNumber();

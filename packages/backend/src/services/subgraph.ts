@@ -11,7 +11,7 @@ const PONDER_SCHEMA = process.env.PONDER_SCHEMA || 'ponder_base';
 
 // PostgreSQL connection pool for Ponder database
 const pool = new pg.Pool({
-  connectionString: config.DATABASE_URL || 'postgresql://postgres:XEfQSzwiNBYZVKpjEWdjbfJORRsZkCNX@hopper.proxy.rlwy.net:38812/railway',
+  connectionString: config.DATABASE_URL || 'postgresql://postgres:ljDlKglFvwICtZrhyJRrKXvTuaApKOCK@nozomi.proxy.rlwy.net:55145/railway',
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,

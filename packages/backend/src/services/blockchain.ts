@@ -666,8 +666,8 @@ function getAlchemyApiKey(): string | null {
 }
 
 // Get chain name for Alchemy API
-function getAlchemyChainName(): string {
-  switch (config.CHAIN_ID) {
+function getAlchemyChainName(chainId: number = config.CHAIN_ID): string {
+  switch (chainId) {
     case 1: return 'eth-mainnet';
     case 11155111: return 'eth-sepolia';
     case 42161: return 'arb-mainnet';
@@ -676,6 +676,16 @@ function getAlchemyChainName(): string {
     case 137: return 'polygon-mainnet';
     default: return 'eth-sepolia';
   }
+}
+
+// PositionManager addresses per chain
+const POSITION_MANAGER_BY_CHAIN: Record<number, string> = {
+  8453: '0x7C5f5A4bBd8fD63184577525326123B519429bDc', // Base Mainnet
+  11155111: '0x429ba70129df741B2Ca2a85BC3A2a3328e5c09b4', // Sepolia (Uniswap V4)
+};
+
+function getPositionManagerAddress(chainId: number): string {
+  return POSITION_MANAGER_BY_CHAIN[chainId] || POSITION_MANAGER_ADDRESS;
 }
 
 export interface OnChainPosition {
@@ -703,7 +713,7 @@ export interface OnChainPosition {
  * 3. Alchemy NFT API - fast
  * 4. RPC event scanning (recent 1000 blocks only) - slowest fallback
  */
-export async function getPositionTokenIds(ownerAddress: string): Promise<bigint[]> {
+export async function getPositionTokenIds(ownerAddress: string, chainId: number = config.CHAIN_ID): Promise<bigint[]> {
   // LAYER 0: Query Ponder's position table first (0 RPC calls)
   // Ponder indexes PositionManager Transfer events for complete ownership tracking
   try {
@@ -711,7 +721,7 @@ export async function getPositionTokenIds(ownerAddress: string): Promise<bigint[
     const ponderResult = await subgraph.getPositionsByOwner(ownerAddress);
     if (ponderResult.positions?.items?.length > 0) {
       const tokenIds = ponderResult.positions.items.map((p: { tokenId: string }) => BigInt(p.tokenId));
-      logger.info({ owner: ownerAddress, count: tokenIds.length, source: 'ponder' }, 'Found position token IDs from Ponder');
+      logger.info({ owner: ownerAddress, chainId, count: tokenIds.length, source: 'ponder' }, 'Found position token IDs from Ponder');
       return tokenIds;
     }
   } catch (error) {
@@ -722,10 +732,10 @@ export async function getPositionTokenIds(ownerAddress: string): Promise<bigint[
   // This is a backup in case Ponder is not running
   try {
     const { getPositionCache } = await import('./database.js');
-    const dbCache = await getPositionCache(ownerAddress, config.CHAIN_ID);
+    const dbCache = await getPositionCache(ownerAddress, chainId);
     if (dbCache && dbCache.tokenIds.length > 0) {
       const tokenIds = dbCache.tokenIds.map(id => BigInt(id));
-      logger.info({ owner: ownerAddress, count: tokenIds.length, source: 'database_cache' }, 'Found position token IDs from database cache');
+      logger.info({ owner: ownerAddress, chainId, count: tokenIds.length, source: 'database_cache' }, 'Found position token IDs from database cache');
       return tokenIds;
     }
   } catch (error) {
@@ -733,11 +743,12 @@ export async function getPositionTokenIds(ownerAddress: string): Promise<bigint[
   }
 
   const apiKey = getAlchemyApiKey();
-  const chainName = getAlchemyChainName();
+  const chainName = getAlchemyChainName(chainId);
+  const positionManagerAddr = getPositionManagerAddress(chainId);
 
   // LAYER 2: If Alchemy API is available, use NFT API for efficiency
   if (apiKey) {
-    const url = `https://${chainName}.g.alchemy.com/nft/v3/${apiKey}/getNFTsForOwner?owner=${ownerAddress}&contractAddresses[]=${POSITION_MANAGER_ADDRESS}&withMetadata=false`;
+    const url = `https://${chainName}.g.alchemy.com/nft/v3/${apiKey}/getNFTsForOwner?owner=${ownerAddress}&contractAddresses[]=${positionManagerAddr}&withMetadata=false`;
 
     // Retry with exponential backoff for rate limits (429)
     const maxRetries = 3;
@@ -767,7 +778,7 @@ export async function getPositionTokenIds(ownerAddress: string): Promise<bigint[
         try {
           const { savePositionCache } = await import('./database.js');
           const currentBlock = await publicClient.getBlockNumber();
-          await savePositionCache(ownerAddress, config.CHAIN_ID, currentBlock.toString(), tokenIds.map(id => id.toString()));
+          await savePositionCache(ownerAddress, chainId, currentBlock.toString(), tokenIds.map(id => id.toString()));
         } catch (e) {
           // Ignore cache save errors
         }
@@ -825,8 +836,10 @@ export async function getPositionTokenIds(ownerAddress: string): Promise<bigint[
 
       try {
         // Get Transfer events where 'to' is the owner (mints and receives)
+        // Note: RPC fallback uses publicClient which is configured for config.CHAIN_ID
+        // This is acceptable since LAYER 0/1/2 are chain-aware
         const transferToLogs = await publicClient.getLogs({
-          address: POSITION_MANAGER_ADDRESS,
+          address: positionManagerAddr as Address,
           event: {
             type: 'event',
             name: 'Transfer',
@@ -845,7 +858,7 @@ export async function getPositionTokenIds(ownerAddress: string): Promise<bigint[
 
         // Get Transfer events where 'from' is the owner (transfers out and burns)
         const transferFromLogs = await publicClient.getLogs({
-          address: POSITION_MANAGER_ADDRESS,
+          address: positionManagerAddr as Address,
           event: {
             type: 'event',
             name: 'Transfer',

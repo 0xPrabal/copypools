@@ -850,6 +850,7 @@ ponder.on("PositionManager:Transfer", async ({ event, context }) => {
       if (!existing) {
         // Create minimal position record - pool info may be enriched by V4Utils:PositionMinted
         // if both events fire in same transaction
+        let inserted = false;
         try {
           await context.db.insert(position).values({
             id: positionId,
@@ -868,12 +869,18 @@ ponder.on("PositionManager:Transfer", async ({ event, context }) => {
             createdAtTimestamp: timestamp,
             createdAtBlockNumber: blockNumber,
           });
+          inserted = true;
         } catch (err: any) {
-          // Handle race condition with V4Utils:PositionMinted
-          if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
-            throw err;
+          // Handle race condition with V4Utils:PositionMinted - position already exists
+          // Return early to avoid double-counting stats (V4Utils handler already updated them)
+          if (err.message?.includes("duplicate") || err.message?.includes("UNIQUE constraint")) {
+            return;
           }
+          throw err;
         }
+
+        // Only update stats if we actually inserted a new position
+        if (!inserted) return;
 
         // Update protocol stats for new position
         const stats = await getOrCreateProtocolStats(context, timestamp, blockNumber);
