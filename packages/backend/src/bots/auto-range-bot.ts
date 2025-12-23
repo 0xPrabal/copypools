@@ -199,7 +199,7 @@ async function scanForRangeConfiguredEvents(): Promise<void> {
         botLogger.debug({ fromBlock: scanFrom.toString(), toBlock: scanTo.toString() }, 'Scanning chunk');
         await scanBlockRange(scanFrom, scanTo);
         scanFrom = scanTo + BigInt(1);
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay to reduce RPC load
       }
 
       lastScannedBlock = currentBlock + BigInt(1);

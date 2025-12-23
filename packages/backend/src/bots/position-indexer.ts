@@ -242,7 +242,7 @@ async function runLiveIndexer(): Promise<void> {
     } catch (error) {
       indexerLogger.error({ error }, 'Live indexer error');
     }
-  }, 120000); // 2 minutes (optimized from 20s)
+  }, 300000); // 5 minutes (optimized from 2 min)
 }
 
 // Start the position indexer
