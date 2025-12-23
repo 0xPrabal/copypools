@@ -324,7 +324,8 @@ export function useZapLiquidity() {
           ? weth
           : swapToToken.address;
 
-        const quote = await getSwapQuote(sellTokenAddress, buyTokenAddress, swapAmount, chainId, params.recipient);
+        // Use V4Utils as taker since it executes the swap
+        const quote = await getSwapQuote(sellTokenAddress, buyTokenAddress, swapAmount, chainId, CONTRACTS.V4_UTILS);
         if (quote) {
           expectedSwapOutput = quote.expectedOutput;
           priceImpact = quote.priceImpact;
@@ -496,7 +497,8 @@ export function useZapLiquidity() {
         const sellToken = swapFromAddress.toLowerCase() === ZERO_ADDRESS ? weth : swapFromAddress;
         const buyToken = swapToAddress.toLowerCase() === ZERO_ADDRESS ? weth : swapToAddress;
 
-        const quote = await getSwapQuote(sellToken, buyToken, swapAmount, chainId, recipient);
+        // Use V4Utils as taker since it executes the swap on behalf of user
+        const quote = await getSwapQuote(sellToken, buyToken, swapAmount, chainId, CONTRACTS.V4_UTILS);
         if (quote) {
           // Check if the router is approved on V4Utils
           const routerApproved = await checkRouterApproved(quote.router as `0x${string}`);
