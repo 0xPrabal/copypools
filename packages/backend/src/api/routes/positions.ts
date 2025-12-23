@@ -30,14 +30,38 @@ const routeLogger = logger.child({ route: 'positions' });
 const MEMORY_CACHE_TTL = 60 * 1000; // 60 seconds for in-memory (optimized from 15s)
 const DB_CACHE_STALE_MINUTES = 5; // Consider DB cache stale after 5 minutes (optimized from 2min)
 
-// Get position by token ID - fetches directly from chain
+// Get position by token ID - uses caching to minimize RPC calls
 router.get('/:tokenId', async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
     const includeUSD = req.query.includeUSD !== 'false'; // Default to true
+    const noCache = req.query.noCache === 'true';
     const chainId = req.query.chainId ? parseInt(req.query.chainId as string, 10) : config.CHAIN_ID;
 
-    // Fetch position directly from PositionManager on chain
+    // LAYER 1: Check memory cache first (60 second TTL)
+    const cacheKey = `position_${tokenId}_${includeUSD}`;
+    if (!noCache) {
+      const cached = memoryCache.get<any>(cacheKey);
+      if (cached) {
+        routeLogger.debug({ tokenId, layer: 'memory' }, 'Position cache hit');
+        return res.json(cached);
+      }
+    }
+
+    // LAYER 2: Try Ponder first (0 RPC calls)
+    try {
+      const ponderResult = await subgraph.getPosition(tokenId);
+      if (ponderResult.position) {
+        const position = ponderResult.position;
+        memoryCache.set(cacheKey, position, MEMORY_CACHE_TTL);
+        routeLogger.debug({ tokenId, layer: 'ponder' }, 'Position from Ponder');
+        return res.json(position);
+      }
+    } catch (e) {
+      routeLogger.debug({ tokenId, error: e }, 'Ponder lookup failed, trying chain');
+    }
+
+    // LAYER 3: Fetch from chain (requires RPC calls)
     const position = await blockchain.getPositionInfo(BigInt(tokenId));
 
     if (!position) {
@@ -96,6 +120,10 @@ router.get('/:tokenId', async (req: Request, res: Response) => {
         (position as any).usdError = 'Failed to fetch prices';
       }
     }
+
+    // Cache the result to avoid RPC calls on next request
+    memoryCache.set(cacheKey, position, MEMORY_CACHE_TTL);
+    routeLogger.debug({ tokenId, layer: 'chain' }, 'Position fetched from chain and cached');
 
     res.json(position);
   } catch (error) {
@@ -212,6 +240,16 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
 
         // Store in memory cache
         memoryCache.set(memoryCacheKey, positions, MEMORY_CACHE_TTL);
+
+        // Also save tokenIds to position_cache for blockchain.getPositionTokenIds() (async, don't wait)
+        // This ensures next time the cache layers in blockchain.ts will find them
+        if (positions.length > 0) {
+          const tokenIds = positions.map((p: any) => p.tokenId);
+          database.savePositionCache(address, chainId, 'ponder', tokenIds).catch(err => {
+            routeLogger.debug({ error: err }, 'Failed to save Ponder tokenIds to position_cache');
+          });
+        }
+
         return res.json(positions);
       }
     } catch (ponderError) {
@@ -444,9 +482,20 @@ router.get('/:tokenId/snapshots', async (req: Request, res: Response) => {
 router.get('/:tokenId/smart-analysis', async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
+    const noCache = req.query.noCache === 'true';
     const tokenIdBigInt = BigInt(tokenId);
 
-    // Get position status from chain
+    // Check cache first (30 second TTL for analysis data)
+    const cacheKey = `smart_analysis_${tokenId}`;
+    if (!noCache) {
+      const cached = memoryCache.get<any>(cacheKey);
+      if (cached) {
+        routeLogger.debug({ tokenId, layer: 'memory' }, 'Smart analysis cache hit');
+        return res.json(cached);
+      }
+    }
+
+    // Get position status from chain (these have their own internal caching)
     const positionStatus = await blockchain.getPositionStatus(tokenIdBigInt);
     const positionInfo = await blockchain.getAutoRangePositionInfo(tokenIdBigInt);
     const rangeConfig = await blockchain.getRangeConfig(tokenIdBigInt);
@@ -531,6 +580,9 @@ router.get('/:tokenId/smart-analysis', async (req: Request, res: Response) => {
       lastRebalanceTime,
       cooldownRemaining: Math.max(0, 3600 - (Math.floor(Date.now() / 1000) - lastRebalanceTime)),
     };
+
+    // Cache for 30 seconds (analysis data changes slowly)
+    memoryCache.set(cacheKey, response, 30 * 1000);
 
     res.json(response);
   } catch (error) {
