@@ -27,12 +27,21 @@ const apiLogger = logger.child({ module: 'api' });
 export function createServer() {
   const app = express();
 
+  // Handle OPTIONS preflight requests FIRST (before any other middleware)
+  app.options('*', (_req: Request, res: Response) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.header('Access-Control-Max-Age', '86400');
+    res.sendStatus(204);
+  });
+
   // Production middleware
   app.use(securityHeaders);
   // CORS - allow all origins explicitly for production
   app.use(cors({
-    origin: true, // Reflect the request origin
-    credentials: true,
+    origin: '*', // Allow all origins
+    credentials: false, // Must be false when origin is '*'
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   }));
