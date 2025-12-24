@@ -227,28 +227,30 @@ async function get0xQuote(
   sellAmount: bigint
 ): Promise<SwapQuote | null> {
   try {
-    const response = await axios.get('https://api.0x.org/swap/v1/quote', {
+    // 0x API v2 requires permit2 endpoint and version header
+    const response = await axios.get('https://api.0x.org/swap/permit2/price', {
       headers: {
         '0x-api-key': config.ZEROX_API_KEY,
+        '0x-version': 'v2',
       },
       params: {
         sellToken,
         buyToken,
         sellAmount: sellAmount.toString(),
-        slippagePercentage: '0.005', // 0.5%
+        chainId: config.CHAIN_ID,
       },
     });
 
     const data = response.data;
 
     return {
-      router: data.to,
-      data: data.data,
+      router: data.allowanceTarget || '0x000000000022D473030F116dDEE9F6B43aC78BA3', // Permit2 default
+      data: '0x', // Price endpoint doesn't return tx data
       expectedOutput: BigInt(data.buyAmount),
-      priceImpact: parseFloat(data.estimatedPriceImpact),
+      priceImpact: parseFloat(data.estimatedPriceImpact || '0'),
     };
   } catch (error) {
-    swapLogger.error({ error }, '0x API quote failed');
+    swapLogger.error({ error }, '0x API v2 quote failed');
     return null;
   }
 }

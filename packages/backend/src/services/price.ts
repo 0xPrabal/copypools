@@ -217,9 +217,11 @@ async function fetch0xPrice(
   const sellAmount = (10n ** BigInt(tokenInfo.decimals)).toString();
 
   try {
-    const response = await axios.get('https://api.0x.org/swap/v1/price', {
+    // 0x API v2 requires permit2 endpoint and version header
+    const response = await axios.get('https://api.0x.org/swap/permit2/price', {
       headers: {
         '0x-api-key': config.ZEROX_API_KEY,
+        '0x-version': 'v2',
       },
       params: {
         sellToken: apiAddress,
