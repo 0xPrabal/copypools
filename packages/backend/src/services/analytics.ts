@@ -309,7 +309,8 @@ async function calculateProtocolTVL(): Promise<{ tvl: string; totalFees: string 
 
             return {
               tvl: metrics.positionValueUSD || 0,
-              fees: (metrics.pendingFeesUSD || 0) + (metrics.totalFeesEarnedUSD || 0),
+              // totalFeesEarnedUSD already includes pending + collected fees
+              fees: metrics.totalFeesEarnedUSD || 0,
             };
           } catch (e) {
             return { tvl: 0, fees: 0 };

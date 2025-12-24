@@ -132,18 +132,22 @@ router.post('/batch-check', async (req: Request, res: Response) => {
 router.get('/top-positions', async (req: Request, res: Response) => {
   try {
     const { limit = '10' } = req.query;
-    // Get all positions and sort by fees
-    const result = await subgraph.getAllPositions(parseInt(limit as string), 0);
+    const requestedLimit = parseInt(limit as string);
+
+    // Fetch more positions to ensure we find actual top earners
+    // We fetch up to 1000 positions to get a comprehensive view
+    const result = await subgraph.getAllPositions(1000, 0);
     const positions = (result as any)?.positions?.items || [];
 
-    // Sort by total collected fees (token0 + token1)
+    // Sort by total collected fees (token0 + token1) descending
     const sortedPositions = positions.sort((a: any, b: any) => {
       const aFees = BigInt(a.collectedFeesToken0 || '0') + BigInt(a.collectedFeesToken1 || '0');
       const bFees = BigInt(b.collectedFeesToken0 || '0') + BigInt(b.collectedFeesToken1 || '0');
       return bFees > aFees ? 1 : bFees < aFees ? -1 : 0;
     });
 
-    res.json(sortedPositions);
+    // Return only the requested number of top positions
+    res.json(sortedPositions.slice(0, requestedLimit));
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get top positions');
     res.status(500).json({ error: 'Failed to fetch top positions' });
