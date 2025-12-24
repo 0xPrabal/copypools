@@ -53,6 +53,44 @@ router.get('/:tokenId', async (req: Request, res: Response) => {
       const ponderResult = await subgraph.getPosition(tokenId);
       if (ponderResult.position) {
         const position = ponderResult.position;
+
+        // Add USD values for Ponder positions if requested
+        if (includeUSD && position.poolId && position.liquidity && BigInt(position.liquidity) > 0n) {
+          try {
+            // Parse poolId to get token addresses (format: "token0-token1-fee")
+            const poolParts = position.poolId.split('-');
+            if (poolParts.length >= 2) {
+              const token0 = poolParts[0];
+              const token1 = poolParts[1];
+
+              // Get current pool price from chain for accurate calculation
+              const poolKey = {
+                currency0: token0,
+                currency1: token1,
+                fee: parseInt(poolParts[2] || '3000'),
+                tickSpacing: Math.floor(parseInt(poolParts[2] || '3000') / 50),
+                hooks: '0x0000000000000000000000000000000000000000',
+              };
+
+              const slot0 = await blockchain.getPoolSlot0(poolKey);
+
+              const usdValues = await calculatePositionValueUSD(
+                BigInt(position.liquidity),
+                slot0.sqrtPriceX96,
+                position.tickLower,
+                position.tickUpper,
+                token0,
+                token1,
+                chainId
+              );
+
+              (position as any).usdValues = usdValues;
+            }
+          } catch (usdError) {
+            routeLogger.debug({ tokenId, error: usdError }, 'Failed to add USD values to Ponder position');
+          }
+        }
+
         memoryCache.set(cacheKey, position, MEMORY_CACHE_TTL);
         routeLogger.debug({ tokenId, layer: 'ponder' }, 'Position from Ponder');
         return res.json(position);
