@@ -357,6 +357,7 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
           compoundConfig: null,
           rangeConfig: null,
           currentTick: position.currentTick || 0,
+          sqrtPriceX96: position.sqrtPriceX96 || '0',
           inRange: position.inRange ?? true,
         };
 
@@ -378,14 +379,15 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
             enrichedPosition.rangeConfig = rangeConfig;
           }
 
-          // Get current tick from StateView
+          // Get current tick and sqrtPriceX96 from StateView
           if (position.poolKey) {
             try {
-              const currentTick = await blockchain.getPoolCurrentTick(position.poolKey);
-              enrichedPosition.currentTick = currentTick;
-              enrichedPosition.inRange = currentTick >= position.tickLower && currentTick < position.tickUpper;
+              const slot0 = await blockchain.getPoolSlot0(position.poolKey);
+              enrichedPosition.currentTick = slot0.tick;
+              enrichedPosition.sqrtPriceX96 = slot0.sqrtPriceX96.toString();
+              enrichedPosition.inRange = slot0.tick >= position.tickLower && slot0.tick < position.tickUpper;
             } catch (e) {
-              routeLogger.warn({ tokenId: position.tokenId, error: e }, 'Failed to get current tick from StateView');
+              routeLogger.warn({ tokenId: position.tokenId, error: e }, 'Failed to get slot0 from StateView');
             }
           }
         }

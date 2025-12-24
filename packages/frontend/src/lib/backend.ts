@@ -25,6 +25,7 @@ export interface BackendPosition {
   tickUpper: number;
   liquidity: string;
   currentTick: number;
+  sqrtPriceX96?: string; // Pool's current sqrtPriceX96 for USD calculations
   inRange: boolean;
   poolKey?: {
     currency0: string;

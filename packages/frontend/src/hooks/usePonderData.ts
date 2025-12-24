@@ -343,7 +343,7 @@ export function usePositions() {
                 tickLower: bp.tickLower,
                 tickUpper: bp.tickUpper,
                 currentTick: bp.currentTick,
-                sqrtPriceX96: '0', // Not available from backend, but not critical
+                sqrtPriceX96: bp.sqrtPriceX96 || '0', // Use backend's sqrtPriceX96 for USD calculations
                 liquidity: bp.liquidity,
                 inRange: bp.inRange,
                 compoundConfig: bp.compoundConfig ? {
