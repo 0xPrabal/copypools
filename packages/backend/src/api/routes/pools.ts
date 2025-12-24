@@ -26,8 +26,14 @@ router.get('/', async (req: Request, res: Response) => {
 router.get('/:poolId', async (req: Request, res: Response) => {
   try {
     const { poolId } = req.params;
-    // Query specific pool from subgraph
-    res.json({ id: poolId });
+    const result = await subgraph.getPool(poolId);
+    const pool = (result as any).pool;
+
+    if (!pool) {
+      return res.status(404).json({ error: 'Pool not found' });
+    }
+
+    res.json(pool);
   } catch (error) {
     routeLogger.error({ error, poolId: req.params.poolId }, 'Failed to get pool');
     res.status(500).json({ error: 'Failed to fetch pool' });
@@ -40,18 +46,31 @@ router.get('/:poolId/analytics', async (req: Request, res: Response) => {
     const { poolId } = req.params;
     const { days = '30' } = req.query;
 
-    // Calculate historical analytics for backtesting
+    // Get pool data from database
+    const result = await subgraph.getPool(poolId);
+    const pool = (result as any).pool;
+
+    if (!pool) {
+      return res.status(404).json({ error: 'Pool not found' });
+    }
+
+    // Use actual pool data where available
     const analytics = {
       poolId,
       period: parseInt(days as string),
-      avgApr: 0,
-      volatility: 0,
+      avgApr: 0, // Would need historical data to calculate
+      volatility: 0, // Would need historical tick data
       priceRange: {
         min: 0,
         max: 0,
       },
-      volumeUSD: '0',
-      feesUSD: '0',
+      volumeUSD: pool.volumeUsd || pool.volume_usd || '0',
+      feesUSD: pool.feesUsd || pool.fees_usd || '0',
+      totalValueLockedUSD: pool.totalValueLockedUsd || pool.total_value_locked_usd || '0',
+      fee: pool.fee,
+      tickSpacing: pool.tickSpacing || pool.tick_spacing,
+      token0: pool.token0Id || pool.token0_id,
+      token1: pool.token1Id || pool.token1_id,
     };
 
     res.json(analytics);

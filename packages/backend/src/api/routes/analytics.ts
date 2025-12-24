@@ -132,9 +132,18 @@ router.post('/batch-check', async (req: Request, res: Response) => {
 router.get('/top-positions', async (req: Request, res: Response) => {
   try {
     const { limit = '10' } = req.query;
-    // Query positions and sort by fees (placeholder - would need proper aggregation)
-    const result = await subgraph.getPositionsByOwner('', parseInt(limit as string), 0);
-    res.json((result as any)?.positions?.items || []);
+    // Get all positions and sort by fees
+    const result = await subgraph.getAllPositions(parseInt(limit as string), 0);
+    const positions = (result as any)?.positions?.items || [];
+
+    // Sort by total collected fees (token0 + token1)
+    const sortedPositions = positions.sort((a: any, b: any) => {
+      const aFees = BigInt(a.collectedFeesToken0 || '0') + BigInt(a.collectedFeesToken1 || '0');
+      const bFees = BigInt(b.collectedFeesToken0 || '0') + BigInt(b.collectedFeesToken1 || '0');
+      return bFees > aFees ? 1 : bFees < aFees ? -1 : 0;
+    });
+
+    res.json(sortedPositions);
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get top positions');
     res.status(500).json({ error: 'Failed to fetch top positions' });
@@ -146,8 +155,14 @@ router.get('/compounds', async (req: Request, res: Response) => {
   try {
     const { days = '30' } = req.query;
 
-    // Placeholder stats - would aggregate from compound events
+    // Get compoundable positions count from subgraph
+    const compoundableResult = await subgraph.getCompoundablePositions('0', 1000);
+    const compoundConfigs = (compoundableResult as any)?.compoundConfigs || [];
+
     const stats = {
+      totalCompoundConfigs: compoundConfigs.length,
+      enabledConfigs: compoundConfigs.filter((c: any) => c.enabled).length,
+      // These would need event tracking to calculate accurately
       totalCompounds: 0,
       totalCompoundedToken0: '0',
       totalCompoundedToken1: '0',
@@ -170,8 +185,14 @@ router.get('/rebalances', async (req: Request, res: Response) => {
   try {
     const { days = '30' } = req.query;
 
-    // Placeholder stats - would aggregate from rebalance events
+    // Get rebalanceable positions count from subgraph
+    const rebalanceableResult = await subgraph.getRebalanceablePositions(1000);
+    const rangeConfigs = (rebalanceableResult as any)?.rangeConfigs || [];
+
     const stats = {
+      totalRangeConfigs: rangeConfigs.length,
+      enabledConfigs: rangeConfigs.filter((c: any) => c.enabled).length,
+      // These would need event tracking to calculate accurately
       totalRebalances: 0,
       avgRangeWidth: 0,
       avgTimeInRange: 0,

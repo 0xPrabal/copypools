@@ -19,13 +19,28 @@ router.get('/compound/:tokenId', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Position not found' });
     }
 
-    // Get pending fees
-    const pendingFees = await blockchain.getPendingFees(BigInt(tokenId));
-    const { profitable, reward } = await blockchain.checkCompoundProfitable(BigInt(tokenId));
+    // Get pending fees with fallback
+    let pendingFees = { amount0: 0n, amount1: 0n };
+    let profitable = false;
+    let reward = 0n;
+
+    try {
+      pendingFees = await blockchain.getPendingFees(BigInt(tokenId));
+    } catch (e) {
+      routeLogger.debug({ tokenId, error: e }, 'Could not fetch pending fees on-chain');
+    }
+
+    try {
+      const profitCheck = await blockchain.checkCompoundProfitable(BigInt(tokenId));
+      profitable = profitCheck.profitable;
+      reward = profitCheck.reward;
+    } catch (e) {
+      routeLogger.debug({ tokenId, error: e }, 'Could not check compound profitability on-chain');
+    }
 
     res.json({
       tokenId,
-      config: position.compoundConfig,
+      config: position.compoundConfig || null,
       pendingFees: {
         amount0: pendingFees.amount0.toString(),
         amount1: pendingFees.amount1.toString(),
@@ -65,12 +80,37 @@ router.get('/exit/:tokenId', async (req: Request, res: Response) => {
     }
 
     // Check exit condition
-    const { shouldExit, exitType } = await blockchain.checkExit(BigInt(tokenId));
+    let shouldExit = false;
+    let exitType = 0;
+    let currentPrice = '0';
+
+    try {
+      const exitCheck = await blockchain.checkExit(BigInt(tokenId));
+      shouldExit = exitCheck.shouldExit;
+      exitType = exitCheck.exitType;
+    } catch (e) {
+      routeLogger.debug({ tokenId, error: e }, 'Could not check exit condition on-chain');
+    }
+
+    // Get current price from pool if available, otherwise fetch on-chain
+    if (position.pool?.sqrtPriceX96) {
+      currentPrice = position.pool.sqrtPriceX96;
+    } else {
+      try {
+        const positionInfo = await blockchain.getPositionInfo(BigInt(tokenId));
+        if (positionInfo?.poolKey) {
+          const slot0 = await blockchain.getPoolSlot0(positionInfo.poolKey);
+          currentPrice = slot0.sqrtPriceX96.toString();
+        }
+      } catch (e) {
+        routeLogger.debug({ tokenId }, 'Could not fetch price on-chain');
+      }
+    }
 
     res.json({
       tokenId,
-      config: position.exitConfig,
-      currentPrice: position.pool.sqrtPriceX96,
+      config: position.exitConfig || null,
+      currentPrice,
       shouldExit,
       exitType,
     });
@@ -106,17 +146,46 @@ router.get('/range/:tokenId', async (req: Request, res: Response) => {
     }
 
     // Check rebalance condition
-    const { needsRebalance, reason } = await blockchain.checkRebalance(BigInt(tokenId));
+    let needsRebalance = false;
+    let reason = 0;
+    let currentTick = 0;
+
+    try {
+      const rebalanceCheck = await blockchain.checkRebalance(BigInt(tokenId));
+      needsRebalance = rebalanceCheck.needsRebalance;
+      reason = rebalanceCheck.reason;
+    } catch (e) {
+      routeLogger.debug({ tokenId, error: e }, 'Could not check rebalance condition on-chain');
+    }
+
+    // Get current tick from pool if available, otherwise fetch on-chain
+    if (position.pool?.tick !== undefined) {
+      currentTick = position.pool.tick;
+    } else {
+      try {
+        const positionInfo = await blockchain.getPositionInfo(BigInt(tokenId));
+        if (positionInfo?.poolKey) {
+          const slot0 = await blockchain.getPoolSlot0(positionInfo.poolKey);
+          currentTick = slot0.tick;
+        }
+      } catch (e) {
+        routeLogger.debug({ tokenId }, 'Could not fetch current tick on-chain');
+      }
+    }
+
+    const tickLower = position.tickLower || 0;
+    const tickUpper = position.tickUpper || 0;
+    const inRange = currentTick >= tickLower && currentTick < tickUpper;
 
     res.json({
       tokenId,
-      config: position.rangeConfig,
-      currentTick: position.pool.tick,
-      tickLower: position.tickLower,
-      tickUpper: position.tickUpper,
+      config: position.rangeConfig || null,
+      currentTick,
+      tickLower,
+      tickUpper,
       needsRebalance,
       reason,
-      inRange: position.pool.tick >= position.tickLower && position.pool.tick < position.tickUpper,
+      inRange,
     });
   } catch (error) {
     routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to get range config');

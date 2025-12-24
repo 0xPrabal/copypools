@@ -21,15 +21,27 @@ router.get('/loan/:tokenId', async (req: Request, res: Response) => {
       return res.json({ tokenId, hasLoan: false });
     }
 
-    // Get on-chain data
-    const healthFactor = await blockchain.getHealthFactor(BigInt(tokenId));
-    const isLiquidatable = await blockchain.checkLiquidatable(BigInt(tokenId));
+    // Get on-chain data with fallbacks
+    let healthFactor = '0';
+    let isLiquidatable = false;
+
+    try {
+      healthFactor = (await blockchain.getHealthFactor(BigInt(tokenId))).toString();
+    } catch (e) {
+      routeLogger.debug({ tokenId }, 'Could not fetch health factor on-chain');
+    }
+
+    try {
+      isLiquidatable = await blockchain.checkLiquidatable(BigInt(tokenId));
+    } catch (e) {
+      routeLogger.debug({ tokenId }, 'Could not check liquidatable on-chain');
+    }
 
     res.json({
       tokenId,
       hasLoan: true,
       loan: position.loan,
-      healthFactor: healthFactor.toString(),
+      healthFactor,
       isLiquidatable,
     });
   } catch (error) {
@@ -116,13 +128,20 @@ router.get('/max-borrow/:tokenId', async (req: Request, res: Response) => {
 // Get lending stats
 router.get('/stats', async (_req: Request, res: Response) => {
   try {
+    // Get protocol stats from subgraph
+    const protocolResult = await subgraph.getProtocolStats();
+    const protocolStats = (protocolResult as any)?.protocolStats;
+
     const stats = {
-      totalValueLocked: '0',
-      totalBorrowed: '0',
-      totalLoans: 0,
-      activeLoans: 0,
-      totalLiquidations: 0,
-      avgHealthFactor: 0,
+      totalValueLocked: protocolStats?.totalSupplied || '0',
+      totalBorrowed: protocolStats?.totalBorrowed || '0',
+      totalLoans: protocolStats?.totalLoans || 0,
+      activeLoans: protocolStats?.activeLoans || 0,
+      totalLiquidations: 0, // Would need to track this separately
+      avgHealthFactor: 0, // Would need to calculate from active loans
+      // Include position data for context
+      totalPositions: protocolStats?.totalPositions || 0,
+      activePositions: protocolStats?.activePositions || 0,
     };
     res.json(stats);
   } catch (error) {
