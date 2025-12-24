@@ -308,8 +308,8 @@ async function calculateProtocolTVL(): Promise<{ tvl: string; totalFees: string 
             );
 
             return {
-              tvl: parseFloat(metrics.totalValueUSD || '0'),
-              fees: parseFloat(metrics.pendingFeesUSD || '0') + parseFloat(metrics.collectedFeesUSD || '0'),
+              tvl: metrics.positionValueUSD || 0,
+              fees: (metrics.pendingFeesUSD || 0) + (metrics.totalFeesEarnedUSD || 0),
             };
           } catch (e) {
             return { tvl: 0, fees: 0 };
