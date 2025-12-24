@@ -185,13 +185,16 @@ export async function getPositionsByOwner(owner: string, first = 100, skip = 0) 
   return { positions: { items: enrichedPositions } };
 }
 
-export async function getAllPositions(first = 100, skip = 0) {
-  const positions = await queryWithRetry<any>(
-    `SELECT * FROM position
-     ORDER BY created_at_timestamp DESC
-     LIMIT $1 OFFSET $2`,
-    [first, skip]
-  );
+export async function getAllPositions(first = 100, skip = 0, activeOnly = false) {
+  let sql = `SELECT * FROM position`;
+
+  if (activeOnly) {
+    sql += ` WHERE liquidity != '0' AND closed_at_timestamp IS NULL`;
+  }
+
+  sql += ` ORDER BY created_at_timestamp DESC LIMIT $1 OFFSET $2`;
+
+  const positions = await queryWithRetry<any>(sql, [first, skip]);
 
   return { positions: { items: positions } };
 }

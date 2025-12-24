@@ -260,14 +260,11 @@ export async function getPortfolioAnalytics(owner: string): Promise<PortfolioAna
 // Calculate protocol TVL from active positions
 async function calculateProtocolTVL(): Promise<{ tvl: string; totalFees: string }> {
   try {
-    // Get a sample of active positions (limit for performance)
-    const positionsResult = await subgraph.getAllPositions(100, 0);
-    const positions = (positionsResult as any)?.positions?.items || [];
+    // Get active positions directly from database (with filter in SQL)
+    const positionsResult = await subgraph.getAllPositions(100, 0, true); // activeOnly = true
+    const activePositions = (positionsResult as any)?.positions?.items || [];
 
-    // Filter to active positions (non-zero liquidity)
-    const activePositions = positions.filter((p: any) =>
-      p.liquidity && p.liquidity !== '0' && !p.closedAtTimestamp
-    );
+    analyticsLogger.info({ activeCount: activePositions.length }, 'Fetched active positions for TVL calculation');
 
     if (activePositions.length === 0) {
       return { tvl: '0', totalFees: '0' };
@@ -275,44 +272,59 @@ async function calculateProtocolTVL(): Promise<{ tvl: string; totalFees: string 
 
     let totalTVL = 0;
     let totalFees = 0;
+    let successCount = 0;
+    let errorCount = 0;
 
     // Calculate USD value for each position (limit concurrent calls)
-    const batchSize = 5;
+    const batchSize = 3; // Reduced batch size to avoid RPC rate limits
     for (let i = 0; i < activePositions.length; i += batchSize) {
       const batch = activePositions.slice(i, i + batchSize);
 
       const results = await Promise.allSettled(
         batch.map(async (position: any) => {
           try {
-            const tokenIdBigInt = BigInt(position.tokenId);
+            const tokenId = position.tokenId || position.token_id;
+            if (!tokenId) {
+              analyticsLogger.warn({ position }, 'Position missing tokenId');
+              return { tvl: 0, fees: 0 };
+            }
+
+            const tokenIdBigInt = BigInt(tokenId);
             const positionInfo = await blockchain.getPositionInfo(tokenIdBigInt);
 
             if (!positionInfo?.poolKey) {
+              analyticsLogger.debug({ tokenId }, 'Position missing poolKey');
               return { tvl: 0, fees: 0 };
             }
 
             const slot0 = await blockchain.getPoolSlot0(positionInfo.poolKey);
             const pendingFees = await blockchain.getPendingFees(tokenIdBigInt);
 
+            const tickLower = position.tickLower || position.tick_lower || 0;
+            const tickUpper = position.tickUpper || position.tick_upper || 0;
+
             const metrics = await calculateUSDMetrics(
               BigInt(position.liquidity || '0'),
               slot0.sqrtPriceX96,
-              position.tickLower,
-              position.tickUpper,
+              tickLower,
+              tickUpper,
               positionInfo.poolKey.currency0,
               positionInfo.poolKey.currency1,
               8453, // Base mainnet
               pendingFees,
-              { amount0: BigInt(position.collectedFeesToken0 || '0'), amount1: BigInt(position.collectedFeesToken1 || '0') },
-              parseInt(position.createdAtTimestamp || '0')
+              { amount0: BigInt(position.collectedFeesToken0 || position.collected_fees_token0 || '0'), amount1: BigInt(position.collectedFeesToken1 || position.collected_fees_token1 || '0') },
+              parseInt(position.createdAtTimestamp || position.created_at_timestamp || '0')
             );
 
+            const tvl = metrics.positionValueUSD || 0;
+            analyticsLogger.debug({ tokenId, tvl }, 'Position TVL calculated');
+
             return {
-              tvl: metrics.positionValueUSD || 0,
-              // totalFeesEarnedUSD already includes pending + collected fees
+              tvl,
               fees: metrics.totalFeesEarnedUSD || 0,
             };
           } catch (e) {
+            analyticsLogger.debug({ error: (e as Error).message }, 'Failed to calculate position TVL');
             return { tvl: 0, fees: 0 };
           }
         })
@@ -322,16 +334,22 @@ async function calculateProtocolTVL(): Promise<{ tvl: string; totalFees: string 
         if (result.status === 'fulfilled') {
           totalTVL += result.value.tvl;
           totalFees += result.value.fees;
+          if (result.value.tvl > 0) successCount++;
+          else errorCount++;
+        } else {
+          errorCount++;
         }
       }
     }
+
+    analyticsLogger.info({ totalTVL, totalFees, successCount, errorCount }, 'TVL calculation complete');
 
     return {
       tvl: totalTVL.toFixed(2),
       totalFees: totalFees.toFixed(2),
     };
   } catch (error) {
-    analyticsLogger.error({ error }, 'Failed to calculate protocol TVL');
+    analyticsLogger.error({ error: (error as Error).message }, 'Failed to calculate protocol TVL');
     return { tvl: '0', totalFees: '0' };
   }
 }
