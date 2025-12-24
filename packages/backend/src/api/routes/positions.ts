@@ -30,6 +30,17 @@ const routeLogger = logger.child({ route: 'positions' });
 const MEMORY_CACHE_TTL = 60 * 1000; // 60 seconds for in-memory (optimized from 15s)
 const DB_CACHE_STALE_MINUTES = 5; // Consider DB cache stale after 5 minutes (optimized from 2min)
 
+// Fee tier to tick spacing mapping (Uniswap V4 standard)
+function feeToTickSpacing(fee: number): number {
+  switch (fee) {
+    case 100: return 1;     // 0.01% fee tier
+    case 500: return 10;    // 0.05% fee tier
+    case 3000: return 60;   // 0.30% fee tier
+    case 10000: return 200; // 1.00% fee tier
+    default: return Math.max(1, Math.floor(fee / 50)); // Fallback calculation
+  }
+}
+
 // Get position by token ID - uses caching to minimize RPC calls
 router.get('/:tokenId', async (req: Request, res: Response) => {
   try {
@@ -57,35 +68,58 @@ router.get('/:tokenId', async (req: Request, res: Response) => {
         // Add USD values for Ponder positions if requested
         if (includeUSD && position.poolId && position.liquidity && BigInt(position.liquidity) > 0n) {
           try {
-            // Parse poolId to get token addresses (format: "token0-token1-fee")
-            const poolParts = position.poolId.split('-');
-            if (poolParts.length >= 2) {
-              const token0 = poolParts[0];
-              const token1 = poolParts[1];
+            // Try to get pool from Ponder first (has correct tickSpacing)
+            const poolResult = await subgraph.getPool(position.poolId);
 
-              // Get current pool price from chain for accurate calculation
-              const poolKey = {
-                currency0: token0,
-                currency1: token1,
-                fee: parseInt(poolParts[2] || '3000'),
-                tickSpacing: Math.floor(parseInt(poolParts[2] || '3000') / 50),
-                hooks: '0x0000000000000000000000000000000000000000',
-              };
+            let token0: string;
+            let token1: string;
+            let fee: number;
+            let tickSpacing: number;
+            let hooks: string;
 
-              const slot0 = await blockchain.getPoolSlot0(poolKey);
-
-              const usdValues = await calculatePositionValueUSD(
-                BigInt(position.liquidity),
-                slot0.sqrtPriceX96,
-                position.tickLower,
-                position.tickUpper,
-                token0,
-                token1,
-                chainId
-              );
-
-              (position as any).usdValues = usdValues;
+            if (poolResult.pool) {
+              // Use pool data from Ponder (accurate tickSpacing)
+              // Column names: token0_id -> token0Id, tick_spacing -> tickSpacing
+              token0 = poolResult.pool.token0Id || poolResult.pool.token0 || poolResult.pool.currency0;
+              token1 = poolResult.pool.token1Id || poolResult.pool.token1 || poolResult.pool.currency1;
+              fee = poolResult.pool.fee || poolResult.pool.feeTier || 3000;
+              tickSpacing = poolResult.pool.tickSpacing || feeToTickSpacing(fee);
+              hooks = poolResult.pool.hooks || '0x0000000000000000000000000000000000000000';
+            } else {
+              // Fallback: Parse poolId (format: "token0-token1-fee")
+              const poolParts = position.poolId.split('-');
+              if (poolParts.length < 2) {
+                throw new Error('Invalid poolId format');
+              }
+              token0 = poolParts[0];
+              token1 = poolParts[1];
+              fee = parseInt(poolParts[2] || '3000');
+              tickSpacing = feeToTickSpacing(fee);
+              hooks = '0x0000000000000000000000000000000000000000';
             }
+
+            // Get current pool price from chain
+            const poolKey = {
+              currency0: token0,
+              currency1: token1,
+              fee,
+              tickSpacing,
+              hooks,
+            };
+
+            const slot0 = await blockchain.getPoolSlot0(poolKey);
+
+            const usdValues = await calculatePositionValueUSD(
+              BigInt(position.liquidity),
+              slot0.sqrtPriceX96,
+              position.tickLower,
+              position.tickUpper,
+              token0,
+              token1,
+              chainId
+            );
+
+            (position as any).usdValues = usdValues;
           } catch (usdError) {
             routeLogger.debug({ tokenId, error: usdError }, 'Failed to add USD values to Ponder position');
           }
