@@ -257,18 +257,113 @@ export async function getPortfolioAnalytics(owner: string): Promise<PortfolioAna
   }
 }
 
+// Calculate protocol TVL from active positions
+async function calculateProtocolTVL(): Promise<{ tvl: string; totalFees: string }> {
+  try {
+    // Get a sample of active positions (limit for performance)
+    const positionsResult = await subgraph.getAllPositions(100, 0);
+    const positions = (positionsResult as any)?.positions?.items || [];
+
+    // Filter to active positions (non-zero liquidity)
+    const activePositions = positions.filter((p: any) =>
+      p.liquidity && p.liquidity !== '0' && !p.closedAtTimestamp
+    );
+
+    if (activePositions.length === 0) {
+      return { tvl: '0', totalFees: '0' };
+    }
+
+    let totalTVL = 0;
+    let totalFees = 0;
+
+    // Calculate USD value for each position (limit concurrent calls)
+    const batchSize = 5;
+    for (let i = 0; i < activePositions.length; i += batchSize) {
+      const batch = activePositions.slice(i, i + batchSize);
+
+      const results = await Promise.allSettled(
+        batch.map(async (position: any) => {
+          try {
+            const tokenIdBigInt = BigInt(position.tokenId);
+            const positionInfo = await blockchain.getPositionInfo(tokenIdBigInt);
+
+            if (!positionInfo?.poolKey) {
+              return { tvl: 0, fees: 0 };
+            }
+
+            const slot0 = await blockchain.getPoolSlot0(positionInfo.poolKey);
+            const pendingFees = await blockchain.getPendingFees(tokenIdBigInt);
+
+            const metrics = await calculateUSDMetrics(
+              BigInt(position.liquidity || '0'),
+              slot0.sqrtPriceX96,
+              position.tickLower,
+              position.tickUpper,
+              positionInfo.poolKey.currency0,
+              positionInfo.poolKey.currency1,
+              8453, // Base mainnet
+              pendingFees,
+              { amount0: BigInt(position.collectedFeesToken0 || '0'), amount1: BigInt(position.collectedFeesToken1 || '0') },
+              parseInt(position.createdAtTimestamp || '0')
+            );
+
+            return {
+              tvl: parseFloat(metrics.totalValueUSD || '0'),
+              fees: parseFloat(metrics.pendingFeesUSD || '0') + parseFloat(metrics.collectedFeesUSD || '0'),
+            };
+          } catch (e) {
+            return { tvl: 0, fees: 0 };
+          }
+        })
+      );
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          totalTVL += result.value.tvl;
+          totalFees += result.value.fees;
+        }
+      }
+    }
+
+    return {
+      tvl: totalTVL.toFixed(2),
+      totalFees: totalFees.toFixed(2),
+    };
+  } catch (error) {
+    analyticsLogger.error({ error }, 'Failed to calculate protocol TVL');
+    return { tvl: '0', totalFees: '0' };
+  }
+}
+
 // Get protocol-wide analytics
 export async function getProtocolAnalytics(): Promise<ProtocolAnalytics> {
   try {
     const statsResult = await subgraph.getProtocolStats();
     const stats = (statsResult as any)?.protocolStats;
 
+    // Calculate TVL from active positions if pool-level TVL is 0
+    let totalTVL = stats?.totalSupplied || '0';
+    let totalFees = stats?.totalFeesUSD || '0';
+
+    // If TVL is 0, calculate from active positions
+    if (totalTVL === '0' || totalTVL === 0) {
+      try {
+        const tvlData = await calculateProtocolTVL();
+        totalTVL = tvlData.tvl;
+        if (totalFees === '0' || totalFees === 0) {
+          totalFees = tvlData.totalFees;
+        }
+      } catch (e) {
+        analyticsLogger.warn({ error: e }, 'Failed to calculate TVL from positions');
+      }
+    }
+
     return {
       totalPositions: stats?.totalPositions || 0,
       activePositions: stats?.activePositions || 0,
-      totalTVL: stats?.totalSupplied || '0',
+      totalTVL,
       totalVolume: stats?.totalVolumeUSD || '0',
-      totalFees: stats?.totalFeesUSD || '0',
+      totalFees,
       totalCompoundConfigs: stats?.totalCompoundConfigs || 0,
       totalRangeConfigs: stats?.totalRangeConfigs || 0,
       totalExitConfigs: stats?.totalExitConfigs || 0,
