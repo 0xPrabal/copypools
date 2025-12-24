@@ -224,10 +224,57 @@ export async function getRebalanceSwapData(
 async function get0xQuote(
   sellToken: string,
   buyToken: string,
-  sellAmount: bigint
+  sellAmount: bigint,
+  taker?: string
 ): Promise<SwapQuote | null> {
   try {
-    // 0x API v2 requires permit2 endpoint and version header
+    // Use the V4Utils contract as default taker for bot operations
+    const takerAddress = taker || config.V4_UTILS_ADDRESS;
+
+    // 0x API v2 quote endpoint returns executable transaction data
+    const response = await axios.get('https://api.0x.org/swap/permit2/quote', {
+      headers: {
+        '0x-api-key': config.ZEROX_API_KEY,
+        '0x-version': 'v2',
+      },
+      params: {
+        sellToken,
+        buyToken,
+        sellAmount: sellAmount.toString(),
+        chainId: config.CHAIN_ID,
+        taker: takerAddress,
+      },
+    });
+
+    const data = response.data;
+
+    return {
+      router: data.transaction?.to || data.allowanceTarget,
+      data: data.transaction?.data || '0x',
+      expectedOutput: BigInt(data.buyAmount),
+      priceImpact: parseFloat(data.estimatedPriceImpact || '0'),
+    };
+  } catch (error: any) {
+    // Log more details for debugging
+    if (axios.isAxiosError(error)) {
+      swapLogger.error({
+        status: error.response?.status,
+        message: error.response?.data?.reason || error.message,
+      }, '0x API v2 quote failed');
+    } else {
+      swapLogger.error({ error }, '0x API v2 quote failed');
+    }
+    return null;
+  }
+}
+
+// Lightweight price check (no transaction data, for estimates only)
+async function get0xPrice(
+  sellToken: string,
+  buyToken: string,
+  sellAmount: bigint
+): Promise<bigint> {
+  try {
     const response = await axios.get('https://api.0x.org/swap/permit2/price', {
       headers: {
         '0x-api-key': config.ZEROX_API_KEY,
@@ -241,17 +288,10 @@ async function get0xQuote(
       },
     });
 
-    const data = response.data;
-
-    return {
-      router: data.allowanceTarget || '0x000000000022D473030F116dDEE9F6B43aC78BA3', // Permit2 default
-      data: '0x', // Price endpoint doesn't return tx data
-      expectedOutput: BigInt(data.buyAmount),
-      priceImpact: parseFloat(data.estimatedPriceImpact || '0'),
-    };
+    return BigInt(response.data.buyAmount);
   } catch (error) {
-    swapLogger.error({ error }, '0x API v2 quote failed');
-    return null;
+    swapLogger.warn({ error }, '0x API v2 price check failed');
+    return 0n;
   }
 }
 
@@ -290,7 +330,7 @@ export function calculateOptimalRatio(
 }
 
 /**
- * Estimate swap output amount
+ * Estimate swap output amount (uses lightweight price endpoint)
  */
 export async function estimateSwapOutput(
   fromToken: string,
@@ -299,8 +339,8 @@ export async function estimateSwapOutput(
 ): Promise<bigint> {
   try {
     if (config.ZEROX_API_KEY) {
-      const quote = await get0xQuote(fromToken, toToken, amount);
-      return quote?.expectedOutput ?? 0n;
+      // Use price endpoint for estimates (no taker required, faster)
+      return await get0xPrice(fromToken, toToken, amount);
     }
     return 0n;
   } catch {
