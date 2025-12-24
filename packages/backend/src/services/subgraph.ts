@@ -290,16 +290,29 @@ export async function getLiquidatableLoans(limit = 100) {
 
 export async function getProtocolStats() {
   // Get counts from actual tables
-  const [positionCount, compoundCount, rangeCount, exitCount] = await Promise.all([
+  const [positionCount, compoundCount, rangeCount, exitCount, poolStats] = await Promise.all([
     queryWithRetry<any>(`SELECT COUNT(*) as count FROM position`),
     queryWithRetry<any>(`SELECT COUNT(*) as count FROM compound_config WHERE enabled = true`),
     queryWithRetry<any>(`SELECT COUNT(*) as count FROM range_config WHERE enabled = true`),
     queryWithRetry<any>(`SELECT COUNT(*) as count FROM exit_config WHERE executed = false AND exit_type > 0`),
+    // Aggregate TVL, volume, fees from all pools
+    queryWithRetry<any>(`
+      SELECT
+        COALESCE(SUM(CAST(total_value_locked_usd AS DECIMAL)), 0) as total_tvl,
+        COALESCE(SUM(CAST(volume_usd AS DECIMAL)), 0) as total_volume,
+        COALESCE(SUM(CAST(fees_usd AS DECIMAL)), 0) as total_fees
+      FROM pool
+    `),
   ]);
 
   const activePositions = await queryWithRetry<any>(
     `SELECT COUNT(*) as count FROM position WHERE liquidity != '0' AND closed_at_timestamp IS NULL`
   );
+
+  // Extract pool stats
+  const tvl = poolStats[0]?.totalTvl || poolStats[0]?.total_tvl || '0';
+  const volume = poolStats[0]?.totalVolume || poolStats[0]?.total_volume || '0';
+  const fees = poolStats[0]?.totalFees || poolStats[0]?.total_fees || '0';
 
   return {
     protocolStats: {
@@ -312,10 +325,10 @@ export async function getProtocolStats() {
       totalVaults: 0,
       totalLoans: 0,
       activeLoans: 0,
-      totalSupplied: '0',
+      totalSupplied: tvl.toString(),
       totalBorrowed: '0',
-      totalVolumeUSD: '0',
-      totalFeesUSD: '0',
+      totalVolumeUSD: volume.toString(),
+      totalFeesUSD: fees.toString(),
     },
   };
 }
