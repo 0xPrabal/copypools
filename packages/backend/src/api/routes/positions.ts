@@ -246,7 +246,7 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
 
         if (isFresh) {
           // Transform DB format to API format (using full config data from cache)
-          const positions = dbPositions
+          const rawPositions = dbPositions
             .filter(p => BigInt(p.liquidity) > 0n)
             .map(dbPos => ({
               tokenId: dbPos.tokenId,
@@ -256,17 +256,39 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
                 currency0: dbPos.currency0,
                 currency1: dbPos.currency1,
                 fee: dbPos.fee,
-                tickSpacing: dbPos.tickSpacing,
+                tickSpacing: dbPos.tickSpacing || feeToTickSpacing(dbPos.fee),
                 hooks: dbPos.hooks,
               },
               tickLower: dbPos.tickLower,
               tickUpper: dbPos.tickUpper,
               liquidity: dbPos.liquidity,
               currentTick: dbPos.currentTick,
+              sqrtPriceX96: '0',
               inRange: dbPos.inRange,
               compoundConfig: dbPos.compoundConfig,
               rangeConfig: dbPos.rangeConfig,
             }));
+
+          // Enrich with fresh slot0 data for accurate USD calculations
+          const poolSlot0Cache = new Map<string, { tick: number; sqrtPriceX96: bigint }>();
+          const positions = await Promise.all(rawPositions.map(async (pos: any) => {
+            try {
+              const poolCacheKey = `${pos.poolKey.currency0}-${pos.poolKey.currency1}-${pos.poolKey.fee}`;
+              let slot0 = poolSlot0Cache.get(poolCacheKey);
+              if (!slot0) {
+                slot0 = await blockchain.getPoolSlot0(pos.poolKey);
+                poolSlot0Cache.set(poolCacheKey, slot0);
+              }
+              return {
+                ...pos,
+                currentTick: slot0.tick,
+                sqrtPriceX96: slot0.sqrtPriceX96.toString(),
+                inRange: slot0.tick >= pos.tickLower && slot0.tick < pos.tickUpper,
+              };
+            } catch (e) {
+              return pos;
+            }
+          }));
 
           // Store in memory cache
           memoryCache.set(memoryCacheKey, positions, MEMORY_CACHE_TTL);
@@ -278,7 +300,7 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
       }
     }
 
-    // LAYER 3: Check Ponder's indexed position table (0 RPC calls)
+    // LAYER 3: Check Ponder's indexed position table (0 RPC calls for lookup, but enrich with slot0)
     // Ponder indexes positions from V4Utils:PositionMinted events
     try {
       const ponderResult = await subgraph.getPositionsByOwner(address);
@@ -286,7 +308,7 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
         routeLogger.info({ address, count: ponderResult.positions.items.length, layer: 'ponder' }, 'Found positions in Ponder');
 
         // Transform Ponder format to API format
-        const positions = ponderResult.positions.items
+        const rawPositions = ponderResult.positions.items
           .filter((p: any) => BigInt(p.liquidity || '0') > 0n)
           .map((ponderPos: any) => ({
             tokenId: ponderPos.tokenId,
@@ -296,19 +318,46 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
               currency0: ponderPos.poolId?.split('-')[0] || '',
               currency1: ponderPos.poolId?.split('-')[1] || '',
               fee: parseInt(ponderPos.poolId?.split('-')[2] || '0'),
-              tickSpacing: 0, // Will be enriched if needed
+              tickSpacing: feeToTickSpacing(parseInt(ponderPos.poolId?.split('-')[2] || '3000')),
               hooks: '0x0000000000000000000000000000000000000000',
             },
             tickLower: ponderPos.tickLower,
             tickUpper: ponderPos.tickUpper,
             liquidity: ponderPos.liquidity,
-            currentTick: 0, // Not stored in Ponder
+            currentTick: 0,
+            sqrtPriceX96: '0',
             inRange: true,
             compoundConfig: ponderPos.compoundConfig,
             rangeConfig: ponderPos.rangeConfig,
             depositedToken0: ponderPos.depositedToken0 || '0',
             depositedToken1: ponderPos.depositedToken1 || '0',
           }));
+
+        // Enrich with slot0 data (currentTick, sqrtPriceX96) for USD calculations
+        // Group positions by unique poolKey to minimize RPC calls
+        const poolSlot0Cache = new Map<string, { tick: number; sqrtPriceX96: bigint }>();
+
+        const positions = await Promise.all(rawPositions.map(async (pos: any) => {
+          try {
+            const poolCacheKey = `${pos.poolKey.currency0}-${pos.poolKey.currency1}-${pos.poolKey.fee}`;
+
+            let slot0 = poolSlot0Cache.get(poolCacheKey);
+            if (!slot0) {
+              slot0 = await blockchain.getPoolSlot0(pos.poolKey);
+              poolSlot0Cache.set(poolCacheKey, slot0);
+            }
+
+            return {
+              ...pos,
+              currentTick: slot0.tick,
+              sqrtPriceX96: slot0.sqrtPriceX96.toString(),
+              inRange: slot0.tick >= pos.tickLower && slot0.tick < pos.tickUpper,
+            };
+          } catch (e) {
+            routeLogger.debug({ tokenId: pos.tokenId, error: e }, 'Failed to enrich Ponder position with slot0');
+            return pos;
+          }
+        }));
 
         // Store in memory cache
         memoryCache.set(memoryCacheKey, positions, MEMORY_CACHE_TTL);
