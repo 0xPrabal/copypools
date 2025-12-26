@@ -59,11 +59,27 @@ router.get('/:tokenId', async (req: Request, res: Response) => {
       }
     }
 
-    // LAYER 2: Try Ponder first (0 RPC calls)
+    // LAYER 2: Try Ponder first (0 RPC calls for lookup)
     try {
       const ponderResult = await subgraph.getPosition(tokenId);
       if (ponderResult.position) {
         const position = ponderResult.position;
+
+        // CRITICAL: Verify on-chain liquidity - Ponder may have stale data
+        // (e.g., liquidity removed via PositionManager directly, not V4Utils)
+        if (position.liquidity && BigInt(position.liquidity) > 0n) {
+          try {
+            const onChainLiquidity = await blockchain.getPositionLiquidity(BigInt(tokenId));
+            if (onChainLiquidity === 0n) {
+              // Position is closed on-chain but Ponder is stale - update response
+              position.liquidity = '0';
+              position.closedAtTimestamp = Math.floor(Date.now() / 1000).toString();
+              routeLogger.info({ tokenId }, 'Ponder position has stale liquidity, updated from on-chain');
+            }
+          } catch (e) {
+            routeLogger.debug({ tokenId, error: e }, 'Failed to verify on-chain liquidity');
+          }
+        }
 
         // Add USD values for Ponder positions if requested
         if (includeUSD && position.poolId && position.liquidity && BigInt(position.liquidity) > 0n) {

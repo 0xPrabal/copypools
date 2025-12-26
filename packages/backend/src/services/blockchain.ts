@@ -1004,6 +1004,25 @@ export async function getPositionInfo(tokenId: bigint): Promise<OnChainPosition 
 }
 
 /**
+ * Get position liquidity directly from chain (lightweight check)
+ * Used to verify Ponder data is not stale
+ */
+export async function getPositionLiquidity(tokenId: bigint): Promise<bigint> {
+  try {
+    const liquidity = await publicClient.readContract({
+      address: POSITION_MANAGER_ADDRESS,
+      abi: PositionManagerABI,
+      functionName: 'getPositionLiquidity',
+      args: [tokenId],
+    });
+    return liquidity as bigint;
+  } catch (error) {
+    logger.debug({ error, tokenId: tokenId.toString() }, 'Failed to get position liquidity');
+    throw error;
+  }
+}
+
+/**
  * Get all positions for an owner with full info
  * This fetches directly from chain, not from Ponder
  * Uses rate-limited batch execution for optimal RPC usage
