@@ -155,3 +155,80 @@ contract UpgradeSepolia is Script {
         vm.stopBroadcast();
     }
 }
+
+/// @title UpgradeBase
+/// @notice Upgrade Base Mainnet proxies with 0.65% fee implementation
+contract UpgradeBase is Script {
+    // Official Uniswap V4 Base Mainnet Addresses
+    address constant POOL_MANAGER = 0x498581fF718922c3f8e6A244956aF099B2652b2b;
+    address constant POSITION_MANAGER = 0x7C5f5A4bBd8fD63184577525326123B519429bDc;
+    address constant WETH = 0x4200000000000000000000000000000000000006;
+
+    // Existing Base Mainnet proxy addresses
+    address constant V4_UTILS_PROXY = 0x37A199B0Baea8943AD493f04Cc2da8c4fa7C2cE1;
+    address constant V4_COMPOUNDOR_PROXY = 0xB17265e7875416955dE583e3cd1d72Ab5Ed6f670;
+    address constant V4_AUTO_RANGE_PROXY = 0xa3671811324e8868e9fa83038e6b565A5b59719C;
+
+    function run() public {
+        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerPrivateKey);
+
+        require(block.chainid == 8453, "Must be on Base Mainnet");
+
+        console.log("==============================================");
+        console.log("  Upgrading Base Mainnet Proxies");
+        console.log("  0.65% Protocol Fee Implementation");
+        console.log("==============================================");
+        console.log("Deployer:", deployer);
+        console.log("Balance:", deployer.balance);
+
+        vm.startBroadcast(deployerPrivateKey);
+
+        // Deploy new implementations with 0.65% fee
+        console.log("\nDeploying new implementations...");
+        V4Utils newV4UtilsImpl = new V4Utils(POOL_MANAGER, POSITION_MANAGER, WETH);
+        V4Compoundor newCompoundorImpl = new V4Compoundor(POOL_MANAGER, POSITION_MANAGER, WETH);
+        V4AutoRange newAutoRangeImpl = new V4AutoRange(POOL_MANAGER, POSITION_MANAGER, WETH);
+
+        console.log("\nNew Implementations Deployed:");
+        console.log("V4Utils:      ", address(newV4UtilsImpl));
+        console.log("V4Compoundor: ", address(newCompoundorImpl));
+        console.log("V4AutoRange:  ", address(newAutoRangeImpl));
+
+        // Upgrade proxies
+        console.log("\nUpgrading proxies...");
+
+        V4Utils(payable(V4_UTILS_PROXY)).upgradeToAndCall(
+            address(newV4UtilsImpl),
+            ""
+        );
+        console.log("V4Utils proxy upgraded");
+
+        V4Compoundor(payable(V4_COMPOUNDOR_PROXY)).upgradeToAndCall(
+            address(newCompoundorImpl),
+            ""
+        );
+        console.log("V4Compoundor proxy upgraded");
+
+        V4AutoRange(payable(V4_AUTO_RANGE_PROXY)).upgradeToAndCall(
+            address(newAutoRangeImpl),
+            ""
+        );
+        console.log("V4AutoRange proxy upgraded");
+
+        console.log("\n==============================================");
+        console.log("  Base Mainnet Upgrade Complete!");
+        console.log("==============================================");
+        console.log("\nProxy Addresses (unchanged):");
+        console.log("V4Utils:      ", V4_UTILS_PROXY);
+        console.log("V4Compoundor: ", V4_COMPOUNDOR_PROXY);
+        console.log("V4AutoRange:  ", V4_AUTO_RANGE_PROXY);
+        console.log("\nNew Implementation Addresses:");
+        console.log("V4Utils Impl:      ", address(newV4UtilsImpl));
+        console.log("V4Compoundor Impl: ", address(newCompoundorImpl));
+        console.log("V4AutoRange Impl:  ", address(newAutoRangeImpl));
+        console.log("\nAll contracts now use 0.65% protocol fee");
+
+        vm.stopBroadcast();
+    }
+}

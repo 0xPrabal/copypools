@@ -30,6 +30,15 @@ interface IV4Utils {
     /// @notice Emitted when position range is moved
     event RangeMoved(uint256 indexed oldTokenId, uint256 indexed newTokenId, int24 newTickLower, int24 newTickUpper);
 
+    /// @notice Emitted when protocol fee is updated
+    event ProtocolFeeUpdated(uint256 oldFee, uint256 newFee);
+
+    /// @notice Emitted when fees are withdrawn
+    event FeesWithdrawn(address indexed recipient, Currency currency, uint256 amount);
+
+    /// @notice Emitted when swap fee is taken
+    event SwapFeeTaken(Currency currency, uint256 amount);
+
     /// @notice Parameters for swap and mint operation
     struct SwapAndMintParams {
         PoolKey poolKey;
@@ -189,4 +198,22 @@ interface IV4Utils {
 
     /// @notice Refund ETH to msg.sender
     function refundETH() external payable;
+
+    /// @notice Get protocol fee percentage (in basis points)
+    /// @return fee The protocol fee (e.g., 65 = 0.65%)
+    function protocolFee() external view returns (uint256 fee);
+
+    /// @notice Set protocol fee (owner only)
+    /// @param newFee New protocol fee in basis points
+    function setProtocolFee(uint256 newFee) external;
+
+    /// @notice Withdraw accumulated protocol fees
+    /// @param currency The currency to withdraw
+    /// @param recipient The recipient address
+    function withdrawFees(Currency currency, address recipient) external;
+
+    /// @notice Get accumulated fees for a currency
+    /// @param currency The currency to check
+    /// @return amount The accumulated fee amount
+    function accumulatedFees(Currency currency) external view returns (uint256 amount);
 }

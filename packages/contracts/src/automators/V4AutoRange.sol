@@ -43,8 +43,8 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
     /// @notice Minimum rebalance interval (1 hour)
     uint32 public constant MIN_REBALANCE_INTERVAL = 3600;
 
-    /// @notice Protocol fee for rebalancing (0.5%)
-    uint256 public protocolFee = 50;
+    /// @notice Protocol fee for rebalancing (0.65%)
+    uint256 public protocolFee = 65;
 
     /// @notice Range configurations by token ID
     mapping(uint256 => RangeConfig) public rangeConfigs;

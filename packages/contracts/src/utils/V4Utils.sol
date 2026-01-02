@@ -39,8 +39,17 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
     /// @notice Maximum swap slippage (50%)
     uint256 public constant MAX_SLIPPAGE = 5000;
 
+    /// @notice Protocol fee in basis points (0.65%)
+    uint256 public override protocolFee = 65;
+
+    /// @notice Maximum protocol fee (10%)
+    uint256 public constant MAX_PROTOCOL_FEE = 1000;
+
+    /// @notice Accumulated protocol fees by currency
+    mapping(Currency => uint256) public override accumulatedFees;
+
     /// @notice Storage gap for upgrades
-    uint256[50] private __gap;
+    uint256[47] private __gap;
 
     /// @notice Constructor
     constructor(
@@ -563,6 +572,24 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         }
     }
 
+    /// @inheritdoc IV4Utils
+    function setProtocolFee(uint256 newFee) external override onlyOwner {
+        require(newFee <= MAX_PROTOCOL_FEE, "Fee too high");
+        emit ProtocolFeeUpdated(protocolFee, newFee);
+        protocolFee = newFee;
+    }
+
+    /// @inheritdoc IV4Utils
+    function withdrawFees(Currency currency, address recipient) external override onlyOwner {
+        uint256 amount = accumulatedFees[currency];
+        require(amount > 0, "No fees");
+
+        accumulatedFees[currency] = 0;
+        _transferCurrency(currency, recipient, amount);
+
+        emit FeesWithdrawn(recipient, currency, amount);
+    }
+
     // ============ Internal Functions ============
 
     function _receiveTokens(Currency currency, uint256 amount) internal returns (uint256) {
@@ -586,6 +613,20 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         }
     }
 
+    /// @notice Take protocol fee from swap output
+    /// @param currency The currency to take fee from
+    /// @param amount The amount before fee
+    /// @return amountAfterFee The amount after fee deduction
+    function _takeSwapFee(Currency currency, uint256 amount) internal returns (uint256 amountAfterFee) {
+        if (amount == 0 || protocolFee == 0) return amount;
+
+        uint256 fee = amount * protocolFee / 10000;
+        accumulatedFees[currency] += fee;
+        amountAfterFee = amount - fee;
+
+        emit SwapFeeTaken(currency, fee);
+    }
+
     function _refundExcess(Currency currency, address to, uint256 amount) internal {
         if (amount > 0) {
             _transferCurrency(currency, to, amount);
@@ -607,10 +648,13 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         (address router, bytes memory routerData) = abi.decode(swapData, (address, bytes));
         if (!approvedRouters[router]) revert RouterNotApproved();
 
+        Currency toCurrency = sourceCurrency == poolKey.currency0 ? poolKey.currency1 : poolKey.currency0;
+        uint256 balanceBefore = _getBalance(toCurrency);
+
         // Execute swap
         SwapLib.SwapParams memory swapParams = SwapLib.SwapParams({
             fromCurrency: sourceCurrency,
-            toCurrency: sourceCurrency == poolKey.currency0 ? poolKey.currency1 : poolKey.currency0,
+            toCurrency: toCurrency,
             amountIn: sourceAmount > 0 ? sourceAmount : _getBalance(sourceCurrency),
             minAmountOut: 0, // Will be validated by overall slippage
             router: router,
@@ -619,6 +663,14 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         });
 
         SwapLib.executeSwap(swapParams);
+
+        // Take protocol fee on swap output
+        uint256 swapOutput = _getBalance(toCurrency) - balanceBefore;
+        if (swapOutput > 0 && protocolFee > 0) {
+            uint256 fee = swapOutput * protocolFee / 10000;
+            accumulatedFees[toCurrency] += fee;
+            emit SwapFeeTaken(toCurrency, fee);
+        }
     }
 
     function _swapToTarget(
@@ -644,7 +696,10 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
             weth9: WETH9 // Pass WETH9 for wrapping native ETH
         });
 
-        return SwapLib.executeSwap(swapParams);
+        uint256 swapOutput = SwapLib.executeSwap(swapParams);
+
+        // Take protocol fee on swap output
+        return _takeSwapFee(toCurrency, swapOutput);
     }
 
     /// @notice Automatically swap tokens through the pool to achieve optimal ratio for a new range
@@ -724,6 +779,12 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         } else if (delta0 > 0) {
             // PoolManager owes us token0 - take it
             _takeFromPoolManager(poolKey.currency0, uint256(delta0));
+            // Take protocol fee on received tokens
+            if (protocolFee > 0) {
+                uint256 fee = uint256(delta0) * protocolFee / 10000;
+                accumulatedFees[poolKey.currency0] += fee;
+                emit SwapFeeTaken(poolKey.currency0, fee);
+            }
         }
 
         // Handle token1 delta
@@ -734,6 +795,12 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         } else if (delta1 > 0) {
             // PoolManager owes us token1 - take it
             _takeFromPoolManager(poolKey.currency1, uint256(delta1));
+            // Take protocol fee on received tokens
+            if (protocolFee > 0) {
+                uint256 fee = uint256(delta1) * protocolFee / 10000;
+                accumulatedFees[poolKey.currency1] += fee;
+                emit SwapFeeTaken(poolKey.currency1, fee);
+            }
         }
 
         return "";

@@ -34,11 +34,8 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     /// @notice Contract version
     string public constant VERSION = "1.0.0";
 
-    /// @notice Protocol fee in basis points (2%)
-    uint256 public override protocolFee = 200;
-
-    /// @notice Caller reward in basis points (from protocol fee)
-    uint256 public override callerReward = 100;
+    /// @notice Protocol fee in basis points (0.65%)
+    uint256 public override protocolFee = 65;
 
     /// @notice Maximum protocol fee (10%)
     uint256 public constant MAX_PROTOCOL_FEE = 1000;
@@ -119,10 +116,6 @@ contract V4Compoundor is V4Base, IV4Compoundor {
             "Too soon"
         );
 
-        // Verify profitable for caller
-        (bool profitable,) = isCompoundProfitable(tokenId);
-        require(profitable, "Not profitable");
-
         // Execute compound
         result = _compound(tokenId, swapData, true);
 
@@ -178,12 +171,9 @@ contract V4Compoundor is V4Base, IV4Compoundor {
         // Get pending fees
         (uint256 amount0, uint256 amount1) = getPendingFees(tokenId);
 
-        // Calculate reward value
-        // In production, this would use oracle prices
-        estimatedReward = (amount0 + amount1) * callerReward / 10000;
-
-        // Check if reward meets minimum
-        profitable = estimatedReward >= config.minRewardAmount;
+        // No caller reward - just check if fees exist above minimum
+        estimatedReward = 0;
+        profitable = (amount0 + amount1) >= config.minRewardAmount;
     }
 
     /// @inheritdoc IV4Compoundor
@@ -254,13 +244,6 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     }
 
     /// @inheritdoc IV4Compoundor
-    function setCallerReward(uint256 newReward) external override onlyOwner {
-        require(newReward <= protocolFee, "Reward exceeds fee");
-        emit CallerRewardUpdated(callerReward, newReward);
-        callerReward = newReward;
-    }
-
-    /// @inheritdoc IV4Compoundor
     function withdrawFees(Currency currency, address recipient) external override onlyOwner {
         uint256 amount = accumulatedFees[currency];
         require(amount > 0, "No fees");
@@ -293,16 +276,9 @@ contract V4Compoundor is V4Base, IV4Compoundor {
             uint256 fee0 = collected0 * protocolFee / 10000;
             uint256 fee1 = collected1 * protocolFee / 10000;
 
-            // Pay caller reward
-            uint256 reward0 = collected0 * callerReward / 10000;
-            uint256 reward1 = collected1 * callerReward / 10000;
-
-            _transferCurrency(poolKey.currency0, msg.sender, reward0);
-            _transferCurrency(poolKey.currency1, msg.sender, reward1);
-
-            // Accumulate protocol portion (minus caller reward)
-            accumulatedFees[poolKey.currency0] += fee0 - reward0;
-            accumulatedFees[poolKey.currency1] += fee1 - reward1;
+            // Accumulate protocol fees (no caller reward)
+            accumulatedFees[poolKey.currency0] += fee0;
+            accumulatedFees[poolKey.currency1] += fee1;
 
             collected0 -= fee0;
             collected1 -= fee1;

@@ -26,9 +26,6 @@ interface IV4Compoundor {
     /// @notice Emitted when protocol fee is updated
     event ProtocolFeeUpdated(uint256 oldFee, uint256 newFee);
 
-    /// @notice Emitted when caller reward is updated
-    event CallerRewardUpdated(uint256 oldReward, uint256 newReward);
-
     /// @notice Emitted when fees are withdrawn
     event FeesWithdrawn(address indexed recipient, Currency currency, uint256 amount);
 
@@ -100,17 +97,9 @@ interface IV4Compoundor {
     /// @return fee The protocol fee (e.g., 200 = 2%)
     function protocolFee() external view returns (uint256 fee);
 
-    /// @notice Get caller reward percentage (in basis points)
-    /// @return reward The caller reward percentage
-    function callerReward() external view returns (uint256 reward);
-
     /// @notice Set protocol fee (owner only)
     /// @param newFee New protocol fee in basis points
     function setProtocolFee(uint256 newFee) external;
-
-    /// @notice Set caller reward (owner only)
-    /// @param newReward New caller reward in basis points
-    function setCallerReward(uint256 newReward) external;
 
     /// @notice Withdraw accumulated protocol fees
     /// @param currency The currency to withdraw

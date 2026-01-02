@@ -180,19 +180,6 @@
   },
   {
     "type": "function",
-    "name": "callerReward",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "configs",
     "inputs": [
       {
@@ -620,19 +607,6 @@
   },
   {
     "type": "function",
-    "name": "setCallerReward",
-    "inputs": [
-      {
-        "name": "newReward",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "setOperatorApproval",
     "inputs": [
       {
@@ -829,25 +803,6 @@
         "type": "uint128",
         "indexed": false,
         "internalType": "uint128"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "CallerRewardUpdated",
-    "inputs": [
-      {
-        "name": "oldReward",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "newReward",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
       }
     ],
     "anonymous": false
