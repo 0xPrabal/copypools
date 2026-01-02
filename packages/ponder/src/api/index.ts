@@ -1,10 +1,13 @@
 import { Hono } from "hono";
+import { db } from "ponder:api";
+import schema from "ponder:schema";
+import { graphql } from "ponder";
 
 // Create Hono app instance
 const app = new Hono();
 
-// Note: GraphQL is automatically served by Ponder at /graphql
-// This file is for custom API routes only
+// Enable GraphQL API at /graphql (includes GraphiQL playground)
+app.use("/graphql", graphql({ db, schema }));
 
 // Custom health endpoint
 app.get("/api/ping", (c) => {
