@@ -1,147 +1,1223 @@
-
-╭-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------╮
-| Type        | Signature                                                                         | Selector                                                           |
-+======================================================================================================================================================================+
-| event       | Initialized(uint64)                                                               | 0xc7f505b2f371ae2175ee4913f4499e1f2633a7b5936321eed1cdaeb6115181d2 |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| event       | OperatorApprovalChanged(address,address,bool)                                     | 0x30c666884b84105e8644669287e4b7d338759b2c08032b362b590e979625de9c |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| event       | OwnershipTransferred(address,address)                                             | 0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0 |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| event       | Paused(address)                                                                   | 0x62e78cea01bee320cd4e420270b5ea74000d11b0c9f74754ebdbfc544b05a258 |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| event       | RangeConfigured(uint256,address,int24,int24,uint32)                               | 0xcedf86c831f476062d3cd04e428a4f637110117e160517982098a18863de49c9 |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| event       | RangeRemoved(uint256)                                                             | 0xb3423d4674544da74055b6c4a56fbd8716d34cdc6019e1d6eee970f1cbf69ed3 |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| event       | Rebalanced(uint256,uint256,int24,int24,uint128,uint256,uint256)                   | 0x758910d94c8bbcfbed2055147c092843e207f2e8f0220c312e3b259fdff3d636 |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| event       | RouterApprovalChanged(address,bool)                                               | 0x68d76820cfc8550bb37e4c0212e1cc4c5af1058b0d4ecd366ea4374f9e2424d6 |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| event       | Unpaused(address)                                                                 | 0x5db9ee0a495bf2e6ff9c91a7834c1ba4fdd244a5e8aa4e537bd38aeae4b073aa |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| event       | Upgraded(address)                                                                 | 0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | AddressEmptyCode(address)                                                         | 0x9996b315                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | DeadlineExpired()                                                                 | 0x1ab7da6b                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | ERC1967InvalidImplementation(address)                                             | 0x4c9c8ce3                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | ERC1967NonPayable()                                                               | 0xb398979f                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | EnforcedPause()                                                                   | 0xd93c0665                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | ExpectedPause()                                                                   | 0x8dfc202b                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | FailedCall()                                                                      | 0xd6bda275                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | InsufficientAmount()                                                              | 0x5945ea56                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | InternalSwapFailed()                                                              | 0xd06ff57a                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | InvalidInitialization()                                                           | 0xf92ee8a9                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | NotAuthorized()                                                                   | 0xea8e4eb5                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | NotInitializing()                                                                 | 0xd7e6bcf8                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | OwnableInvalidOwner(address)                                                      | 0x1e4fbdf7                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | OwnableUnauthorizedAccount(address)                                               | 0x118cdaa7                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | PositionNotFound()                                                                | 0x6ec9be11                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | ReentrancyGuardReentrantCall()                                                    | 0x3ee5aeb5                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | RouterNotApproved()                                                               | 0x233d278a                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | SafeERC20FailedOperation(address)                                                 | 0x5274afe7                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | SlippageExceeded(uint256,uint256)                                                 | 0x71c4efed                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | SwapFailed()                                                                      | 0x81ceff30                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | UUPSUnauthorizedCallContext()                                                     | 0xe07c8dba                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | UUPSUnsupportedProxiableUUID(bytes32)                                             | 0xaa1d49a4                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| error       | ZeroLiquidityAfterRebalance()                                                     | 0xcc5d4ba3                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | MIN_REBALANCE_INTERVAL() view returns (uint32)                                    | 0x350e4221                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | UPGRADE_INTERFACE_VERSION() view returns (string)                                 | 0xad3cb1cc                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | VERSION() view returns (string)                                                   | 0xffa1ad74                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | WETH9() view returns (address)                                                    | 0x4aa4a4fc                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | approvedRouters(address) view returns (bool)                                      | 0x445b1e4b                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | batchCheckRebalance(uint256[]) view returns (bool[])                              | 0x5484eb83                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | calculateOptimalRange(uint256) view returns (int24,int24)                         | 0xe88c1d7e                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | checkRebalance(uint256) view returns (bool,uint8)                                 | 0x958e528f                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | collectFeesExternal(uint256) nonpayable returns (uint256,uint256)                 | 0x8844150d                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | configureRange(uint256,IV4AutoRange.RangeConfig) nonpayable                       | 0x9d83e163                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | executeRebalance(uint256,bytes) nonpayable returns (IV4AutoRange.RebalanceResult) | 0x4153e06b                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | getLastRebalanceTime(uint256) view returns (uint256)                              | 0x0b520182                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | getPositionInfo(uint256) view returns (PoolKey,int24,int24,uint128)               | 0x519f5099                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | getPositionStatus(uint256) view returns (bool,int24,int24,int24)                  | 0x22fb73d9                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | getRangeConfig(uint256) view returns (IV4AutoRange.RangeConfig)                   | 0xd3ecae3c                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | initialize(address) nonpayable                                                    | 0xc4d66de8                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | lastRebalanceTime(uint256) view returns (uint256)                                 | 0xe7e3fe3b                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | operatorApprovals(address,address) view returns (bool)                            | 0x0d95e054                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | owner() view returns (address)                                                    | 0x8da5cb5b                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | pause() nonpayable                                                                | 0x8456cb59                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | paused() view returns (bool)                                                      | 0x5c975abb                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | poolManager() view returns (IPoolManager)                                         | 0xdc4c90d3                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | positionManager() view returns (IPositionManager)                                 | 0x791b98bc                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | protocolFee() view returns (uint256)                                              | 0xb0e21e8a                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | proxiableUUID() view returns (bytes32)                                            | 0x52d1902d                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | rangeConfigs(uint256) view returns (bool,int24,int24,uint32,uint32,bool,uint256)  | 0x78d38c41                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | rebalancedTo(uint256) view returns (uint256)                                      | 0x73727d30                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | removeRange(uint256) nonpayable                                                   | 0x1695d97c                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | renounceOwnership() nonpayable                                                    | 0x715018a6                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | setOperatorApproval(address,bool) nonpayable                                      | 0xa63a1098                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | setRouterApproval(address,bool) nonpayable                                        | 0x47c1a9be                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | transferOwnership(address) nonpayable                                             | 0xf2fde38b                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | unlockCallback(bytes) nonpayable returns (bytes)                                  | 0x91dd7346                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | unpause() nonpayable                                                              | 0x3f4ba83a                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | updateRangeConfig(uint256,IV4AutoRange.RangeConfig) nonpayable                    | 0x78c628c6                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| function    | upgradeToAndCall(address,bytes) payable                                           | 0x4f1ef286                                                         |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| constructor | constructor(address,address,address) nonpayable                                   |                                                                    |
-|-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------|
-| receive     | receive() payable                                                                 |                                                                    |
-╰-------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------╯
-
+[
+  {
+    "type": "constructor",
+    "inputs": [
+      {
+        "name": "_poolManager",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_positionManager",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_weth9",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "receive",
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "MIN_REBALANCE_INTERVAL",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "UPGRADE_INTERFACE_VERSION",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "VERSION",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "WETH9",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "approvedRouters",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "batchCheckRebalance",
+    "inputs": [
+      {
+        "name": "tokenIds",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "results",
+        "type": "bool[]",
+        "internalType": "bool[]"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "calculateOptimalRange",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "tickLower",
+        "type": "int24",
+        "internalType": "int24"
+      },
+      {
+        "name": "tickUpper",
+        "type": "int24",
+        "internalType": "int24"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "checkRebalance",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "needsRebalance",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "reason",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "collectFeesExternal",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "amount0",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "amount1",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "configureRange",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "config",
+        "type": "tuple",
+        "internalType": "struct IV4AutoRange.RangeConfig",
+        "components": [
+          {
+            "name": "enabled",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "lowerDelta",
+            "type": "int24",
+            "internalType": "int24"
+          },
+          {
+            "name": "upperDelta",
+            "type": "int24",
+            "internalType": "int24"
+          },
+          {
+            "name": "rebalanceThreshold",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "minRebalanceInterval",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "collectFeesOnRebalance",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "maxSwapSlippage",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "executeRebalance",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "swapData",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "result",
+        "type": "tuple",
+        "internalType": "struct IV4AutoRange.RebalanceResult",
+        "components": [
+          {
+            "name": "newTokenId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "newTickLower",
+            "type": "int24",
+            "internalType": "int24"
+          },
+          {
+            "name": "newTickUpper",
+            "type": "int24",
+            "internalType": "int24"
+          },
+          {
+            "name": "liquidity",
+            "type": "uint128",
+            "internalType": "uint128"
+          },
+          {
+            "name": "fee0",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "fee1",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getLastRebalanceTime",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "timestamp",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getPositionInfo",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "poolKey",
+        "type": "tuple",
+        "internalType": "struct PoolKey",
+        "components": [
+          {
+            "name": "currency0",
+            "type": "address",
+            "internalType": "Currency"
+          },
+          {
+            "name": "currency1",
+            "type": "address",
+            "internalType": "Currency"
+          },
+          {
+            "name": "fee",
+            "type": "uint24",
+            "internalType": "uint24"
+          },
+          {
+            "name": "tickSpacing",
+            "type": "int24",
+            "internalType": "int24"
+          },
+          {
+            "name": "hooks",
+            "type": "address",
+            "internalType": "contract IHooks"
+          }
+        ]
+      },
+      {
+        "name": "tickLower",
+        "type": "int24",
+        "internalType": "int24"
+      },
+      {
+        "name": "tickUpper",
+        "type": "int24",
+        "internalType": "int24"
+      },
+      {
+        "name": "liquidity",
+        "type": "uint128",
+        "internalType": "uint128"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getPositionStatus",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "inRange",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "currentTick",
+        "type": "int24",
+        "internalType": "int24"
+      },
+      {
+        "name": "tickLower",
+        "type": "int24",
+        "internalType": "int24"
+      },
+      {
+        "name": "tickUpper",
+        "type": "int24",
+        "internalType": "int24"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getRangeConfig",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "config",
+        "type": "tuple",
+        "internalType": "struct IV4AutoRange.RangeConfig",
+        "components": [
+          {
+            "name": "enabled",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "lowerDelta",
+            "type": "int24",
+            "internalType": "int24"
+          },
+          {
+            "name": "upperDelta",
+            "type": "int24",
+            "internalType": "int24"
+          },
+          {
+            "name": "rebalanceThreshold",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "minRebalanceInterval",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "collectFeesOnRebalance",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "maxSwapSlippage",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "initialize",
+    "inputs": [
+      {
+        "name": "_owner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "lastRebalanceTime",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "operatorApprovals",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "owner",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "pause",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "paused",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "poolManager",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract IPoolManager"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "positionManager",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract IPositionManager"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "protocolFee",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "proxiableUUID",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "rangeConfigs",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "enabled",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "lowerDelta",
+        "type": "int24",
+        "internalType": "int24"
+      },
+      {
+        "name": "upperDelta",
+        "type": "int24",
+        "internalType": "int24"
+      },
+      {
+        "name": "rebalanceThreshold",
+        "type": "uint32",
+        "internalType": "uint32"
+      },
+      {
+        "name": "minRebalanceInterval",
+        "type": "uint32",
+        "internalType": "uint32"
+      },
+      {
+        "name": "collectFeesOnRebalance",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "maxSwapSlippage",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "rebalancedTo",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "removeRange",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "renounceOwnership",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setOperatorApproval",
+    "inputs": [
+      {
+        "name": "operator",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "approved",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setRouterApproval",
+    "inputs": [
+      {
+        "name": "router",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "approved",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "transferOwnership",
+    "inputs": [
+      {
+        "name": "newOwner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "unlockCallback",
+    "inputs": [
+      {
+        "name": "data",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "unpause",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "updateRangeConfig",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "config",
+        "type": "tuple",
+        "internalType": "struct IV4AutoRange.RangeConfig",
+        "components": [
+          {
+            "name": "enabled",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "lowerDelta",
+            "type": "int24",
+            "internalType": "int24"
+          },
+          {
+            "name": "upperDelta",
+            "type": "int24",
+            "internalType": "int24"
+          },
+          {
+            "name": "rebalanceThreshold",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "minRebalanceInterval",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "collectFeesOnRebalance",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "maxSwapSlippage",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "upgradeToAndCall",
+    "inputs": [
+      {
+        "name": "newImplementation",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "data",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "event",
+    "name": "Initialized",
+    "inputs": [
+      {
+        "name": "version",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "OperatorApprovalChanged",
+    "inputs": [
+      {
+        "name": "owner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "operator",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "approved",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "OwnershipTransferred",
+    "inputs": [
+      {
+        "name": "previousOwner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newOwner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Paused",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RangeConfigured",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "owner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "lowerDelta",
+        "type": "int24",
+        "indexed": false,
+        "internalType": "int24"
+      },
+      {
+        "name": "upperDelta",
+        "type": "int24",
+        "indexed": false,
+        "internalType": "int24"
+      },
+      {
+        "name": "rebalanceThreshold",
+        "type": "uint32",
+        "indexed": false,
+        "internalType": "uint32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RangeRemoved",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Rebalanced",
+    "inputs": [
+      {
+        "name": "oldTokenId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "newTokenId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "newTickLower",
+        "type": "int24",
+        "indexed": false,
+        "internalType": "int24"
+      },
+      {
+        "name": "newTickUpper",
+        "type": "int24",
+        "indexed": false,
+        "internalType": "int24"
+      },
+      {
+        "name": "liquidity",
+        "type": "uint128",
+        "indexed": false,
+        "internalType": "uint128"
+      },
+      {
+        "name": "fee0",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "fee1",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RouterApprovalChanged",
+    "inputs": [
+      {
+        "name": "router",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "approved",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Unpaused",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Upgraded",
+    "inputs": [
+      {
+        "name": "implementation",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AddressEmptyCode",
+    "inputs": [
+      {
+        "name": "target",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "DeadlineExpired",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ERC1967InvalidImplementation",
+    "inputs": [
+      {
+        "name": "implementation",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ERC1967NonPayable",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "EnforcedPause",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ExpectedPause",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "FailedCall",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InsufficientAmount",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InternalSwapFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidInitialization",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotAuthorized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotInitializing",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "OwnableInvalidOwner",
+    "inputs": [
+      {
+        "name": "owner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "OwnableUnauthorizedAccount",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "PositionNotFound",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ReentrancyGuardReentrantCall",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "RouterNotApproved",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "SafeERC20FailedOperation",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "SlippageExceeded",
+    "inputs": [
+      {
+        "name": "expected",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "received",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "SwapFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UUPSUnauthorizedCallContext",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UUPSUnsupportedProxiableUUID",
+    "inputs": [
+      {
+        "name": "slot",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ZeroLiquidityAfterRebalance",
+    "inputs": []
+  }
+]
