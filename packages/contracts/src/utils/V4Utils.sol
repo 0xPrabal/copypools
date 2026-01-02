@@ -4,13 +4,12 @@ pragma solidity ^0.8.26;
 import { IPoolManager } from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import { IUnlockCallback } from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import { PoolKey } from "@uniswap/v4-core/src/types/PoolKey.sol";
-import { PoolId, PoolIdLibrary } from "@uniswap/v4-core/src/types/PoolId.sol";
+import { PoolIdLibrary } from "@uniswap/v4-core/src/types/PoolId.sol";
 import { Currency, CurrencyLibrary } from "@uniswap/v4-core/src/types/Currency.sol";
 import { BalanceDelta } from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import { SwapParams } from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import { StateLibrary } from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import { TickMath } from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import { IPositionManager } from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import { Actions } from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import { IERC721 } from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -22,7 +21,6 @@ import { V4Base } from "../base/V4Base.sol";
 import { Multicall } from "../base/Multicall.sol";
 import { IV4Utils } from "../interfaces/IV4Utils.sol";
 import { SwapLib } from "../libraries/SwapLib.sol";
-import { PositionValueLib } from "../libraries/PositionValueLib.sol";
 
 /// @title V4Utils
 /// @notice Utility contract for atomic operations on Uniswap V4 positions
@@ -49,7 +47,7 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
     mapping(Currency => uint256) public override accumulatedFees;
 
     /// @notice Storage gap for upgrades
-    uint256[47] private __gap;
+    uint256[48] private __gap;
 
     /// @notice Constructor
     constructor(
@@ -641,8 +639,8 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         uint256 sourceAmount,
         bytes memory swapData,
         uint256 maxSlippage
-    ) internal {
-        if (swapData.length == 0) return;
+    ) internal returns (uint256 amountAfterFee) {
+        if (swapData.length == 0) return 0;
 
         // Decode swap router and data
         (address router, bytes memory routerData) = abi.decode(swapData, (address, bytes));
@@ -664,13 +662,9 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
 
         SwapLib.executeSwap(swapParams);
 
-        // Take protocol fee on swap output
+        // Take protocol fee on swap output and return adjusted amount
         uint256 swapOutput = _getBalance(toCurrency) - balanceBefore;
-        if (swapOutput > 0 && protocolFee > 0) {
-            uint256 fee = swapOutput * protocolFee / 10000;
-            accumulatedFees[toCurrency] += fee;
-            emit SwapFeeTaken(toCurrency, fee);
-        }
+        return _takeSwapFee(toCurrency, swapOutput);
     }
 
     function _swapToTarget(
@@ -779,12 +773,8 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         } else if (delta0 > 0) {
             // PoolManager owes us token0 - take it
             _takeFromPoolManager(poolKey.currency0, uint256(delta0));
-            // Take protocol fee on received tokens
-            if (protocolFee > 0) {
-                uint256 fee = uint256(delta0) * protocolFee / 10000;
-                accumulatedFees[poolKey.currency0] += fee;
-                emit SwapFeeTaken(poolKey.currency0, fee);
-            }
+            // Take protocol fee on received tokens (using _takeSwapFee for consistency)
+            _takeSwapFee(poolKey.currency0, uint256(delta0));
         }
 
         // Handle token1 delta
@@ -795,12 +785,8 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         } else if (delta1 > 0) {
             // PoolManager owes us token1 - take it
             _takeFromPoolManager(poolKey.currency1, uint256(delta1));
-            // Take protocol fee on received tokens
-            if (protocolFee > 0) {
-                uint256 fee = uint256(delta1) * protocolFee / 10000;
-                accumulatedFees[poolKey.currency1] += fee;
-                emit SwapFeeTaken(poolKey.currency1, fee);
-            }
+            // Take protocol fee on received tokens (using _takeSwapFee for consistency)
+            _takeSwapFee(poolKey.currency1, uint256(delta1));
         }
 
         return "";

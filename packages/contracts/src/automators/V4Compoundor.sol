@@ -37,6 +37,9 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     /// @notice Protocol fee in basis points (0.65%)
     uint256 public override protocolFee = 65;
 
+    /// @dev Deprecated: was callerReward. Kept as placeholder to preserve storage layout.
+    uint256 private __deprecated_callerReward;
+
     /// @notice Maximum protocol fee (10%)
     uint256 public constant MAX_PROTOCOL_FEE = 1000;
 
