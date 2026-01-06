@@ -1,207 +1,114 @@
 
-  # CopyPools Project - Progress Report
-  ## November 2025 - 2 Month Update
+ # CopyPools - 2 month Progress Update
+
+  ## What We Built
+
+  CopyPools is an automated liquidity management tool for Uniswap V4 on Base. Users can auto-compound fees and auto-rebalance their LP positions without manual intervention.
 
   ---
 
-  ## 📊 Executive Summary
+  ## Contracts Deployed (Base Mainnet)
 
-  CopyPools is a DeFi protocol built on Uniswap V4 that provides automated liquidity management for LP positions on Base mainnet. This report summarizes all completed deliverables.
+  We deployed 3 main contracts:
 
-  ---
+  1. **V4Utils** - `0x37A199B0Baea8943AD493f04Cc2da8c4fa7C2cE1`
+     - Handles minting, adding/removing liquidity, fee collection, exit to stablecoin
 
-  ## 🎯 Targets Completed
+  2. **V4Compoundor** - `0xB17265e7875416955dE583e3cd1d72Ab5Ed6f670`
+     - Auto-compounds fees back into positions
 
-  ### 1. Smart Contract Development & Deployment ✅
+  3. **V4AutoRange** - `0xa3671811324e8868e9fa83038e6b565A5b59719C`
+     - Automatically rebalances positions when they go out of range
 
-  | Contract | Address | Network | Status |
-  |----------|---------|---------|--------|
-  | V4Utils | `0x37A199B0Baea8943AD493f04Cc2da8c4fa7C2cE1` | Base Mainnet | ✅ Deployed |
-  | V4Compoundor | `0xB17265e7875416955dE583e3cd1d72Ab5Ed6f670` | Base Mainnet | ✅ Deployed |
-  | V4AutoRange | `0xa3671811324e8868e9fa83038e6b565A5b59719C` | Base Mainnet | ✅ Deployed |
-
-  **Key Features Implemented:**
-  - Auto-compounding of LP fees
-  - Automatic range rebalancing
-  - One-click position management
-  - Protocol fee: 0.65%
-  - Upgradeable proxy pattern (UUPS)
+  Protocol fee is set at 0.65% on compound/rebalance operations.
 
   ---
 
-  ### 2. Backend API Development ✅
+  ## Live Deployments
 
-  **Deployment:** `https://copypool-backend-production.up.railway.app`
+  **Frontend**
+  https://copypools-frontend-production.up.railway.app
 
-  | Module | Endpoints | Status |
-  |--------|-----------|--------|
-  | Positions API | 6 endpoints | ✅ Live |
-  | Analytics API | 8 endpoints | ✅ Live |
-  | Automation API | 7 endpoints | ✅ Live |
-  | Pools API | 5 endpoints | ✅ Live |
-  | Prices API | 5 endpoints | ✅ Live |
-  | Lending API | 7 endpoints | ✅ Live |
-  | Notifications API | 8 endpoints | ✅ Live |
-  | Health API | 5 endpoints | ✅ Live |
+  **Backend API**
+  https://copypool-backend-production.up.railway.app
 
-  **Total: 50+ API Endpoints**
+  **Indexer (GraphQL)**
+  https://ponder-production-6e27.up.railway.app/graphql
+
+  All 3 services running on Railway with PostgreSQL database.
 
   ---
 
-  ### 3. Frontend Development ✅
+  ## Backend API
 
-  **Deployment:** `https://copypools-frontend-production.up.railway.app`
+  Built REST API with these modules:
+  - Positions - fetch user positions, position details, analytics
+  - Automation - check compound/rebalance status for positions
+  - Pools - pool data and optimal range calculations
+  - Prices - token price feeds
+  - Lending - LP collateral features (in progress)
+  - Notifications - webhook support for position alerts
+  - Health - service monitoring
 
-  | Page | Feature | Status |
-  |------|---------|--------|
-  | Dashboard | Portfolio overview | ✅ Live |
-  | Positions | View all LP positions | ✅ Live |
-  | Position Detail | Individual position management | ✅ Live |
-  | Compound | Auto-compound configuration | ✅ Live |
-  | Range | Auto-range rebalancing | ✅ Live |
-  | Exit | One-click exit to stablecoin | ✅ Live |
-  | Analytics | Performance metrics | ✅ Live |
-  | Pools | Pool discovery | ✅ Live |
-
-  **Tech Stack:**
-  - Next.js 14 (App Router)
-  - Wagmi + Viem for Web3
-  - TailwindCSS
-  - TypeScript
+  Around 50 endpoints total, all tested and working.
 
   ---
 
-  ### 4. Indexer (Ponder) Development ✅
+  ## Frontend
 
-  **Deployment:** `https://ponder-production-6e27.up.railway.app`
+  Next.js app with these pages:
+  - Dashboard - shows user's positions overview
+  - Positions list - all LP positions with filters
+  - Position detail - manage individual position
+  - Compound page - configure auto-compound
+  - Range page - configure auto-rebalance
+  - Exit page - one-click exit to USDC
+  - Analytics - performance tracking
+  - Pools - discover pools
 
-  | Feature | Status |
-  |---------|--------|
-  | GraphQL API | ✅ Live at `/graphql` |
-  | Position Indexing | ✅ Active |
-  | Event Tracking | ✅ Active |
-  | Real-time Updates | ✅ Active |
-  | Health Monitoring | ✅ Active |
-
-  ---
-
-  ### 5. Smart Contract Functions - Testing Complete ✅
-
-  #### V4Compoundor (11 functions)
-  | Function | Purpose | Tested |
-  |----------|---------|--------|
-  | registerPosition | Register for auto-compound | ✅ |
-  | unregisterPosition | Remove from auto-compound | ✅ |
-  | updateConfig | Update compound settings | ✅ |
-  | autoCompound | Execute compound (keepers) | ✅ |
-  | selfCompound | Compound own position | ✅ |
-  | setOperatorApproval | Approve operators | ✅ |
-  | setRouterApproval | Approve swap routers | ✅ |
-  | setProtocolFee | Update fee (owner) | ✅ |
-  | withdrawFees | Withdraw protocol fees | ✅ |
-  | pause | Emergency pause | ✅ |
-  | unpause | Resume operations | ✅ |
-
-  #### V4AutoRange (9 functions)
-  | Function | Purpose | Tested |
-  |----------|---------|--------|
-  | configureRange | Setup auto-range | ✅ |
-  | updateRangeConfig | Update range settings | ✅ |
-  | removeRange | Disable auto-range | ✅ |
-  | executeRebalance | Trigger rebalance | ✅ |
-  | collectFeesExternal | Collect fees | ✅ |
-  | setOperatorApproval | Approve operators | ✅ |
-  | setRouterApproval | Approve routers | ✅ |
-  | pause | Emergency pause | ✅ |
-  | unpause | Resume operations | ✅ |
-
-  #### V4Utils (17 functions)
-  | Function | Purpose | Tested |
-  |----------|---------|--------|
-  | swapAndMint | Create new position | ✅ |
-  | swapAndIncreaseLiquidity | Add liquidity | ✅ |
-  | decreaseLiquidity | Remove liquidity | ✅ |
-  | decreaseAndSwap | Remove & swap to single token | ✅ |
-  | collectFees | Harvest fees | ✅ |
-  | collectAndSwap | Harvest & swap fees | ✅ |
-  | exitToStablecoin | Full exit to stablecoin | ✅ |
-  | moveRange | Reposition liquidity | ✅ |
-  | sweepToken | Recover stuck tokens | ✅ |
-  | unwrapWETH9 | Unwrap WETH | ✅ |
-  | refundETH | Refund excess ETH | ✅ |
-  | setOperatorApproval | Approve operators | ✅ |
-  | setRouterApproval | Approve routers | ✅ |
-  | setProtocolFee | Update fee | ✅ |
-  | withdrawFees | Withdraw fees | ✅ |
-  | pause | Emergency pause | ✅ |
-  | unpause | Resume operations | ✅ |
-
-  **Total: 37 Smart Contract Functions Tested**
+  Using wagmi for wallet connections, works with MetaMask and other wallets.
 
   ---
 
-  ### 6. Infrastructure & DevOps ✅
+  ## Smart Contract Testing
 
-  | Service | Platform | Status |
-  |---------|----------|--------|
-  | Backend API | Railway | ✅ Deployed |
-  | Frontend | Railway | ✅ Deployed |
-  | Ponder Indexer | Railway | ✅ Deployed |
-  | PostgreSQL Database | Railway | ✅ Connected |
-  | RPC Endpoints | QuickNode/Public | ✅ Configured |
+  Tested all write functions on mainnet:
 
-  ---
+  **V4Compoundor** - register/unregister positions, update configs, compound execution, operator approvals, pause/unpause
 
-  ### 7. On-Chain Transactions Verified ✅
+  **V4AutoRange** - configure range settings, execute rebalance, remove configurations, operator approvals
 
-  | Transaction | Hash | Status |
-  |-------------|------|--------|
-  | Register Position | `0x520a376c...` | ✅ Confirmed |
-  | Configure Range | `0xecc8a8d4...` | ✅ Confirmed |
-  | Collect Fees | `0x9fe8764b...` | ✅ Confirmed |
+  **V4Utils** - mint positions, increase/decrease liquidity, collect fees, exit to stablecoin, move range, sweep tokens
+
+  Total 37 functions tested. All working as expected.
+
+  Executed real transactions on mainnet to verify:
+  - Registered position 817492 for auto-compound
+  - Configured position 824476 for auto-range
+  - Collected fees from position 824476
 
   ---
 
-  ## 📈 Metrics
+  ## Tech Stack
 
-  | Metric | Value |
-  |--------|-------|
-  | Smart Contracts Deployed | 3 |
-  | Total Contract Functions | 37 |
-  | Backend API Endpoints | 50+ |
-  | Frontend Pages | 8 |
-  | Railway Services | 3 |
-  | Networks Supported | Base Mainnet |
-
-  ---
-
-  ## 🔗 Live URLs
-
-  | Service | URL |
-  |---------|-----|
-  | Frontend | https://copypools-frontend-production.up.railway.app |
-  | Backend API | https://copypool-backend-production.up.railway.app |
-  | GraphQL API | https://ponder-production-6e27.up.railway.app/graphql |
-  | Health Check | https://copypool-backend-production.up.railway.app/health |
+  - Contracts: Solidity, Foundry, OpenZeppelin (UUPS upgradeable)
+  - Backend: Node.js, Express, TypeScript
+  - Frontend: Next.js 14, React, TailwindCSS, wagmi/viem
+  - Indexer: Ponder (GraphQL)
+  - Database: PostgreSQL
+  - Hosting: Railway
+  - Chain: Base Mainnet
 
   ---
 
-  ## ✅ Deliverables Checklist
+  ## What's Done
 
-  - [x] Smart Contract Development (V4Utils, V4Compoundor, V4AutoRange)
-  - [x] Smart Contract Deployment to Base Mainnet
-  - [x] Smart Contract Verification
-  - [x] Protocol Fee Implementation (0.65%)
-  - [x] Backend API Development
-  - [x] Backend Deployment to Railway
-  - [x] Frontend Development (Next.js)
-  - [x] Frontend Deployment to Railway
-  - [x] Ponder Indexer Development
-  - [x] Ponder Deployment with GraphQL
-  - [x] Database Setup (PostgreSQL)
-  - [x] ABI Synchronization Across Packages
-  - [x] Write Transaction Testing (37 functions)
-  - [x] End-to-End Integration Testing
-  - [x] Production Environment Configuration
+  - All 3 contracts deployed and verified on Base
+  - Backend API live with 50+ endpoints
+  - Frontend live with 8 pages
+  - Indexer running with GraphQL
+  - All contract functions tested
+  - End-to-end flow working
+  - Production environment stable
 
   ---
