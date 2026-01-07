@@ -635,11 +635,19 @@ export default function InitiatorPage() {
     }
   };
 
-  // Get single token data
+  // Get single token data - use resolved token0Data/token1Data which support on-chain fetched data
   const singleTokenData = useMemo(() => {
     if (!singleTokenAddress) return undefined;
+    // Use the already-resolved token data (which includes on-chain fetched data for unknown tokens)
+    if (token0 && singleTokenAddress.toLowerCase() === token0.toLowerCase()) {
+      return token0Data;
+    }
+    if (token1 && singleTokenAddress.toLowerCase() === token1.toLowerCase()) {
+      return token1Data;
+    }
+    // Fallback to TOKENS list for other cases
     return TOKENS.find(t => t.address.toLowerCase() === singleTokenAddress.toLowerCase());
-  }, [TOKENS, singleTokenAddress]);
+  }, [singleTokenAddress, token0, token1, token0Data, token1Data, TOKENS]);
 
   // Fetch zap quote when single token amount changes
   useEffect(() => {
