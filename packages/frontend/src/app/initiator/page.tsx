@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useAccount, useReadContract, useBalance, useChainId } from 'wagmi';
 import { Plus, Loader2, AlertCircle, Info, Zap, Settings } from 'lucide-react';
 import { parseUnits, formatUnits, keccak256, encodeAbiParameters } from 'viem';
@@ -78,6 +79,13 @@ export default function InitiatorPage() {
   const [step, setStep] = useState(1);
   const [mode, setMode] = useState<'zap' | 'advanced'>('zap');
 
+  // Parse URL parameters (from pools page navigation)
+  const searchParams = useSearchParams();
+  const urlToken0 = searchParams.get('token0');
+  const urlToken1 = searchParams.get('token1');
+  const urlFee = searchParams.get('fee');
+  const hasPoolParams = !!(urlToken0 && urlToken1 && urlFee);
+
   // Get tokens for current chain
   const TOKENS = useMemo(() => TOKENS_BY_CHAIN[chainId] || TOKENS_BY_CHAIN[CHAIN_IDS.BASE], [chainId]);
 
@@ -91,11 +99,40 @@ export default function InitiatorPage() {
   const [amount1, setAmount1] = useState('');
   const [activeInput, setActiveInput] = useState<'amount0' | 'amount1' | null>(null);
 
-  // Reset tokens when chain changes
+  // Reset tokens when chain changes (only if not coming from pools page with params)
   useEffect(() => {
-    setToken0('');
-    setToken1('');
-  }, [chainId]);
+    if (!hasPoolParams) {
+      setToken0('');
+      setToken1('');
+    }
+  }, [chainId, hasPoolParams]);
+
+  // Initialize state from URL params when coming from pools page
+  useEffect(() => {
+    if (hasPoolParams && urlToken0 && urlToken1 && urlFee) {
+      // Find matching tokens from TOKENS list
+      const t0 = TOKENS.find(t =>
+        t.address.toLowerCase() === urlToken0.toLowerCase()
+      );
+      const t1 = TOKENS.find(t =>
+        t.address.toLowerCase() === urlToken1.toLowerCase()
+      );
+
+      // Set tokens and fee
+      setToken0(urlToken0);
+      setToken1(urlToken1);
+      const parsedFee = parseInt(urlFee);
+      if (!isNaN(parsedFee)) {
+        setFee(parsedFee);
+      }
+
+      // Skip to step 2 (range selection) in advanced mode
+      // For zap mode, OneClickMint will handle the preselected pool
+      if (mode === 'advanced' && t0 && t1) {
+        setStep(2);
+      }
+    }
+  }, [hasPoolParams, urlToken0, urlToken1, urlFee, TOKENS, mode]);
 
   const { mintPosition, isPending, isConfirming, isSuccess, hash } = useV4Utils();
 
@@ -585,6 +622,13 @@ export default function InitiatorPage() {
         <p className="text-gray-400">
           Initialize a new liquidity position on Uniswap V4
         </p>
+        {hasPoolParams && token0Data && token1Data && (
+          <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-purple-500/10 border border-purple-500/30 rounded-lg text-purple-300 text-sm">
+            <span>Selected pool:</span>
+            <span className="font-semibold">{token0Data.symbol}/{token1Data.symbol}</span>
+            <span className="text-purple-400/70">({(fee / 10000).toFixed(2)}% fee)</span>
+          </div>
+        )}
       </div>
 
       {/* Mode Toggle */}
@@ -615,7 +659,11 @@ export default function InitiatorPage() {
 
       {/* One-Click Zap Mode */}
       {mode === 'zap' && (
-        <OneClickMint />
+        <OneClickMint
+          preselectedToken0={hasPoolParams ? urlToken0! : undefined}
+          preselectedToken1={hasPoolParams ? urlToken1! : undefined}
+          preselectedFee={hasPoolParams && urlFee ? parseInt(urlFee) : undefined}
+        />
       )}
 
       {/* Advanced Mode - Step Indicator */}

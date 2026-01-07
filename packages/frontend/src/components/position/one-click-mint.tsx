@@ -148,9 +148,12 @@ const RANGE_STRATEGIES = [
 
 interface OneClickMintProps {
   onSuccess?: () => void;
+  preselectedToken0?: string;
+  preselectedToken1?: string;
+  preselectedFee?: number;
 }
 
-export function OneClickMint({ onSuccess }: OneClickMintProps) {
+export function OneClickMint({ onSuccess, preselectedToken0, preselectedToken1, preselectedFee }: OneClickMintProps) {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   const CONTRACTS = getContracts(chainId);
@@ -160,8 +163,51 @@ export function OneClickMint({ onSuccess }: OneClickMintProps) {
   const TOKENS = useMemo(() => TOKENS_BY_CHAIN[chainId] || TOKENS_BY_CHAIN[CHAIN_IDS.BASE], [chainId]);
   const POOL_PAIRS = useMemo(() => POOL_PAIRS_BY_CHAIN[chainId] || POOL_PAIRS_BY_CHAIN[CHAIN_IDS.BASE], [chainId]);
 
+  // Check if we have a preselected pool from URL params
+  const hasPreselectedPool = !!(preselectedToken0 && preselectedToken1 && preselectedFee);
+
+  // Create pool object from preselected tokens
+  const preselectedPool = useMemo(() => {
+    if (!hasPreselectedPool) return null;
+
+    // Find matching tokens from TOKENS list
+    const token0 = TOKENS.find(t =>
+      t.address.toLowerCase() === preselectedToken0!.toLowerCase()
+    );
+    const token1 = TOKENS.find(t =>
+      t.address.toLowerCase() === preselectedToken1!.toLowerCase()
+    );
+
+    // If tokens aren't in our list, create minimal token objects
+    const t0: ZapToken = token0 || {
+      symbol: 'Token0',
+      address: preselectedToken0! as `0x${string}`,
+      decimals: 18,
+    };
+    const t1: ZapToken = token1 || {
+      symbol: 'Token1',
+      address: preselectedToken1! as `0x${string}`,
+      decimals: 18,
+    };
+
+    return {
+      name: `${t0.symbol}/${t1.symbol}`,
+      token0: t0,
+      token1: t1,
+      fee: preselectedFee!,
+    };
+  }, [hasPreselectedPool, preselectedToken0, preselectedToken1, preselectedFee, TOKENS]);
+
   // Form state
   const [selectedPool, setSelectedPool] = useState(POOL_PAIRS[0]);
+
+  // Initialize with preselected pool if available
+  useEffect(() => {
+    if (preselectedPool) {
+      setSelectedPool(preselectedPool);
+    }
+  }, [preselectedPool]);
+
   const [inputToken, setInputToken] = useState<ZapToken>(TOKENS[0]);
   const [inputAmount, setInputAmount] = useState('');
   const [rangeStrategy, setRangeStrategy] = useState<'full' | 'wide' | 'concentrated'>('wide');
