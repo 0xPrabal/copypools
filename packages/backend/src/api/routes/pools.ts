@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import * as subgraph from '../../services/subgraph.js';
 import { getV4Pools } from '../../services/database.js';
+import { syncPools } from '../../bots/sync-pools.js';
 import { logger } from '../../utils/logger.js';
 
 const router = Router();
@@ -89,6 +90,19 @@ function formatFeeTier(fee: number): string {
   if (feePercent < 0.01) return `${feePercent * 100}bps`;
   return `${feePercent}%`;
 }
+
+// Trigger manual pool sync
+router.post('/v4/sync', async (req: Request, res: Response) => {
+  try {
+    routeLogger.info('Manual pool sync triggered');
+    await syncPools();
+    const { pools, total } = await getV4Pools({ chainId: 8453, limit: 1 });
+    res.json({ success: true, message: 'Pool sync completed', totalPools: total });
+  } catch (error) {
+    routeLogger.error({ error }, 'Failed to sync pools');
+    res.status(500).json({ error: 'Failed to sync pools' });
+  }
+});
 
 // Get all pools (legacy)
 router.get('/', async (req: Request, res: Response) => {
