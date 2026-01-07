@@ -739,7 +739,7 @@ export async function getV4Pools(options: {
   chainId?: number;
   page?: number;
   limit?: number;
-  sortBy?: 'tvl' | 'apr' | 'volume' | 'fee';
+  sortBy?: 'tvl' | 'apr' | 'volume1d' | 'volume30d' | 'fee';
   sortOrder?: 'asc' | 'desc';
 }): Promise<{ pools: V4Pool[]; total: number }> {
   if (!pool) {
@@ -760,7 +760,8 @@ export async function getV4Pools(options: {
   const sortColumnMap: Record<string, string> = {
     tvl: 'tvl_usd',
     apr: 'pool_apr',
-    volume: 'volume_1d_usd',
+    volume1d: 'volume_1d_usd',
+    volume30d: 'volume_30d_usd',
     fee: 'fee',
   };
   const sortColumn = sortColumnMap[sortBy] || 'pool_apr';
