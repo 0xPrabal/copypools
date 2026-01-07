@@ -65,14 +65,6 @@ export default function InitiatorPage() {
   // Initialize state from URL params when coming from pools page
   useEffect(() => {
     if (hasPoolParams && urlToken0 && urlToken1 && urlFee) {
-      // Find matching tokens from TOKENS list
-      const t0 = TOKENS.find(t =>
-        t.address.toLowerCase() === urlToken0.toLowerCase()
-      );
-      const t1 = TOKENS.find(t =>
-        t.address.toLowerCase() === urlToken1.toLowerCase()
-      );
-
       // Set tokens and fee
       setToken0(urlToken0);
       setToken1(urlToken1);
@@ -81,14 +73,13 @@ export default function InitiatorPage() {
         setFee(parsedFee);
       }
 
-      // Skip to step 2 (range selection) when pool is preselected
-      if (t0 && t1) {
-        setStep(2);
-        // Default single token to token0
-        setSingleTokenAddress(urlToken0);
-      }
+      // Always skip to step 2 (range selection) when pool is preselected from pools page
+      // Token data will be fetched on-chain if not in predefined list
+      setStep(2);
+      // Default single token to token0
+      setSingleTokenAddress(urlToken0);
     }
-  }, [hasPoolParams, urlToken0, urlToken1, urlFee, TOKENS]);
+  }, [hasPoolParams, urlToken0, urlToken1, urlFee]);
 
   const { mintPosition, isPending, isConfirming, isSuccess, hash } = useV4Utils();
 
@@ -104,19 +95,88 @@ export default function InitiatorPage() {
     error: zapError,
   } = useZapLiquidity();
 
-  // Get token data from TOKENS list
-  const token0Data = useMemo(() => {
+  // Get token data from TOKENS list (for known tokens)
+  const token0FromList = useMemo(() => {
     if (!token0) return undefined;
     return TOKENS.find(t => t.address.toLowerCase() === token0.toLowerCase());
   }, [TOKENS, token0]);
 
-  const token1Data = useMemo(() => {
+  const token1FromList = useMemo(() => {
     if (!token1) return undefined;
     return TOKENS.find(t => t.address.toLowerCase() === token1.toLowerCase());
   }, [TOKENS, token1]);
 
-  // Check if tokens are native ETH
+  // Fetch token data on-chain for unknown tokens
   const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+  const token0NeedsOnChain = !!token0 && !token0FromList && token0.toLowerCase() !== ZERO_ADDRESS;
+  const token1NeedsOnChain = !!token1 && !token1FromList && token1.toLowerCase() !== ZERO_ADDRESS;
+
+  const { data: token0Symbol } = useReadContract({
+    address: token0 as `0x${string}`,
+    abi: ERC20Abi,
+    functionName: 'symbol',
+    query: { enabled: token0NeedsOnChain },
+  });
+
+  const { data: token0Decimals } = useReadContract({
+    address: token0 as `0x${string}`,
+    abi: ERC20Abi,
+    functionName: 'decimals',
+    query: { enabled: token0NeedsOnChain },
+  });
+
+  const { data: token1Symbol } = useReadContract({
+    address: token1 as `0x${string}`,
+    abi: ERC20Abi,
+    functionName: 'symbol',
+    query: { enabled: token1NeedsOnChain },
+  });
+
+  const { data: token1Decimals } = useReadContract({
+    address: token1 as `0x${string}`,
+    abi: ERC20Abi,
+    functionName: 'decimals',
+    query: { enabled: token1NeedsOnChain },
+  });
+
+  // Combined token data: use predefined list if available, otherwise use on-chain data
+  const token0Data = useMemo(() => {
+    if (token0FromList) return token0FromList;
+    if (!token0) return undefined;
+    // Native ETH
+    if (token0.toLowerCase() === ZERO_ADDRESS) {
+      return { symbol: 'ETH', address: ZERO_ADDRESS as `0x${string}`, decimals: 18, isNative: true };
+    }
+    // On-chain data for unknown tokens
+    if (token0Symbol && token0Decimals !== undefined) {
+      return {
+        symbol: token0Symbol as string,
+        address: token0 as `0x${string}`,
+        decimals: Number(token0Decimals),
+      };
+    }
+    return undefined;
+  }, [token0, token0FromList, token0Symbol, token0Decimals]);
+
+  const token1Data = useMemo(() => {
+    if (token1FromList) return token1FromList;
+    if (!token1) return undefined;
+    // Native ETH
+    if (token1.toLowerCase() === ZERO_ADDRESS) {
+      return { symbol: 'ETH', address: ZERO_ADDRESS as `0x${string}`, decimals: 18, isNative: true };
+    }
+    // On-chain data for unknown tokens
+    if (token1Symbol && token1Decimals !== undefined) {
+      return {
+        symbol: token1Symbol as string,
+        address: token1 as `0x${string}`,
+        decimals: Number(token1Decimals),
+      };
+    }
+    return undefined;
+  }, [token1, token1FromList, token1Symbol, token1Decimals]);
+
+  // Check if tokens are native ETH
   const token0IsNative = token0 ? token0.toLowerCase() === ZERO_ADDRESS : (token0Data?.isNative || false);
   const token1IsNative = token1 ? token1.toLowerCase() === ZERO_ADDRESS : (token1Data?.isNative || false);
 
