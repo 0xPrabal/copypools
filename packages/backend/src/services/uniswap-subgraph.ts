@@ -105,13 +105,14 @@ interface SubgraphPool {
 }
 
 // Parse fee from pool name (e.g., "WETH / USDC 0.05%" -> 500)
-function parseFeeFromName(name: string): number {
+// Returns fee in basis points (1 bp = 0.01%), or null if not found
+function parseFeeFromName(name: string): number | null {
   const feeMatch = name.match(/(\d+\.?\d*)%/);
   if (feeMatch) {
     const feePercent = parseFloat(feeMatch[1]);
     return Math.round(feePercent * 10000); // Convert to basis points
   }
-  return 3000; // Default 0.3%
+  return null; // Fee not available in pool name
 }
 
 // Fetch V4 pools from GeckoTerminal
@@ -172,15 +173,19 @@ export async function fetchPoolsFromGecko(): Promise<Partial<V4Pool>[]> {
         // Skip pools with very low TVL
         if (tvlUsd < 1000) continue;
 
-        // Parse fee from pool name
-        const fee = parseFeeFromName(poolName);
+        // Parse fee from pool name (only use actual data, not estimates)
+        const parsedFee = parseFeeFromName(poolName);
+        const fee = parsedFee ?? 0; // Use 0 if fee not available
 
-        // Estimate fees based on fee tier
-        const feeRate = fee / 1000000; // Convert basis points to rate
-        const fees1dUsd = volume1dUsd * feeRate;
+        // Calculate APR only if we have real fee data
+        let fees1dUsd = 0;
+        let poolApr = 0;
 
-        // Calculate APR: (fees * 365 / tvl) * 100
-        const poolApr = tvlUsd > 0 ? (fees1dUsd * 365 / tvlUsd) * 100 : 0;
+        if (parsedFee !== null && tvlUsd > 0) {
+          const feeRate = parsedFee / 1000000; // Convert basis points to rate
+          fees1dUsd = volume1dUsd * feeRate;
+          poolApr = (fees1dUsd * 365 / tvlUsd) * 100;
+        }
 
         allPools.push({
           id: poolAddress,
