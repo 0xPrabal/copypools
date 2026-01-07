@@ -4,6 +4,7 @@ import { startAutoExitBot } from './auto-exit-bot.js';
 import { startAutoRangeBot } from './auto-range-bot.js';
 import { startLiquidationBot } from './liquidation-bot.js';
 import { startPositionIndexer } from './position-indexer.js';
+import { startPoolSyncJob } from './sync-pools.js';
 import { runNotificationChecks } from '../services/notifications.js';
 import { logger } from '../utils/logger.js';
 import { config, contracts } from '../config/index.js';
@@ -65,6 +66,11 @@ export function startAllBots(): void {
   const notificationJob = new CronJob('*/10 * * * *', runNotificationChecks, null, true);
   jobs.push(notificationJob);
   botsLogger.info('Notification service started (every 10 minutes)');
+
+  // Start pool sync job (syncs V4 pools every 15 minutes)
+  const poolSyncJob = startPoolSyncJob();
+  jobs.push(poolSyncJob);
+  botsLogger.info('Pool sync job started (every 15 minutes)');
 
   // Handle graceful shutdown
   process.on('SIGINT', () => {

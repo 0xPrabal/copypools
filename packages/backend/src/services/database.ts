@@ -41,6 +41,37 @@ export interface RangeConfig {
   maxSlippage: number;
 }
 
+// V4 Pool interface for pool listing
+export interface V4Pool {
+  id: string;
+  chainId: number;
+  currency0: string;
+  currency1: string;
+  token0Symbol: string;
+  token1Symbol: string;
+  token0Logo: string | null;
+  token1Logo: string | null;
+  token0Decimals: number;
+  token1Decimals: number;
+  fee: number;
+  tickSpacing: number;
+  hooks: string;
+  tvlUsd: number;
+  volume1dUsd: number;
+  volume30dUsd: number;
+  fees1dUsd: number;
+  poolApr: number;
+  rewardApr: number | null;
+  lastSyncedAt: Date;
+  createdAt: Date;
+}
+
+// Chain IDs
+export const CHAIN_IDS = {
+  BASE: 8453,
+  SEPOLIA: 11155111,
+} as const;
+
 // Full position data interface
 export interface CachedPosition {
   tokenId: string;
@@ -160,6 +191,47 @@ export async function initializeDatabase(): Promise<void> {
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_positions_updated
       ON positions(updated_at)
+    `);
+
+    // Create v4_pools table for pool listing with TVL, volume, APR
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS v4_pools (
+        id VARCHAR(66) PRIMARY KEY,
+        chain_id INTEGER NOT NULL DEFAULT 8453,
+        currency0 VARCHAR(42) NOT NULL,
+        currency1 VARCHAR(42) NOT NULL,
+        token0_symbol VARCHAR(32),
+        token1_symbol VARCHAR(32),
+        token0_logo VARCHAR(512),
+        token1_logo VARCHAR(512),
+        token0_decimals INTEGER DEFAULT 18,
+        token1_decimals INTEGER DEFAULT 18,
+        fee INTEGER NOT NULL,
+        tick_spacing INTEGER,
+        hooks VARCHAR(42),
+        tvl_usd DECIMAL(24,2) DEFAULT 0,
+        volume_1d_usd DECIMAL(24,2) DEFAULT 0,
+        volume_30d_usd DECIMAL(24,2) DEFAULT 0,
+        fees_1d_usd DECIMAL(24,2) DEFAULT 0,
+        pool_apr DECIMAL(12,4) DEFAULT 0,
+        reward_apr DECIMAL(12,4),
+        last_synced_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      )
+    `);
+
+    // Create indexes for v4_pools
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_v4_pools_tvl ON v4_pools(tvl_usd DESC)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_v4_pools_apr ON v4_pools(pool_apr DESC)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_v4_pools_volume ON v4_pools(volume_1d_usd DESC)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_v4_pools_chain ON v4_pools(chain_id)
     `);
 
     dbLogger.info('Database schema initialized successfully');
@@ -658,6 +730,238 @@ export async function getStats(): Promise<{
     idleConnections: pool.idleCount,
     waitingClients: pool.waitingCount,
   };
+}
+
+// ============ V4 Pool Functions ============
+
+// Get pools with pagination and sorting
+export async function getV4Pools(options: {
+  chainId?: number;
+  page?: number;
+  limit?: number;
+  sortBy?: 'tvl' | 'apr' | 'volume' | 'fee';
+  sortOrder?: 'asc' | 'desc';
+}): Promise<{ pools: V4Pool[]; total: number }> {
+  if (!pool) {
+    return { pools: [], total: 0 };
+  }
+
+  const {
+    chainId = 8453,
+    page = 1,
+    limit = 20,
+    sortBy = 'apr',
+    sortOrder = 'desc',
+  } = options;
+
+  const offset = (page - 1) * limit;
+
+  // Map sortBy to column names
+  const sortColumnMap: Record<string, string> = {
+    tvl: 'tvl_usd',
+    apr: 'pool_apr',
+    volume: 'volume_1d_usd',
+    fee: 'fee',
+  };
+  const sortColumn = sortColumnMap[sortBy] || 'pool_apr';
+  const order = sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+  try {
+    // Get total count
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM v4_pools WHERE chain_id = $1`,
+      [chainId]
+    );
+    const total = parseInt(countResult.rows[0].count, 10);
+
+    // Get paginated pools
+    const result = await pool.query(
+      `SELECT id, chain_id, currency0, currency1, token0_symbol, token1_symbol,
+              token0_logo, token1_logo, token0_decimals, token1_decimals,
+              fee, tick_spacing, hooks, tvl_usd, volume_1d_usd, volume_30d_usd,
+              fees_1d_usd, pool_apr, reward_apr, last_synced_at, created_at
+       FROM v4_pools
+       WHERE chain_id = $1
+       ORDER BY ${sortColumn} ${order} NULLS LAST
+       LIMIT $2 OFFSET $3`,
+      [chainId, limit, offset]
+    );
+
+    const pools: V4Pool[] = result.rows.map(row => ({
+      id: row.id,
+      chainId: row.chain_id,
+      currency0: row.currency0,
+      currency1: row.currency1,
+      token0Symbol: row.token0_symbol || 'UNKNOWN',
+      token1Symbol: row.token1_symbol || 'UNKNOWN',
+      token0Logo: row.token0_logo,
+      token1Logo: row.token1_logo,
+      token0Decimals: row.token0_decimals || 18,
+      token1Decimals: row.token1_decimals || 18,
+      fee: row.fee,
+      tickSpacing: row.tick_spacing,
+      hooks: row.hooks,
+      tvlUsd: parseFloat(row.tvl_usd) || 0,
+      volume1dUsd: parseFloat(row.volume_1d_usd) || 0,
+      volume30dUsd: parseFloat(row.volume_30d_usd) || 0,
+      fees1dUsd: parseFloat(row.fees_1d_usd) || 0,
+      poolApr: parseFloat(row.pool_apr) || 0,
+      rewardApr: row.reward_apr ? parseFloat(row.reward_apr) : null,
+      lastSyncedAt: row.last_synced_at,
+      createdAt: row.created_at,
+    }));
+
+    return { pools, total };
+  } catch (error) {
+    dbLogger.error({ error, chainId }, 'Failed to get v4 pools');
+    return { pools: [], total: 0 };
+  }
+}
+
+// Upsert a single pool
+export async function upsertV4Pool(poolData: Partial<V4Pool> & { id: string; currency0: string; currency1: string; fee: number }): Promise<void> {
+  if (!pool) {
+    return;
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO v4_pools (
+        id, chain_id, currency0, currency1, token0_symbol, token1_symbol,
+        token0_logo, token1_logo, token0_decimals, token1_decimals,
+        fee, tick_spacing, hooks, tvl_usd, volume_1d_usd, volume_30d_usd,
+        fees_1d_usd, pool_apr, reward_apr, last_synced_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
+      ON CONFLICT (id)
+      DO UPDATE SET
+        token0_symbol = COALESCE($5, v4_pools.token0_symbol),
+        token1_symbol = COALESCE($6, v4_pools.token1_symbol),
+        token0_logo = COALESCE($7, v4_pools.token0_logo),
+        token1_logo = COALESCE($8, v4_pools.token1_logo),
+        token0_decimals = COALESCE($9, v4_pools.token0_decimals),
+        token1_decimals = COALESCE($10, v4_pools.token1_decimals),
+        tick_spacing = COALESCE($12, v4_pools.tick_spacing),
+        hooks = COALESCE($13, v4_pools.hooks),
+        tvl_usd = COALESCE($14, v4_pools.tvl_usd),
+        volume_1d_usd = COALESCE($15, v4_pools.volume_1d_usd),
+        volume_30d_usd = COALESCE($16, v4_pools.volume_30d_usd),
+        fees_1d_usd = COALESCE($17, v4_pools.fees_1d_usd),
+        pool_apr = COALESCE($18, v4_pools.pool_apr),
+        reward_apr = $19,
+        last_synced_at = NOW()`,
+      [
+        poolData.id,
+        8453, // Base mainnet
+        poolData.currency0,
+        poolData.currency1,
+        poolData.token0Symbol || null,
+        poolData.token1Symbol || null,
+        poolData.token0Logo || null,
+        poolData.token1Logo || null,
+        poolData.token0Decimals || 18,
+        poolData.token1Decimals || 18,
+        poolData.fee,
+        poolData.tickSpacing || null,
+        poolData.hooks || null,
+        poolData.tvlUsd || 0,
+        poolData.volume1dUsd || 0,
+        poolData.volume30dUsd || 0,
+        poolData.fees1dUsd || 0,
+        poolData.poolApr || 0,
+        poolData.rewardApr || null,
+      ]
+    );
+  } catch (error) {
+    dbLogger.error({ error, poolId: poolData.id }, 'Failed to upsert v4 pool');
+  }
+}
+
+// Batch upsert pools (more efficient for sync)
+export async function batchUpsertV4Pools(poolsData: Array<Partial<V4Pool> & { id: string; currency0: string; currency1: string; fee: number }>): Promise<void> {
+  if (!pool || poolsData.length === 0) {
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    for (const poolData of poolsData) {
+      await client.query(
+        `INSERT INTO v4_pools (
+          id, chain_id, currency0, currency1, token0_symbol, token1_symbol,
+          token0_logo, token1_logo, token0_decimals, token1_decimals,
+          fee, tick_spacing, hooks, tvl_usd, volume_1d_usd, volume_30d_usd,
+          fees_1d_usd, pool_apr, reward_apr, last_synced_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
+        ON CONFLICT (id)
+        DO UPDATE SET
+          token0_symbol = COALESCE($5, v4_pools.token0_symbol),
+          token1_symbol = COALESCE($6, v4_pools.token1_symbol),
+          token0_logo = COALESCE($7, v4_pools.token0_logo),
+          token1_logo = COALESCE($8, v4_pools.token1_logo),
+          token0_decimals = COALESCE($9, v4_pools.token0_decimals),
+          token1_decimals = COALESCE($10, v4_pools.token1_decimals),
+          tick_spacing = COALESCE($12, v4_pools.tick_spacing),
+          hooks = COALESCE($13, v4_pools.hooks),
+          tvl_usd = COALESCE($14, v4_pools.tvl_usd),
+          volume_1d_usd = COALESCE($15, v4_pools.volume_1d_usd),
+          volume_30d_usd = COALESCE($16, v4_pools.volume_30d_usd),
+          fees_1d_usd = COALESCE($17, v4_pools.fees_1d_usd),
+          pool_apr = COALESCE($18, v4_pools.pool_apr),
+          reward_apr = $19,
+          last_synced_at = NOW()`,
+        [
+          poolData.id,
+          8453,
+          poolData.currency0,
+          poolData.currency1,
+          poolData.token0Symbol || null,
+          poolData.token1Symbol || null,
+          poolData.token0Logo || null,
+          poolData.token1Logo || null,
+          poolData.token0Decimals || 18,
+          poolData.token1Decimals || 18,
+          poolData.fee,
+          poolData.tickSpacing || null,
+          poolData.hooks || null,
+          poolData.tvlUsd || 0,
+          poolData.volume1dUsd || 0,
+          poolData.volume30dUsd || 0,
+          poolData.fees1dUsd || 0,
+          poolData.poolApr || 0,
+          poolData.rewardApr || null,
+        ]
+      );
+    }
+
+    await client.query('COMMIT');
+    dbLogger.info({ count: poolsData.length }, 'Batch upserted v4 pools');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    dbLogger.error({ error, count: poolsData.length }, 'Failed to batch upsert v4 pools');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Get last sync time for pools
+export async function getPoolsLastSyncTime(chainId: number = 8453): Promise<Date | null> {
+  if (!pool) {
+    return null;
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT MAX(last_synced_at) as last_sync FROM v4_pools WHERE chain_id = $1`,
+      [chainId]
+    );
+    return result.rows[0]?.last_sync || null;
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to get pools last sync time');
+    return null;
+  }
 }
 
 // Export pool for direct queries if needed

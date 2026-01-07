@@ -1,11 +1,96 @@
 import { Router, Request, Response } from 'express';
 import * as subgraph from '../../services/subgraph.js';
+import { getV4Pools } from '../../services/database.js';
 import { logger } from '../../utils/logger.js';
 
 const router = Router();
 const routeLogger = logger.child({ route: 'pools' });
 
-// Get all pools
+// Valid sort fields
+const VALID_SORT_FIELDS = ['tvl', 'apr', 'volume1d', 'volume30d', 'fee'] as const;
+type SortField = typeof VALID_SORT_FIELDS[number];
+
+// Chain name mapping
+const CHAIN_NAMES: Record<number, string> = {
+  8453: 'Base',
+  11155111: 'Sepolia',
+  1: 'Ethereum',
+  42161: 'Arbitrum',
+  10: 'Optimism',
+};
+
+// Get V4 pools with pagination (for pools table page)
+router.get('/v4', async (req: Request, res: Response) => {
+  try {
+    // Default to Base (8453), can be extended to other chains
+    const chainId = parseInt(req.query.chainId as string) || 8453;
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+    const sortBy = (req.query.sortBy as string) || 'apr';
+    const sortOrder = (req.query.sortOrder as string) === 'asc' ? 'asc' : 'desc';
+
+    // Validate sort field
+    const validSortBy = VALID_SORT_FIELDS.includes(sortBy as SortField)
+      ? sortBy as SortField
+      : 'apr';
+
+    const { pools, total } = await getV4Pools({
+      chainId,
+      page,
+      limit,
+      sortBy: validSortBy,
+      sortOrder,
+    });
+
+    // Format pools for frontend
+    const formattedPools = pools.map((pool, index) => ({
+      rank: (page - 1) * limit + index + 1,
+      id: pool.id,
+      chainId: pool.chainId,
+      chainName: CHAIN_NAMES[pool.chainId] || 'Unknown',
+      token0Symbol: pool.token0Symbol || 'UNKNOWN',
+      token1Symbol: pool.token1Symbol || 'UNKNOWN',
+      token0Logo: pool.token0Logo,
+      token1Logo: pool.token1Logo,
+      token0Address: pool.currency0,
+      token1Address: pool.currency1,
+      protocol: 'v4',
+      feeTier: formatFeeTier(pool.fee),
+      fee: pool.fee,
+      tickSpacing: pool.tickSpacing,
+      tvlUsd: pool.tvlUsd,
+      poolApr: pool.poolApr,
+      rewardApr: pool.rewardApr,
+      volume1dUsd: pool.volume1dUsd,
+      volume30dUsd: pool.volume30dUsd,
+      volume1dTvlRatio: pool.tvlUsd > 0 ? pool.volume1dUsd / pool.tvlUsd : 0,
+    }));
+
+    res.json({
+      chainId,
+      chainName: CHAIN_NAMES[chainId] || 'Unknown',
+      pools: formattedPools,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (error) {
+    routeLogger.error({ error }, 'Failed to get V4 pools');
+    res.status(500).json({ error: 'Failed to fetch V4 pools' });
+  }
+});
+
+// Format fee tier for display
+function formatFeeTier(fee: number): string {
+  const feePercent = fee / 10000;
+  if (feePercent < 0.01) return `${feePercent * 100}bps`;
+  return `${feePercent}%`;
+}
+
+// Get all pools (legacy)
 router.get('/', async (req: Request, res: Response) => {
   try {
     const { first = '100', skip = '0' } = req.query;

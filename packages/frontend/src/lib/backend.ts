@@ -287,3 +287,94 @@ export interface BatchSmartAnalysis {
     error?: string;
   }>;
 }
+
+// ============ V4 Pool Types ============
+
+// Supported chain IDs
+export const POOL_CHAIN_IDS = {
+  BASE: 8453,
+  SEPOLIA: 11155111,
+  ETHEREUM: 1,
+  ARBITRUM: 42161,
+  OPTIMISM: 10,
+} as const;
+
+export interface V4PoolItem {
+  rank: number;
+  id: string;
+  chainId: number;
+  chainName: string;
+  token0Symbol: string;
+  token1Symbol: string;
+  token0Logo: string | null;
+  token1Logo: string | null;
+  token0Address: string;
+  token1Address: string;
+  protocol: string;
+  feeTier: string;
+  fee: number;
+  tickSpacing: number;
+  tvlUsd: number;
+  poolApr: number;
+  rewardApr: number | null;
+  volume1dUsd: number;
+  volume30dUsd: number;
+  volume1dTvlRatio: number;
+}
+
+export interface V4PoolsResponse {
+  chainId: number;
+  chainName: string;
+  pools: V4PoolItem[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export type PoolSortField = 'tvl' | 'apr' | 'volume1d' | 'volume30d' | 'fee';
+
+// Fetch V4 pools with pagination
+export async function fetchV4Pools(options: {
+  chainId?: number;
+  page?: number;
+  limit?: number;
+  sortBy?: PoolSortField;
+  sortOrder?: 'asc' | 'desc';
+}): Promise<V4PoolsResponse> {
+  const {
+    chainId = POOL_CHAIN_IDS.BASE,
+    page = 1,
+    limit = 20,
+    sortBy = 'apr',
+    sortOrder = 'desc',
+  } = options;
+
+  try {
+    const params = new URLSearchParams({
+      chainId: String(chainId),
+      page: String(page),
+      limit: String(limit),
+      sortBy,
+      sortOrder,
+    });
+
+    const response = await fetch(`${BACKEND_URL}/api/pools/v4?${params.toString()}`);
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch V4 pools');
+    }
+
+    return response.json();
+  } catch (error) {
+    console.error('Failed to fetch V4 pools:', error);
+    return {
+      chainId,
+      chainName: chainId === POOL_CHAIN_IDS.BASE ? 'Base' : 'Unknown',
+      pools: [],
+      pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
+    };
+  }
+}

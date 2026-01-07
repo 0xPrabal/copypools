@@ -1,60 +1,79 @@
 'use client';
 
-import { useState } from 'react';
-import { useChainId } from 'wagmi';
-import { Loader2, Search, ExternalLink, Droplets, ArrowUpDown } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Search, Droplets, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
-import { usePools, Pool } from '@/hooks/usePonderData';
-import { CHAIN_IDS } from '@/config/contracts';
-
-// Helper to format fee tier
-function formatFee(fee: number): string {
-  return `${(fee / 10000).toFixed(2)}%`;
-}
-
-// Helper to get block explorer URL
-function getExplorerUrl(chainId: number, poolId: string): string {
-  if (chainId === CHAIN_IDS.BASE) {
-    return `https://basescan.org/address/0x498581fF718922c3f8e6A244956aF099B2652b2b#events`;
-  }
-  return `https://sepolia.etherscan.io/address/0xE03A1074c86CFeDd5C142C4F04F1a1536e203543#events`;
-}
-
-// Helper to truncate address
-function truncateAddress(address: string): string {
-  if (!address) return '';
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
-}
+import { PoolTable } from '@/components/pools/pool-table';
+import { fetchV4Pools, V4PoolsResponse, PoolSortField, POOL_CHAIN_IDS } from '@/lib/backend';
 
 export default function PoolsPage() {
-  const chainId = useChainId();
-  const { data: pools, isLoading, error } = usePools();
+  const [data, setData] = useState<V4PoolsResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortBy, setSortBy] = useState<'pair' | 'fee'>('pair');
+  const [sortBy, setSortBy] = useState<PoolSortField>('apr');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [page, setPage] = useState(1);
+  const [chainId, setChainId] = useState(POOL_CHAIN_IDS.BASE);
+  const limit = 20;
 
-  // Filter pools by search term
-  const filteredPools = pools?.filter((pool) => {
-    const searchLower = searchTerm.toLowerCase();
+  const loadPools = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const result = await fetchV4Pools({
+        chainId,
+        page,
+        limit,
+        sortBy,
+        sortOrder,
+      });
+      setData(result);
+    } catch (err) {
+      setError('Failed to load pools. Please try again.');
+      console.error(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [chainId, page, sortBy, sortOrder]);
+
+  useEffect(() => {
+    loadPools();
+  }, [loadPools]);
+
+  const handleSort = (field: PoolSortField) => {
+    if (field === sortBy) {
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(field);
+      setSortOrder('desc');
+    }
+    setPage(1);
+  };
+
+  const handlePageChange = (newPage: number) => {
+    setPage(newPage);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Filter pools by search term (client-side for now)
+  const filteredPools = data?.pools.filter((pool) => {
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
     return (
-      pool.token0Symbol.toLowerCase().includes(searchLower) ||
-      pool.token1Symbol.toLowerCase().includes(searchLower) ||
-      pool.currency0.toLowerCase().includes(searchLower) ||
-      pool.currency1.toLowerCase().includes(searchLower)
+      pool.token0Symbol.toLowerCase().includes(term) ||
+      pool.token1Symbol.toLowerCase().includes(term) ||
+      pool.token0Address.toLowerCase().includes(term) ||
+      pool.token1Address.toLowerCase().includes(term)
     );
   }) || [];
 
-  // Sort pools
-  const sortedPools = [...filteredPools].sort((a, b) => {
-    if (sortBy === 'fee') {
-      return a.fee - b.fee;
-    }
-    // Sort by pair name
-    const pairA = `${a.token0Symbol}/${a.token1Symbol}`;
-    const pairB = `${b.token0Symbol}/${b.token1Symbol}`;
-    return pairA.localeCompare(pairB);
-  });
-
-  const chainName = chainId === CHAIN_IDS.BASE ? 'Base' : chainId === CHAIN_IDS.SEPOLIA ? 'Sepolia' : 'Unknown';
+  // Calculate stats
+  const totalTvl = data?.pools.reduce((sum, p) => sum + p.tvlUsd, 0) || 0;
+  const avgApr = data?.pools.length
+    ? data.pools.reduce((sum, p) => sum + p.poolApr, 0) / data.pools.length
+    : 0;
 
   return (
     <div className="space-y-6">
@@ -66,171 +85,89 @@ export default function PoolsPage() {
             V4 Pools
           </h1>
           <p className="text-gray-400 mt-1">
-            All available Uniswap V4 pools on {chainName}
+            Discover and add liquidity to Uniswap V4 pools on Base
           </p>
         </div>
-        <Link
-          href="/initiator"
-          className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
-        >
-          + New Position
-        </Link>
-      </div>
-
-      {/* Search and Filter */}
-      <div className="flex items-center gap-4">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Search by token symbol or address..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
-          />
+        <div className="flex items-center gap-3">
+          <button
+            onClick={loadPools}
+            disabled={isLoading}
+            className="flex items-center gap-2 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 hover:text-white hover:border-gray-600 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+          <Link
+            href="/initiator"
+            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
+          >
+            + New Position
+          </Link>
         </div>
-        <button
-          onClick={() => setSortBy(sortBy === 'pair' ? 'fee' : 'pair')}
-          className="flex items-center gap-2 px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 hover:text-white transition-colors"
-        >
-          <ArrowUpDown className="h-4 w-4" />
-          Sort by {sortBy === 'pair' ? 'Fee' : 'Pair'}
-        </button>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
           <p className="text-gray-400 text-sm">Total Pools</p>
-          <p className="text-2xl font-bold text-white">{pools?.length || 0}</p>
+          <p className="text-2xl font-bold text-white">{data?.pagination.total || 0}</p>
         </div>
         <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
-          <p className="text-gray-400 text-sm">Known Token Pairs</p>
+          <p className="text-gray-400 text-sm">Total TVL (Top 20)</p>
           <p className="text-2xl font-bold text-white">
-            {pools?.filter(p =>
-              p.token0Symbol !== p.currency0.slice(0, 6) &&
-              p.token1Symbol !== p.currency1.slice(0, 6)
-            ).length || 0}
+            ${totalTvl >= 1e6 ? `${(totalTvl / 1e6).toFixed(1)}M` : totalTvl.toLocaleString()}
           </p>
+        </div>
+        <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
+          <p className="text-gray-400 text-sm">Avg Pool APR</p>
+          <p className="text-2xl font-bold text-green-400">{avgApr.toFixed(2)}%</p>
         </div>
         <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
           <p className="text-gray-400 text-sm">Network</p>
-          <p className="text-2xl font-bold text-white">{chainName}</p>
+          <p className="text-2xl font-bold text-white">{data?.chainName || 'Base'}</p>
         </div>
       </div>
 
-      {/* Pools List */}
-      {isLoading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-8 w-8 animate-spin text-purple-400" />
-          <span className="ml-3 text-gray-400">Loading pools...</span>
-        </div>
-      ) : error ? (
+      {/* Search */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+        <input
+          type="text"
+          placeholder="Search by token symbol or address..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="w-full pl-10 pr-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
+        />
+      </div>
+
+      {/* Error state */}
+      {error && (
         <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-4 text-red-400">
-          Error loading pools. Please try again.
-        </div>
-      ) : sortedPools.length === 0 ? (
-        <div className="bg-gray-800/50 rounded-lg p-8 text-center border border-gray-700">
-          <Droplets className="h-12 w-12 text-gray-600 mx-auto mb-4" />
-          <p className="text-gray-400">
-            {searchTerm ? 'No pools found matching your search.' : 'No pools found on this network.'}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-gray-800/50 rounded-lg border border-gray-700 overflow-hidden">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-gray-700">
-                <th className="text-left px-4 py-3 text-gray-400 font-medium">Pool</th>
-                <th className="text-left px-4 py-3 text-gray-400 font-medium">Fee Tier</th>
-                <th className="text-left px-4 py-3 text-gray-400 font-medium">Tick Spacing</th>
-                <th className="text-left px-4 py-3 text-gray-400 font-medium">Current Tick</th>
-                <th className="text-left px-4 py-3 text-gray-400 font-medium">Hooks</th>
-                <th className="text-right px-4 py-3 text-gray-400 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedPools.map((pool) => (
-                <PoolRow key={pool.id} pool={pool} chainId={chainId} />
-              ))}
-            </tbody>
-          </table>
+          {error}
         </div>
       )}
+
+      {/* Pool Table */}
+      {!error && (
+        <PoolTable
+          pools={searchTerm ? filteredPools : (data?.pools || [])}
+          pagination={
+            searchTerm
+              ? { page: 1, limit: filteredPools.length, total: filteredPools.length, totalPages: 1 }
+              : (data?.pagination || { page: 1, limit: 20, total: 0, totalPages: 0 })
+          }
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          onSort={handleSort}
+          onPageChange={handlePageChange}
+          isLoading={isLoading && !data}
+        />
+      )}
+
+      {/* Info */}
+      <div className="text-center text-gray-500 text-sm">
+        Pool data syncs automatically every 15 minutes. Click any row to add liquidity.
+      </div>
     </div>
-  );
-}
-
-function PoolRow({ pool, chainId }: { pool: Pool; chainId: number }) {
-  const hasHooks = pool.hooks !== '0x0000000000000000000000000000000000000000';
-  const isKnownPair = pool.token0Symbol !== pool.currency0.slice(0, 6) &&
-                       pool.token1Symbol !== pool.currency1.slice(0, 6);
-
-  return (
-    <tr className="border-b border-gray-700/50 hover:bg-gray-700/30 transition-colors">
-      <td className="px-4 py-3">
-        <div className="flex items-center gap-2">
-          <div className="flex -space-x-2">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-xs font-bold text-white border-2 border-gray-800">
-              {pool.token0Symbol.slice(0, 2)}
-            </div>
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-500 to-teal-500 flex items-center justify-center text-xs font-bold text-white border-2 border-gray-800">
-              {pool.token1Symbol.slice(0, 2)}
-            </div>
-          </div>
-          <div>
-            <p className={`font-medium ${isKnownPair ? 'text-white' : 'text-gray-400'}`}>
-              {pool.token0Symbol}/{pool.token1Symbol}
-            </p>
-            <p className="text-xs text-gray-500">
-              {truncateAddress(pool.currency0)} / {truncateAddress(pool.currency1)}
-            </p>
-          </div>
-        </div>
-      </td>
-      <td className="px-4 py-3">
-        <span className={`px-2 py-1 rounded text-sm ${
-          pool.fee === 500 ? 'bg-green-900/50 text-green-400' :
-          pool.fee === 3000 ? 'bg-blue-900/50 text-blue-400' :
-          pool.fee === 10000 ? 'bg-orange-900/50 text-orange-400' :
-          'bg-gray-700 text-gray-300'
-        }`}>
-          {formatFee(pool.fee)}
-        </span>
-      </td>
-      <td className="px-4 py-3 text-gray-300">
-        {pool.tickSpacing}
-      </td>
-      <td className="px-4 py-3 text-gray-300">
-        {pool.tick.toLocaleString()}
-      </td>
-      <td className="px-4 py-3">
-        {hasHooks ? (
-          <span className="px-2 py-1 bg-purple-900/50 text-purple-400 rounded text-sm">
-            {truncateAddress(pool.hooks)}
-          </span>
-        ) : (
-          <span className="text-gray-500">None</span>
-        )}
-      </td>
-      <td className="px-4 py-3 text-right">
-        <div className="flex items-center justify-end gap-2">
-          <Link
-            href={`/initiator?token0=${pool.currency0}&token1=${pool.currency1}&fee=${pool.fee}`}
-            className="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded transition-colors"
-          >
-            Add Liquidity
-          </Link>
-          <a
-            href={getExplorerUrl(chainId, pool.id)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-1 text-gray-400 hover:text-white transition-colors"
-          >
-            <ExternalLink className="h-4 w-4" />
-          </a>
-        </div>
-      </td>
-    </tr>
   );
 }
