@@ -104,67 +104,96 @@ interface SubgraphPool {
   }>;
 }
 
-// Fetch pools from GeckoTerminal (Uniswap V4 on Base)
+// Parse fee from pool name (e.g., "WETH / USDC 0.05%" -> 500)
+function parseFeeFromName(name: string): number {
+  const feeMatch = name.match(/(\d+\.?\d*)%/);
+  if (feeMatch) {
+    const feePercent = parseFloat(feeMatch[1]);
+    return Math.round(feePercent * 10000); // Convert to basis points
+  }
+  return 3000; // Default 0.3%
+}
+
+// Fetch V4 pools from GeckoTerminal
 export async function fetchPoolsFromGecko(): Promise<Partial<V4Pool>[]> {
   try {
-    // Fetch Uniswap V4 pools on Base from GeckoTerminal
-    const response = await fetch(
-      `${GECKO_BASE_URL}/networks/base/dexes/uniswap-v4/pools?page=1&include=base_token,quote_token`,
-      {
-        headers: {
-          'Accept': 'application/json',
-        },
+    const allPools: Partial<V4Pool>[] = [];
+
+    // Fetch multiple pages of V4 pools from Base network
+    for (let page = 1; page <= 10; page++) {
+      const response = await fetch(
+        `${GECKO_BASE_URL}/networks/base/dexes/uniswap-v4-base/pools?page=${page}`,
+        {
+          headers: {
+            'Accept': 'application/json',
+          },
+        }
+      );
+
+      if (!response.ok) {
+        subgraphLogger.warn({ status: response.status, page }, 'GeckoTerminal API returned non-OK status');
+        break;
       }
-    );
 
-    if (!response.ok) {
-      subgraphLogger.warn({ status: response.status }, 'GeckoTerminal API returned non-OK status');
-      return [];
-    }
+      const data = await response.json() as { data?: GeckoPoolData[] };
 
-    const data = await response.json() as { data?: GeckoPoolData[] };
-    const pools: Partial<V4Pool>[] = [];
+      if (!data.data || !Array.isArray(data.data) || data.data.length === 0) {
+        break;
+      }
 
-    if (data.data && Array.isArray(data.data)) {
       for (const pool of data.data) {
         const attrs = pool.attributes;
 
         // Parse pool address from id (format: base_0x...)
-        const poolAddress = pool.id.split('_')[1] || pool.attributes.address;
+        const poolAddress = pool.id.split('_')[1] || attrs.address;
 
         // Extract token addresses from relationships
         const baseTokenId = pool.relationships?.base_token?.data?.id || '';
         const quoteTokenId = pool.relationships?.quote_token?.data?.id || '';
 
         // Parse token addresses (format: base_0x...)
-        const token0Address = baseTokenId.split('_')[1] || '';
-        const token1Address = quoteTokenId.split('_')[1] || '';
+        const token0Address = (baseTokenId.split('_')[1] || '').toLowerCase();
+        const token1Address = (quoteTokenId.split('_')[1] || '').toLowerCase();
 
-        // Get token info
-        const token0Info = TOKEN_INFO[token0Address.toLowerCase()] || { symbol: 'UNKNOWN', decimals: 18 };
-        const token1Info = TOKEN_INFO[token1Address.toLowerCase()] || { symbol: 'UNKNOWN', decimals: 18 };
+        if (!token0Address || !token1Address) continue;
+
+        // Get token info - extract symbol from pool name if not in our map
+        const poolName = attrs.name || '';
+        const nameParts = poolName.split(' / ');
+        const token0SymbolFromName = nameParts[0]?.trim() || 'UNKNOWN';
+        const token1SymbolFromName = nameParts[1]?.split(' ')[0]?.trim() || 'UNKNOWN';
+
+        const token0Info = TOKEN_INFO[token0Address] || { symbol: token0SymbolFromName, decimals: 18 };
+        const token1Info = TOKEN_INFO[token1Address] || { symbol: token1SymbolFromName, decimals: 18 };
 
         const tvlUsd = parseFloat(attrs.reserve_in_usd) || 0;
         const volume1dUsd = parseFloat(attrs.volume_usd?.h24) || 0;
 
-        // Estimate fees (0.3% of volume for now - adjust based on fee tier)
-        const fees1dUsd = volume1dUsd * 0.003;
+        // Skip pools with very low TVL
+        if (tvlUsd < 1000) continue;
+
+        // Parse fee from pool name
+        const fee = parseFeeFromName(poolName);
+
+        // Estimate fees based on fee tier
+        const feeRate = fee / 1000000; // Convert basis points to rate
+        const fees1dUsd = volume1dUsd * feeRate;
 
         // Calculate APR: (fees * 365 / tvl) * 100
         const poolApr = tvlUsd > 0 ? (fees1dUsd * 365 / tvlUsd) * 100 : 0;
 
-        pools.push({
+        allPools.push({
           id: poolAddress,
           chainId: DEFAULT_CHAIN_ID,
           currency0: token0Address,
           currency1: token1Address,
           token0Symbol: token0Info.symbol,
           token1Symbol: token1Info.symbol,
-          token0Logo: TOKEN_LOGOS[token0Address.toLowerCase()] || null,
-          token1Logo: TOKEN_LOGOS[token1Address.toLowerCase()] || null,
+          token0Logo: TOKEN_LOGOS[token0Address] || null,
+          token1Logo: TOKEN_LOGOS[token1Address] || null,
           token0Decimals: token0Info.decimals,
           token1Decimals: token1Info.decimals,
-          fee: 3000, // Default to 0.3% - would need to parse from pool name
+          fee,
           tvlUsd,
           volume1dUsd,
           volume30dUsd: volume1dUsd * 30, // Estimate
@@ -173,10 +202,13 @@ export async function fetchPoolsFromGecko(): Promise<Partial<V4Pool>[]> {
           rewardApr: null,
         });
       }
+
+      // Small delay between requests to be nice to the API
+      await new Promise(resolve => setTimeout(resolve, 200));
     }
 
-    subgraphLogger.info({ count: pools.length }, 'Fetched pools from GeckoTerminal');
-    return pools;
+    subgraphLogger.info({ count: allPools.length }, 'Fetched pools from GeckoTerminal');
+    return allPools;
   } catch (error) {
     subgraphLogger.error({ error }, 'Failed to fetch pools from GeckoTerminal');
     return [];
