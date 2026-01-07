@@ -11,7 +11,7 @@ export default function PoolsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortBy, setSortBy] = useState<PoolSortField>('apr');
+  const [sortBy, setSortBy] = useState<PoolSortField>('tvl');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
   const [chainId, setChainId] = useState(POOL_CHAIN_IDS.BASE);
