@@ -439,26 +439,41 @@ export function OneClickMint({ onSuccess, preselectedToken0, preselectedToken1, 
       )}
 
       <div className="space-y-5">
-        {/* Pool Selection */}
-        <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">Select Pool ({POOL_PAIRS.length} available)</label>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 max-h-48 overflow-y-auto pr-1">
-            {POOL_PAIRS.map((pair) => (
-              <button
-                key={pair.name}
-                onClick={() => setSelectedPool(pair)}
-                className={`p-3 rounded-xl border transition-all ${
-                  selectedPool.name === pair.name
-                    ? 'bg-primary-500/20 border-primary-500 text-white'
-                    : 'bg-gray-800/50 border-gray-700/50 hover:border-gray-600 text-gray-300'
-                }`}
-              >
-                <div className="font-medium text-sm">{pair.name}</div>
-                <div className="text-xs text-gray-400">{(pair.fee / 10000).toFixed(2)}% fee</div>
-              </button>
-            ))}
+        {/* Pool Selection - hide when preselected from pools page */}
+        {hasPreselectedPool ? (
+          <div className="bg-gray-800/50 rounded-xl p-4 border border-primary-500/30">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Selected Pool</label>
+                <div className="font-semibold text-white text-lg">{selectedPool.name}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-xs text-gray-400">Fee Tier</div>
+                <div className="text-primary-400 font-medium">{(selectedPool.fee / 10000).toFixed(2)}%</div>
+              </div>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">Select Pool ({POOL_PAIRS.length} available)</label>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 max-h-48 overflow-y-auto pr-1">
+              {POOL_PAIRS.map((pair) => (
+                <button
+                  key={pair.name}
+                  onClick={() => setSelectedPool(pair)}
+                  className={`p-3 rounded-xl border transition-all ${
+                    selectedPool.name === pair.name
+                      ? 'bg-primary-500/20 border-primary-500 text-white'
+                      : 'bg-gray-800/50 border-gray-700/50 hover:border-gray-600 text-gray-300'
+                  }`}
+                >
+                  <div className="font-medium text-sm">{pair.name}</div>
+                  <div className="text-xs text-gray-400">{(pair.fee / 10000).toFixed(2)}% fee</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Input Token & Amount */}
         <div>

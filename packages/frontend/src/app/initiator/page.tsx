@@ -3,9 +3,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAccount, useReadContract, useBalance, useChainId } from 'wagmi';
-import { Plus, Loader2, AlertCircle, Info, Zap, Settings } from 'lucide-react';
+import { Plus, Loader2, AlertCircle, Info, Zap, ArrowRight, ChevronDown } from 'lucide-react';
 import { parseUnits, formatUnits, keccak256, encodeAbiParameters } from 'viem';
 import { useV4Utils } from '@/hooks/useV4Utils';
+import { useZapLiquidity, ZapToken, ZapQuote } from '@/hooks/useZapLiquidity';
 import { useTokenApproval } from '@/hooks/useTokenApproval';
 import { useToast } from '@/components/common/toast';
 import { getContracts, CHAIN_IDS } from '@/config/contracts';
@@ -13,7 +14,6 @@ import { TOKENS_BY_CHAIN } from '@/config/tokens';
 import ERC20Abi from '@/abis/ERC20.json';
 import StateViewAbi from '@/abis/StateView.json';
 import { getTickSpacing, calculateTickRange, getFullRangeTicks, getTickFromSqrtPrice } from '@/utils/tickMath';
-import { OneClickMint } from '@/components/position/one-click-mint';
 
 const FEE_TIERS = [
   { label: '0.05%', value: 500 },
@@ -27,7 +27,7 @@ export default function InitiatorPage() {
   const CONTRACTS = getContracts(chainId);
   const { showToast } = useToast();
   const [step, setStep] = useState(1);
-  const [mode, setMode] = useState<'zap' | 'advanced'>('zap');
+  const [depositMode, setDepositMode] = useState<'single' | 'both'>('both');
 
   // Parse URL parameters (from pools page navigation)
   const searchParams = useSearchParams();
@@ -48,6 +48,11 @@ export default function InitiatorPage() {
   const [amount0, setAmount0] = useState('');
   const [amount1, setAmount1] = useState('');
   const [activeInput, setActiveInput] = useState<'amount0' | 'amount1' | null>(null);
+
+  // Single token zap state
+  const [singleTokenAddress, setSingleTokenAddress] = useState<string>('');
+  const [singleTokenAmount, setSingleTokenAmount] = useState('');
+  const [zapQuote, setZapQuote] = useState<ZapQuote | null>(null);
 
   // Reset tokens when chain changes (only if not coming from pools page with params)
   useEffect(() => {
@@ -76,15 +81,28 @@ export default function InitiatorPage() {
         setFee(parsedFee);
       }
 
-      // Skip to step 2 (range selection) in advanced mode
-      // For zap mode, OneClickMint will handle the preselected pool
-      if (mode === 'advanced' && t0 && t1) {
+      // Skip to step 2 (range selection) when pool is preselected
+      if (t0 && t1) {
         setStep(2);
+        // Default single token to token0
+        setSingleTokenAddress(urlToken0);
       }
     }
-  }, [hasPoolParams, urlToken0, urlToken1, urlFee, TOKENS, mode]);
+  }, [hasPoolParams, urlToken0, urlToken1, urlFee, TOKENS]);
 
   const { mintPosition, isPending, isConfirming, isSuccess, hash } = useV4Utils();
+
+  // Zap liquidity hook for single-token deposits
+  const {
+    getZapQuote,
+    executeZap,
+    quoteLoading: zapQuoteLoading,
+    isPending: zapIsPending,
+    isConfirming: zapIsConfirming,
+    isSuccess: zapIsSuccess,
+    hash: zapHash,
+    error: zapError,
+  } = useZapLiquidity();
 
   // Get token data from TOKENS list
   const token0Data = useMemo(() => {
@@ -557,6 +575,126 @@ export default function InitiatorPage() {
     }
   };
 
+  // Get single token data
+  const singleTokenData = useMemo(() => {
+    if (!singleTokenAddress) return undefined;
+    return TOKENS.find(t => t.address.toLowerCase() === singleTokenAddress.toLowerCase());
+  }, [TOKENS, singleTokenAddress]);
+
+  // Fetch zap quote when single token amount changes
+  useEffect(() => {
+    const fetchZapQuote = async () => {
+      if (depositMode !== 'single' || !singleTokenAmount || parseFloat(singleTokenAmount) <= 0 || !singleTokenData || !token0Data || !token1Data || !address) {
+        setZapQuote(null);
+        return;
+      }
+
+      const inputToken: ZapToken = {
+        symbol: singleTokenData.symbol,
+        address: singleTokenData.address,
+        decimals: singleTokenData.decimals,
+        isNative: singleTokenData.isNative,
+      };
+
+      const targetToken0: ZapToken = {
+        symbol: token0Data.symbol,
+        address: token0Data.address,
+        decimals: token0Data.decimals,
+        isNative: token0Data.isNative,
+      };
+
+      const targetToken1: ZapToken = {
+        symbol: token1Data.symbol,
+        address: token1Data.address,
+        decimals: token1Data.decimals,
+        isNative: token1Data.isNative,
+      };
+
+      const rangeStrategy = minPrice === 'full' ? 'full' : minPrice === 'wide' ? 'wide' : 'concentrated';
+
+      const quote = await getZapQuote({
+        inputToken,
+        inputAmount: singleTokenAmount,
+        targetToken0,
+        targetToken1,
+        fee,
+        rangeStrategy,
+        recipient: address,
+      });
+
+      setZapQuote(quote);
+    };
+
+    const debounce = setTimeout(fetchZapQuote, 500);
+    return () => clearTimeout(debounce);
+  }, [depositMode, singleTokenAmount, singleTokenData, token0Data, token1Data, fee, minPrice, address, getZapQuote]);
+
+  // Handle zap execution
+  const handleZap = async () => {
+    if (!address || !singleTokenData || !token0Data || !token1Data || !singleTokenAmount) return;
+
+    try {
+      showToast({ type: 'info', message: 'Creating position with auto-swap...' });
+
+      const inputToken: ZapToken = {
+        symbol: singleTokenData.symbol,
+        address: singleTokenData.address,
+        decimals: singleTokenData.decimals,
+        isNative: singleTokenData.isNative,
+      };
+
+      const targetToken0: ZapToken = {
+        symbol: token0Data.symbol,
+        address: token0Data.address,
+        decimals: token0Data.decimals,
+        isNative: token0Data.isNative,
+      };
+
+      const targetToken1: ZapToken = {
+        symbol: token1Data.symbol,
+        address: token1Data.address,
+        decimals: token1Data.decimals,
+        isNative: token1Data.isNative,
+      };
+
+      const rangeStrategy = minPrice === 'full' ? 'full' : minPrice === 'wide' ? 'wide' : 'concentrated';
+
+      await executeZap({
+        inputToken,
+        inputAmount: singleTokenAmount,
+        targetToken0,
+        targetToken1,
+        fee,
+        rangeStrategy,
+        recipient: address,
+      });
+    } catch (error: any) {
+      console.error('Zap execution error:', error);
+      showToast({ type: 'error', message: error.message || 'Transaction failed' });
+    }
+  };
+
+  // Handle zap success
+  useEffect(() => {
+    if (zapIsSuccess && zapHash) {
+      showToast({
+        type: 'success',
+        message: 'Position created successfully!',
+        txHash: zapHash,
+        chainId,
+      });
+      // Reset form
+      setTimeout(() => {
+        setStep(1);
+        setToken0('');
+        setToken1('');
+        setSingleTokenAmount('');
+        setSingleTokenAddress('');
+        setZapQuote(null);
+      }, 2000);
+    }
+  }, [zapIsSuccess, zapHash, showToast, chainId]);
+
   if (!isConnected) {
     return (
       <div className="max-w-2xl mx-auto card py-12 text-center">
@@ -581,44 +719,8 @@ export default function InitiatorPage() {
         )}
       </div>
 
-      {/* Mode Toggle */}
-      <div className="flex items-center gap-2 mb-8 p-1 bg-gray-800/50 rounded-xl w-fit">
-        <button
-          onClick={() => setMode('zap')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-            mode === 'zap'
-              ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg'
-              : 'text-gray-400 hover:text-white'
-          }`}
-        >
-          <Zap size={16} />
-          One-Click Zap
-        </button>
-        <button
-          onClick={() => setMode('advanced')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-            mode === 'advanced'
-              ? 'bg-primary-500 text-white shadow-lg'
-              : 'text-gray-400 hover:text-white'
-          }`}
-        >
-          <Settings size={16} />
-          Advanced
-        </button>
-      </div>
-
-      {/* One-Click Zap Mode */}
-      {mode === 'zap' && (
-        <OneClickMint
-          preselectedToken0={hasPoolParams ? urlToken0! : undefined}
-          preselectedToken1={hasPoolParams ? urlToken1! : undefined}
-          preselectedFee={hasPoolParams && urlFee ? parseInt(urlFee) : undefined}
-        />
-      )}
-
-      {/* Advanced Mode - Step Indicator */}
-      {mode === 'advanced' && (
-        <div className="flex items-center gap-4 mb-8">
+      {/* Step Indicator */}
+      <div className="flex items-center gap-4 mb-8">
           {[1, 2, 3].map((s) => (
             <div key={s} className="flex items-center flex-1">
               <div
@@ -639,11 +741,10 @@ export default function InitiatorPage() {
               )}
             </div>
           ))}
-        </div>
-      )}
+      </div>
 
       {/* Step 1: Select Pool */}
-      {mode === 'advanced' && step === 1 && (
+      {step === 1 && (
         <div className="card space-y-6">
           <div>
             <h2 className="text-xl font-semibold mb-4">Select Pool</h2>
@@ -716,7 +817,7 @@ export default function InitiatorPage() {
       )}
 
       {/* Step 2: Set Price Range */}
-      {mode === 'advanced' && step === 2 && (
+      {step === 2 && (
         <div className="card space-y-6">
           <div>
             <h2 className="text-xl font-semibold mb-4">Set Price Range</h2>
@@ -812,13 +913,38 @@ export default function InitiatorPage() {
       )}
 
       {/* Step 3: Deposit Amounts */}
-      {mode === 'advanced' && step === 3 && (
+      {step === 3 && (
         <div className="card space-y-6">
           <div>
             <h2 className="text-xl font-semibold mb-4">Deposit Amounts</h2>
-            <p className="text-gray-400 text-sm mb-6">
-              Enter the amount of tokens to deposit
+            <p className="text-gray-400 text-sm mb-4">
+              Choose how to provide liquidity
             </p>
+          </div>
+
+          {/* Deposit Mode Toggle */}
+          <div className="flex items-center gap-2 p-1 bg-gray-800/50 rounded-xl w-fit">
+            <button
+              onClick={() => setDepositMode('single')}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                depositMode === 'single'
+                  ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <Zap size={16} />
+              Single Token
+            </button>
+            <button
+              onClick={() => setDepositMode('both')}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                depositMode === 'both'
+                  ? 'bg-primary-500 text-white shadow-lg'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              Both Tokens
+            </button>
           </div>
 
           {/* Pool Price Warning */}
@@ -846,83 +972,196 @@ export default function InitiatorPage() {
             </div>
           )}
 
-          <div className="space-y-4">
-            <div>
-              <div className="flex justify-between items-center mb-2">
-                <div className="flex items-center gap-2">
-                  <label className="block text-sm font-medium">
-                    {token0Data?.symbol} Amount
-                  </label>
-                  {activeInput === 'amount1' && amount1 && calculatePairedAmount && (
-                    <span className="text-xs bg-primary-500/20 text-primary-400 px-1.5 py-0.5 rounded">Auto</span>
-                  )}
-                </div>
-                {balance0 != null && token0Data && (
-                  <span className="text-xs text-gray-400">
-                    Balance: {parseFloat(formatUnits(BigInt(balance0.toString()), token0Data.decimals)).toFixed(4)}
-                  </span>
-                )}
+          {/* Single Token Deposit UI */}
+          {depositMode === 'single' && (
+            <div className="space-y-4">
+              <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3 flex items-start gap-2">
+                <Zap className="text-purple-400 mt-0.5 flex-shrink-0" size={16} />
+                <p className="text-xs text-purple-200">
+                  Deposit a single token and we&apos;ll automatically swap a portion to create a balanced position.
+                </p>
               </div>
-              <input
-                type="number"
-                value={amount0}
-                onChange={(e) => {
-                  setActiveInput('amount0');
-                  setAmount0(e.target.value);
-                }}
-                onFocus={() => setActiveInput('amount0')}
-                placeholder="0.00"
-                step="0.01"
-                className={`w-full px-4 py-3 bg-gray-800 border rounded-lg focus:outline-none focus:border-primary-500 ${
-                  activeInput === 'amount1' && amount1 ? 'border-primary-500/50' : 'border-gray-700'
-                }`}
-              />
-              {balance0 != null && token0Data && amount0 && parseUnits(amount0, token0Data.decimals) > BigInt(balance0.toString()) && (
-                <div className="flex items-center gap-1 mt-1 text-red-400 text-xs">
-                  <AlertCircle size={12} />
-                  <span>Insufficient balance</span>
-                </div>
-              )}
-            </div>
 
-            <div>
-              <div className="flex justify-between items-center mb-2">
-                <div className="flex items-center gap-2">
+              <div>
+                <label className="block text-sm font-medium mb-2">Select Token</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setSingleTokenAddress(token0)}
+                    className={`p-3 rounded-lg border transition-all ${
+                      singleTokenAddress === token0
+                        ? 'bg-primary-500/20 border-primary-500 text-white'
+                        : 'bg-gray-800 border-gray-700 hover:border-gray-600 text-gray-300'
+                    }`}
+                  >
+                    {token0Data?.symbol || 'Token 0'}
+                  </button>
+                  <button
+                    onClick={() => setSingleTokenAddress(token1)}
+                    className={`p-3 rounded-lg border transition-all ${
+                      singleTokenAddress === token1
+                        ? 'bg-primary-500/20 border-primary-500 text-white'
+                        : 'bg-gray-800 border-gray-700 hover:border-gray-600 text-gray-300'
+                    }`}
+                  >
+                    {token1Data?.symbol || 'Token 1'}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-2">
                   <label className="block text-sm font-medium">
-                    {token1Data?.symbol} Amount
+                    Amount
                   </label>
-                  {activeInput === 'amount0' && amount0 && calculatePairedAmount && (
-                    <span className="text-xs bg-primary-500/20 text-primary-400 px-1.5 py-0.5 rounded">Auto</span>
+                  {singleTokenAddress && (
+                    <span className="text-xs text-gray-400">
+                      Balance: {singleTokenAddress === token0 && balance0 != null && token0Data
+                        ? parseFloat(formatUnits(BigInt(balance0.toString()), token0Data.decimals)).toFixed(4)
+                        : singleTokenAddress === token1 && balance1 != null && token1Data
+                        ? parseFloat(formatUnits(BigInt(balance1.toString()), token1Data.decimals)).toFixed(4)
+                        : '0'}
+                    </span>
                   )}
                 </div>
-                {balance1 != null && token1Data && (
-                  <span className="text-xs text-gray-400">
-                    Balance: {parseFloat(formatUnits(BigInt(balance1.toString()), token1Data.decimals)).toFixed(4)}
-                  </span>
-                )}
+                <input
+                  type="number"
+                  value={singleTokenAmount}
+                  onChange={(e) => setSingleTokenAmount(e.target.value)}
+                  placeholder="0.00"
+                  step="0.01"
+                  className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-primary-500"
+                />
               </div>
-              <input
-                type="number"
-                value={amount1}
-                onChange={(e) => {
-                  setActiveInput('amount1');
-                  setAmount1(e.target.value);
-                }}
-                onFocus={() => setActiveInput('amount1')}
-                placeholder="0.00"
-                step="0.01"
-                className={`w-full px-4 py-3 bg-gray-800 border rounded-lg focus:outline-none focus:border-primary-500 ${
-                  activeInput === 'amount0' && amount0 ? 'border-primary-500/50' : 'border-gray-700'
-                }`}
-              />
-              {balance1 != null && token1Data && amount1 && parseUnits(amount1, token1Data.decimals) > BigInt(balance1.toString()) && (
-                <div className="flex items-center gap-1 mt-1 text-red-400 text-xs">
-                  <AlertCircle size={12} />
-                  <span>Insufficient balance</span>
+
+              {/* Zap Quote Preview */}
+              {zapQuoteLoading && (
+                <div className="flex items-center justify-center gap-2 py-4 text-gray-400">
+                  <Loader2 className="animate-spin" size={16} />
+                  <span className="text-sm">Getting quote...</span>
+                </div>
+              )}
+
+              {zapQuote && (
+                <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700/50">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Info size={14} className="text-blue-400" />
+                    <span className="text-sm font-medium text-gray-300">Position Preview</span>
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Swap Amount</span>
+                      <span className="text-white">
+                        {formatUnits(zapQuote.swapAmount, zapQuote.swapFromToken.decimals).slice(0, 10)} {zapQuote.swapFromToken.symbol}
+                        <ArrowRight className="inline mx-1" size={12} />
+                        {zapQuote.swapToToken.symbol}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Expected {token0Data?.symbol}</span>
+                      <span className="text-white">
+                        {token0Data && formatUnits(zapQuote.expectedAmount0, token0Data.decimals).slice(0, 10)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Expected {token1Data?.symbol}</span>
+                      <span className="text-white">
+                        {token1Data && formatUnits(zapQuote.expectedAmount1, token1Data.decimals).slice(0, 10)}
+                      </span>
+                    </div>
+                    {zapQuote.priceImpact > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Price Impact</span>
+                        <span className={zapQuote.priceImpact > 1 ? 'text-yellow-400' : 'text-green-400'}>
+                          {zapQuote.priceImpact.toFixed(2)}%
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
-          </div>
+          )}
+
+          {/* Both Tokens Deposit UI */}
+          {depositMode === 'both' && (
+            <div className="space-y-4">
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <div className="flex items-center gap-2">
+                    <label className="block text-sm font-medium">
+                      {token0Data?.symbol} Amount
+                    </label>
+                    {activeInput === 'amount1' && amount1 && calculatePairedAmount && (
+                      <span className="text-xs bg-primary-500/20 text-primary-400 px-1.5 py-0.5 rounded">Auto</span>
+                    )}
+                  </div>
+                  {balance0 != null && token0Data && (
+                    <span className="text-xs text-gray-400">
+                      Balance: {parseFloat(formatUnits(BigInt(balance0.toString()), token0Data.decimals)).toFixed(4)}
+                    </span>
+                  )}
+                </div>
+                <input
+                  type="number"
+                  value={amount0}
+                  onChange={(e) => {
+                    setActiveInput('amount0');
+                    setAmount0(e.target.value);
+                  }}
+                  onFocus={() => setActiveInput('amount0')}
+                  placeholder="0.00"
+                  step="0.01"
+                  className={`w-full px-4 py-3 bg-gray-800 border rounded-lg focus:outline-none focus:border-primary-500 ${
+                    activeInput === 'amount1' && amount1 ? 'border-primary-500/50' : 'border-gray-700'
+                  }`}
+                />
+                {balance0 != null && token0Data && amount0 && parseUnits(amount0, token0Data.decimals) > BigInt(balance0.toString()) && (
+                  <div className="flex items-center gap-1 mt-1 text-red-400 text-xs">
+                    <AlertCircle size={12} />
+                    <span>Insufficient balance</span>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <div className="flex items-center gap-2">
+                    <label className="block text-sm font-medium">
+                      {token1Data?.symbol} Amount
+                    </label>
+                    {activeInput === 'amount0' && amount0 && calculatePairedAmount && (
+                      <span className="text-xs bg-primary-500/20 text-primary-400 px-1.5 py-0.5 rounded">Auto</span>
+                    )}
+                  </div>
+                  {balance1 != null && token1Data && (
+                    <span className="text-xs text-gray-400">
+                      Balance: {parseFloat(formatUnits(BigInt(balance1.toString()), token1Data.decimals)).toFixed(4)}
+                    </span>
+                  )}
+                </div>
+                <input
+                  type="number"
+                  value={amount1}
+                  onChange={(e) => {
+                    setActiveInput('amount1');
+                    setAmount1(e.target.value);
+                  }}
+                  onFocus={() => setActiveInput('amount1')}
+                  placeholder="0.00"
+                  step="0.01"
+                  className={`w-full px-4 py-3 bg-gray-800 border rounded-lg focus:outline-none focus:border-primary-500 ${
+                    activeInput === 'amount0' && amount0 ? 'border-primary-500/50' : 'border-gray-700'
+                  }`}
+                />
+                {balance1 != null && token1Data && amount1 && parseUnits(amount1, token1Data.decimals) > BigInt(balance1.toString()) && (
+                  <div className="flex items-center gap-1 mt-1 text-red-400 text-xs">
+                    <AlertCircle size={12} />
+                    <span>Insufficient balance</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Loading state for pool data */}
           {isLoadingSlot0 && (
@@ -967,15 +1206,17 @@ export default function InitiatorPage() {
           </div>
 
           <div className="space-y-3">
-            {/* Approval Buttons */}
-            <button
-              onClick={handleApprovals}
-              disabled={!amount0 || !amount1 || isPendingApproval0 || isPendingApproval1}
-              className="btn-secondary w-full py-3 flex items-center justify-center gap-2"
-            >
-              {(isPendingApproval0 || isPendingApproval1) && <Loader2 className="animate-spin" size={18} />}
-              {isPendingApproval0 || isPendingApproval1 ? 'Approving...' : 'Approve Tokens'}
-            </button>
+            {/* Approval Buttons - Both Tokens Mode */}
+            {depositMode === 'both' && (
+              <button
+                onClick={handleApprovals}
+                disabled={!amount0 || !amount1 || isPendingApproval0 || isPendingApproval1}
+                className="btn-secondary w-full py-3 flex items-center justify-center gap-2"
+              >
+                {(isPendingApproval0 || isPendingApproval1) && <Loader2 className="animate-spin" size={18} />}
+                {isPendingApproval0 || isPendingApproval1 ? 'Approving...' : 'Approve Tokens'}
+              </button>
+            )}
 
             {/* Create Position Button */}
             <div className="flex gap-3">
@@ -985,21 +1226,42 @@ export default function InitiatorPage() {
               >
                 Back
               </button>
-              <button
-                onClick={handleMintPosition}
-                disabled={!amount0 || !amount1 || isPending || isConfirming || !poolPriceInfo.isRealistic}
-                className="btn-primary flex-1 py-3 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {(isPending || isConfirming) && <Loader2 className="animate-spin" size={18} />}
-                {isPending ? 'Confirm in Wallet...' : isConfirming ? 'Creating...' : !poolPriceInfo.isRealistic ? 'Pool Price Invalid' : 'Create Position'}
-              </button>
+
+              {/* Both Tokens Mode - Create Position */}
+              {depositMode === 'both' && (
+                <button
+                  onClick={handleMintPosition}
+                  disabled={!amount0 || !amount1 || isPending || isConfirming || !poolPriceInfo.isRealistic}
+                  className="btn-primary flex-1 py-3 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {(isPending || isConfirming) && <Loader2 className="animate-spin" size={18} />}
+                  {isPending ? 'Confirm in Wallet...' : isConfirming ? 'Creating...' : !poolPriceInfo.isRealistic ? 'Pool Price Invalid' : 'Create Position'}
+                </button>
+              )}
+
+              {/* Single Token Mode - Zap Position */}
+              {depositMode === 'single' && (
+                <button
+                  onClick={handleZap}
+                  disabled={!singleTokenAmount || !singleTokenAddress || zapIsPending || zapIsConfirming}
+                  className="btn-primary flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {(zapIsPending || zapIsConfirming) && <Loader2 className="animate-spin" size={18} />}
+                  {zapIsPending ? 'Confirm in Wallet...' : zapIsConfirming ? 'Creating...' : (
+                    <>
+                      <Zap size={16} />
+                      Create Position
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </div>
       )}
 
       {/* Help Section - Chain-specific info */}
-      {mode === 'advanced' && chainId === CHAIN_IDS.SEPOLIA && (
+      {chainId === CHAIN_IDS.SEPOLIA && (
         <div className="card mt-8 border-blue-500/20 bg-blue-500/5">
           <div className="flex items-start gap-3">
             <AlertCircle className="text-blue-400 mt-1" size={20} />
@@ -1037,7 +1299,7 @@ export default function InitiatorPage() {
         </div>
       )}
 
-      {mode === 'advanced' && chainId === CHAIN_IDS.BASE && (
+      {chainId === CHAIN_IDS.BASE && (
         <div className="card mt-8 border-blue-500/20 bg-blue-500/5">
           <div className="flex items-start gap-3">
             <Info className="text-blue-400 mt-1" size={20} />
