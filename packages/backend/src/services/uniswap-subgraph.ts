@@ -105,11 +105,16 @@ interface SubgraphPool {
 }
 
 // Parse fee from pool name (e.g., "WETH / USDC 0.05%" -> 500)
-// Returns fee in basis points (1 bp = 0.01%), or null if not found
+// Returns fee in basis points (1 bp = 0.01%), or null if not found/invalid
 function parseFeeFromName(name: string): number | null {
   const feeMatch = name.match(/(\d+\.?\d*)%/);
   if (feeMatch) {
     const feePercent = parseFloat(feeMatch[1]);
+    // GeckoTerminal sometimes shows raw V4 dynamic fee values (838.861%)
+    // Real fees are typically 0.01% to 10%, reject anything above 10%
+    if (feePercent > 10) {
+      return null; // Invalid fee, likely V4 dynamic fee encoding shown incorrectly
+    }
     return Math.round(feePercent * 10000); // Convert to basis points
   }
   return null; // Fee not available in pool name
