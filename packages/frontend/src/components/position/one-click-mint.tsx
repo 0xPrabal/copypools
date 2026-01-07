@@ -17,31 +17,13 @@ import { useZapLiquidity, ZapToken, ZapQuote } from '@/hooks/useZapLiquidity';
 import { useTokenApproval } from '@/hooks/useTokenApproval';
 import { useToast } from '@/components/common/toast';
 import { getContracts, CHAIN_IDS } from '@/config/contracts';
+import { TOKENS_BY_CHAIN } from '@/config/tokens';
 import ERC20Abi from '@/abis/ERC20.json';
 
 // Known 0x Exchange Proxy addresses
 const ZEROX_EXCHANGE_PROXY: Record<number, `0x${string}`> = {
   [CHAIN_IDS.BASE]: '0xDef1C0ded9bec7F1a1670819833240f027b25EfF',
   [CHAIN_IDS.SEPOLIA]: '0xDef1C0ded9bec7F1a1670819833240f027b25EfF',
-};
-
-// Token lists per chain
-const TOKENS_BY_CHAIN: Record<number, ZapToken[]> = {
-  [CHAIN_IDS.BASE]: [
-    { symbol: 'ETH', address: '0x0000000000000000000000000000000000000000', decimals: 18, isNative: true },
-    { symbol: 'WETH', address: '0x4200000000000000000000000000000000000006', decimals: 18 },
-    { symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6 },
-    { symbol: 'USDbC', address: '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA', decimals: 6 },
-    { symbol: 'DAI', address: '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb', decimals: 18 },
-    { symbol: 'cbETH', address: '0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22', decimals: 18 },
-    { symbol: 'wstETH', address: '0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452', decimals: 18 },
-  ],
-  [CHAIN_IDS.SEPOLIA]: [
-    { symbol: 'ETH', address: '0x0000000000000000000000000000000000000000', decimals: 18, isNative: true },
-    { symbol: 'WETH', address: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9', decimals: 18 },
-    { symbol: 'USDC', address: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', decimals: 6 },
-    { symbol: 'DAI', address: '0x68194a729C2450ad26072b3D33ADaCbcef39D574', decimals: 18 },
-  ],
 };
 
 // Popular pool pairs
