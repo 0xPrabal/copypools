@@ -11,7 +11,7 @@ const inter = Inter({ subsets: ['latin'] });
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
-  title: 'Liquifi - Uniswap V4 Liquidity Management',
+  title: 'CopyPools - Uniswap V4 Liquidity Management',
   description: 'Comprehensive liquidity management platform for Uniswap V4 with auto-compounding, lending, and position automation.',
 };
 

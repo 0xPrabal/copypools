@@ -15,7 +15,7 @@ export default function HelpPage() {
           <Book className="text-primary-400 mb-4" size={32} />
           <h3 className="text-lg font-semibold mb-2">Documentation</h3>
           <p className="text-gray-400 text-sm">
-            Learn how to use Liquifi and manage your positions
+            Learn how to use CopyPools and manage your positions
           </p>
         </div>
 

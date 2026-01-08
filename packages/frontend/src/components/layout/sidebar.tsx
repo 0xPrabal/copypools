@@ -76,7 +76,7 @@ export function Sidebar() {
       {/* Logo */}
       <div className="h-16 flex items-center px-6 border-b border-white/5">
         <Link href="/" className="flex items-center group">
-          <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary-400 to-accent-400 group-hover:from-primary-300 group-hover:to-accent-300 transition-all">Liquifi</span>
+          <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary-400 to-accent-400 group-hover:from-primary-300 group-hover:to-accent-300 transition-all">CopyPools</span>
         </Link>
       </div>
 

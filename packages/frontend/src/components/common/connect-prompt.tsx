@@ -14,7 +14,7 @@ export function ConnectPrompt() {
         </div>
         <h2 className="text-2xl font-bold mb-4">Connect Your Wallet</h2>
         <p className="text-gray-400 mb-8">
-          Connect your wallet to view your positions, manage liquidity, and access all Liquifi features.
+          Connect your wallet to view your positions, manage liquidity, and access all CopyPools features.
         </p>
         <div className="space-y-3">
           {connectors.map((connector) => (
