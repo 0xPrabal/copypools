@@ -337,6 +337,45 @@ export interface V4PoolsResponse {
 export type PoolSortField = 'tvl' | 'apr' | 'volume1d' | 'volume30d' | 'fee';
 
 // Fetch V4 pools with pagination
+// ============ Token Price Types ============
+
+export interface TokenPrice {
+  address: string;
+  symbol: string;
+  decimals: number;
+  priceUSD: number;
+  cached: boolean;
+  timestamp: number;
+  error?: string;
+}
+
+// Fetch token prices from backend
+export async function fetchTokenPrices(
+  tokenAddresses: string[],
+  chainId: number
+): Promise<TokenPrice[]> {
+  try {
+    const params = new URLSearchParams({
+      tokens: tokenAddresses.join(','),
+      chainId: String(chainId),
+    });
+
+    const response = await fetch(`${BACKEND_URL}/api/prices?${params.toString()}`);
+
+    if (!response.ok) {
+      console.error('Failed to fetch token prices');
+      return [];
+    }
+
+    const data = await response.json();
+    return data.prices || [];
+  } catch (error) {
+    console.error('Token price fetch error:', error);
+    return [];
+  }
+}
+
+// Fetch V4 pools with pagination
 export async function fetchV4Pools(options: {
   chainId?: number;
   page?: number;

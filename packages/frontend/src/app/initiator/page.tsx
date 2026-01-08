@@ -8,6 +8,7 @@ import { parseUnits, formatUnits, keccak256, encodeAbiParameters } from 'viem';
 import { useV4Utils } from '@/hooks/useV4Utils';
 import { useZapLiquidity, ZapToken, ZapQuote } from '@/hooks/useZapLiquidity';
 import { useTokenApproval } from '@/hooks/useTokenApproval';
+import { useTokenPrices } from '@/hooks/useTokenPrices';
 import { useToast } from '@/components/common/toast';
 import { getContracts, CHAIN_IDS } from '@/config/contracts';
 import { TOKENS_BY_CHAIN } from '@/config/tokens';
@@ -179,6 +180,9 @@ export default function InitiatorPage() {
   // Check if tokens are native ETH
   const token0IsNative = token0 ? token0.toLowerCase() === ZERO_ADDRESS : (token0Data?.isNative || false);
   const token1IsNative = token1 ? token1.toLowerCase() === ZERO_ADDRESS : (token1Data?.isNative || false);
+
+  // Fetch USD prices for tokens
+  const { token0Price, token1Price } = useTokenPrices(token0, token1, chainId);
 
   // Debug logging for balance checking
   console.log('=== Balance Debug ===');
@@ -1034,13 +1038,21 @@ export default function InitiatorPage() {
             </div>
           )}
 
-          {/* Pool Price Info */}
-          {poolPriceInfo.isRealistic && poolPriceInfo.price > 0 && poolPriceInfo.token0Symbol && (
-            <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-3 flex items-center gap-2">
-              <Info className="text-green-400 flex-shrink-0" size={16} />
-              <span className="text-sm text-green-200">
-                Pool price: 1 {poolPriceInfo.token0Symbol} ≈ {poolPriceInfo.price.toLocaleString('en-US', { maximumFractionDigits: 6 })} {poolPriceInfo.token1Symbol}
-              </span>
+          {/* Token Prices Info */}
+          {token0Data && token1Data && (token0Price !== null || token1Price !== null) && (
+            <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <Info className="text-blue-400 flex-shrink-0" size={16} />
+                <span className="text-sm font-medium text-blue-200">Token Prices</span>
+              </div>
+              <div className="flex gap-4 text-sm text-gray-300">
+                <span>
+                  {token0Data.symbol} = {token0Price !== null ? `$${token0Price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: token0Price < 1 ? 4 : 2 })}` : 'N/A'}
+                </span>
+                <span>
+                  {token1Data.symbol} = {token1Price !== null ? `$${token1Price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: token1Price < 1 ? 4 : 2 })}` : 'N/A'}
+                </span>
+              </div>
             </div>
           )}
 

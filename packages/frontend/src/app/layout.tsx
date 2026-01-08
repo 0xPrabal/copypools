@@ -13,6 +13,9 @@ export const dynamic = 'force-dynamic';
 export const metadata: Metadata = {
   title: 'CopyPools - Uniswap V4 Liquidity Management',
   description: 'Comprehensive liquidity management platform for Uniswap V4 with auto-compounding, lending, and position automation.',
+  icons: {
+    icon: '/icon.svg',
+  },
 };
 
 export default function RootLayout({
