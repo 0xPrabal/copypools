@@ -280,7 +280,7 @@ export default function InitiatorPage() {
   // Calculate pool price and check if it's realistic
   const poolPriceInfo = (() => {
     if (!currentSqrtPriceX96 || currentSqrtPriceX96 === BigInt(0)) {
-      return { price: 0, isRealistic: false, warning: 'Pool not initialized' };
+      return { price: 0, isRealistic: false, warning: 'Pool not initialized', token0Symbol: '', token1Symbol: '' };
     }
 
     const Q96 = BigInt(2) ** BigInt(96);
@@ -292,33 +292,37 @@ export default function InitiatorPage() {
     const sortedToken1Data = sortedToken0 === token0 ? token1Data : token0Data;
 
     if (!sortedToken0Data || !sortedToken1Data) {
-      return { price: 0, isRealistic: false, warning: 'Token data not available' };
+      return { price: 0, isRealistic: false, warning: 'Token data not available', token0Symbol: '', token1Symbol: '' };
     }
 
     const decimalAdjustment = Math.pow(10, sortedToken0Data.decimals - sortedToken1Data.decimals);
     const adjustedPrice = rawPrice * decimalAdjustment;
 
-    // For ETH/USDC or WETH/USDC pools, price should be roughly 0.0001-0.001 (USDC per ETH = 1000-10000)
-    // The inverse (ETH per USDC) should be ~7000 currently
-    const isEthUsdcPool = (sortedToken0Data.symbol === 'ETH' || sortedToken0Data.symbol === 'WETH' ||
-                          sortedToken1Data.symbol === 'ETH' || sortedToken1Data.symbol === 'WETH') &&
-                         (sortedToken0Data.symbol === 'USDC' || sortedToken1Data.symbol === 'USDC');
-
-    let isRealistic = true;
-    let warning = '';
+    // Price represents: 1 token0 = adjustedPrice token1
+    // For user-friendly display, show price in the more intuitive direction
     let displayPrice = adjustedPrice;
+    let priceToken0Symbol = sortedToken0Data.symbol;
+    let priceToken1Symbol = sortedToken1Data.symbol;
 
-    if (isEthUsdcPool) {
-      // Check if ETH price is between $100 and $100,000
-      const ethPriceUsd = sortedToken0Data.symbol === 'USDC' ? 1 / adjustedPrice : adjustedPrice;
-      if (ethPriceUsd < 100 || ethPriceUsd > 100000) {
-        isRealistic = false;
-        warning = `Pool price is unrealistic (1 ETH = $${ethPriceUsd.toExponential(2)}). This pool may have been initialized incorrectly. Use ETH/USDC 0.3% pool instead.`;
-      }
-      displayPrice = ethPriceUsd;
+    // If price is very small (< 0.001), invert it for better readability
+    if (adjustedPrice < 0.001 && adjustedPrice > 0) {
+      displayPrice = 1 / adjustedPrice;
+      priceToken0Symbol = sortedToken1Data.symbol;
+      priceToken1Symbol = sortedToken0Data.symbol;
     }
 
-    return { price: displayPrice, isRealistic, warning, rawPrice: adjustedPrice };
+    // Basic sanity check - price should be positive and finite
+    const isRealistic = displayPrice > 0 && isFinite(displayPrice);
+    const warning = isRealistic ? '' : 'Pool price appears invalid';
+
+    return {
+      price: displayPrice,
+      isRealistic,
+      warning,
+      rawPrice: adjustedPrice,
+      token0Symbol: priceToken0Symbol,
+      token1Symbol: priceToken1Symbol,
+    };
   })();
 
   // Calculate token ratio based on current price and tick range
@@ -1031,11 +1035,11 @@ export default function InitiatorPage() {
           )}
 
           {/* Pool Price Info */}
-          {poolPriceInfo.isRealistic && poolPriceInfo.price > 0 && (
+          {poolPriceInfo.isRealistic && poolPriceInfo.price > 0 && poolPriceInfo.token0Symbol && (
             <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-3 flex items-center gap-2">
               <Info className="text-green-400 flex-shrink-0" size={16} />
               <span className="text-sm text-green-200">
-                Pool price: 1 ETH ≈ ${poolPriceInfo.price.toLocaleString('en-US', { maximumFractionDigits: 2 })} USDC
+                Pool price: 1 {poolPriceInfo.token0Symbol} ≈ {poolPriceInfo.price.toLocaleString('en-US', { maximumFractionDigits: 6 })} {poolPriceInfo.token1Symbol}
               </span>
             </div>
           )}
@@ -1274,6 +1278,36 @@ export default function InitiatorPage() {
           </div>
 
           <div className="space-y-3">
+            {/* Approval Button - Single Token Mode */}
+            {depositMode === 'single' && singleTokenAmount && singleTokenAddress && singleTokenData && (() => {
+              const amountWei = parseUnits(singleTokenAmount, singleTokenData.decimals);
+              const isSingleToken0 = singleTokenAddress.toLowerCase() === token0?.toLowerCase();
+              const alreadyApproved = isSingleToken0 ? isToken0Approved(amountWei) : isToken1Approved(amountWei);
+
+              return (
+                <button
+                  onClick={async () => {
+                    try {
+                      if (isSingleToken0) {
+                        await approveToken0(amountWei);
+                      } else {
+                        await approveToken1(amountWei);
+                      }
+                      showToast({ type: 'success', message: `${singleTokenData.symbol} approved!` });
+                    } catch (error: any) {
+                      showToast({ type: 'error', message: error.message || 'Approval failed' });
+                    }
+                  }}
+                  disabled={isPendingApproval0 || isPendingApproval1 || alreadyApproved}
+                  className="btn-secondary w-full py-3 flex items-center justify-center gap-2"
+                >
+                  {(isPendingApproval0 || isPendingApproval1) && <Loader2 className="animate-spin" size={18} />}
+                  {isPendingApproval0 || isPendingApproval1 ? 'Approving...' :
+                    alreadyApproved ? '✓ Approved' : `Approve ${singleTokenData.symbol}`}
+                </button>
+              );
+            })()}
+
             {/* Approval Buttons - Both Tokens Mode */}
             {depositMode === 'both' && (
               <button
