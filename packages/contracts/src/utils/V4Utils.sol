@@ -672,7 +672,7 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         Currency toCurrency,
         uint256 amount,
         bytes memory swapData,
-        uint256 maxSlippage
+        uint256 /* maxSlippage */ // Unused - slippage protection handled by router swap data
     ) internal returns (uint256) {
         if (fromCurrency == toCurrency) return amount;
         if (swapData.length == 0) return 0;
@@ -680,11 +680,17 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         (address router, bytes memory routerData) = abi.decode(swapData, (address, bytes));
         if (!approvedRouters[router]) revert RouterNotApproved();
 
+        // NOTE: minAmountOut is set to 0 because:
+        // 1. The swap data from aggregators (0x, 1inch, etc.) already includes slippage protection
+        // 2. The previous calculation (amount * (10000 - maxSlippage) / 10000) was incorrect
+        //    because it used input token amounts (e.g., ETH with 18 decimals) to calculate
+        //    expected output (e.g., USDC with 6 decimals) without price conversion
+        // 3. Setting minAmountOut=0 lets the aggregator's built-in slippage protection work correctly
         SwapLib.SwapParams memory swapParams = SwapLib.SwapParams({
             fromCurrency: fromCurrency,
             toCurrency: toCurrency,
             amountIn: amount,
-            minAmountOut: (amount * (10000 - maxSlippage)) / 10000,
+            minAmountOut: 0, // Slippage protection handled by aggregator swap data
             router: router,
             swapData: routerData,
             weth9: WETH9 // Pass WETH9 for wrapping native ETH
