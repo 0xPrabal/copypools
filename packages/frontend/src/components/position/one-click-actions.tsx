@@ -336,22 +336,132 @@ export function OneClickActions({
 
   // One-Click Exit to Stablecoin (USDC, USDT, DAI)
   const handleExitToStablecoin = async (stablecoinAddress: `0x${string}`) => {
-    if (!hasLiquidity) return;
+    if (!hasLiquidity || !publicClient) return;
     setActiveAction('exit-stable');
     setExitToken(stablecoinAddress);
+    setSwapLoading(true);
 
-    // Set minimum output to 0 - slippage protection is handled by contract
-    // The contract's maxSwapSlippage parameter protects against bad swaps
-    await exitToStablecoin({
-      tokenId,
-      liquidity: BigInt(liquidity),
-      targetStablecoin: stablecoinAddress,
-      minAmountOut: 0n, // Contract handles slippage protection
-      deadline: BigInt(Math.floor(Date.now() / 1000) + 1800),
-      slippageBps: 100n, // 1% slippage for stablecoins
-    });
+    try {
+      const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+      const weth = WETH_ADDRESSES[chainId] || WETH_ADDRESSES[CHAIN_IDS.BASE];
 
-    onActionComplete?.();
+      // Get pool state for amount estimation
+      const poolId = computePoolId(token0Address, token1Address, fee, tickSpacing, hooks);
+
+      const slot0 = await publicClient.readContract({
+        address: CONTRACTS.STATE_VIEW,
+        abi: STATE_VIEW_ABI,
+        functionName: 'getSlot0',
+        args: [poolId],
+      });
+
+      const sqrtPriceX96 = slot0[0];
+      const currentTick = Number(slot0[1]);
+
+      // Estimate amounts based on liquidity and tick range
+      const liquidityBigInt = BigInt(liquidity);
+      const Q96 = 2n ** 96n;
+      const sqrtPrice = sqrtPriceX96;
+      const sqrtRatioA = BigInt(Math.floor(Math.sqrt(1.0001 ** tickLower) * Number(Q96)));
+      const sqrtRatioB = BigInt(Math.floor(Math.sqrt(1.0001 ** tickUpper) * Number(Q96)));
+
+      let estimatedAmount0 = 0n;
+      let estimatedAmount1 = 0n;
+
+      if (currentTick < tickLower) {
+        // Position is below range - all in token0
+        estimatedAmount0 = (liquidityBigInt * (sqrtRatioB - sqrtRatioA)) / (sqrtRatioA * sqrtRatioB / Q96);
+      } else if (currentTick >= tickUpper) {
+        // Position is above range - all in token1
+        estimatedAmount1 = (liquidityBigInt * (sqrtRatioB - sqrtRatioA)) / Q96;
+      } else {
+        // Position is in range - split between both tokens
+        const sqrtPriceCurrent = sqrtPrice;
+        estimatedAmount0 = (liquidityBigInt * (sqrtRatioB - sqrtPriceCurrent)) / (sqrtPriceCurrent * sqrtRatioB / Q96);
+        estimatedAmount1 = (liquidityBigInt * (sqrtPriceCurrent - sqrtRatioA)) / Q96;
+      }
+
+      console.log('[OneClick] Exit to stablecoin:', {
+        stablecoinAddress,
+        token0Address,
+        token1Address,
+        estimatedAmount0: estimatedAmount0.toString(),
+        estimatedAmount1: estimatedAmount1.toString(),
+      });
+
+      // Check if either token is already the stablecoin (no swap needed)
+      const token0IsStable = token0Address.toLowerCase() === stablecoinAddress.toLowerCase();
+      const token1IsStable = token1Address.toLowerCase() === stablecoinAddress.toLowerCase();
+
+      let swapData0: `0x${string}` = '0x';
+      let swapData1: `0x${string}` = '0x';
+
+      // Fetch swap quote for token0 if it's not the stablecoin and has amount
+      if (!token0IsStable && estimatedAmount0 > 0n) {
+        const sellToken0 = token0Address.toLowerCase() === ZERO_ADDRESS ? weth : token0Address;
+
+        const quote0 = await getSwapQuote(
+          sellToken0,
+          stablecoinAddress,
+          estimatedAmount0,
+          chainId,
+          CONTRACTS.V4_UTILS
+        );
+
+        if (quote0) {
+          swapData0 = encodeAbiParameters(
+            [{ type: 'address' }, { type: 'bytes' }],
+            [quote0.router, quote0.data]
+          ) as `0x${string}`;
+          console.log('[OneClick] Swap data0 encoded for token0 -> stablecoin');
+        } else {
+          console.warn('[OneClick] Could not get swap quote for token0');
+        }
+      }
+
+      // Fetch swap quote for token1 if it's not the stablecoin and has amount
+      if (!token1IsStable && estimatedAmount1 > 0n) {
+        const sellToken1 = token1Address.toLowerCase() === ZERO_ADDRESS ? weth : token1Address;
+
+        const quote1 = await getSwapQuote(
+          sellToken1,
+          stablecoinAddress,
+          estimatedAmount1,
+          chainId,
+          CONTRACTS.V4_UTILS
+        );
+
+        if (quote1) {
+          swapData1 = encodeAbiParameters(
+            [{ type: 'address' }, { type: 'bytes' }],
+            [quote1.router, quote1.data]
+          ) as `0x${string}`;
+          console.log('[OneClick] Swap data1 encoded for token1 -> stablecoin');
+        } else {
+          console.warn('[OneClick] Could not get swap quote for token1');
+        }
+      }
+
+      setSwapLoading(false);
+
+      // Execute exit to stablecoin with swap data
+      await exitToStablecoin({
+        tokenId,
+        liquidity: BigInt(liquidity),
+        targetStablecoin: stablecoinAddress,
+        minAmountOut: 0n, // Contract handles slippage protection
+        deadline: BigInt(Math.floor(Date.now() / 1000) + 1800),
+        swapData0,
+        swapData1,
+        slippageBps: 100n, // 1% slippage for stablecoins
+      });
+
+      onActionComplete?.();
+    } catch (err) {
+      console.error('[OneClick] Exit to stablecoin failed:', err);
+      setSwapLoading(false);
+      throw err;
+    }
   };
 
   // One-Click Collect & Compound (collect fees, ready to add back)
