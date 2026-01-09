@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { useAccount, useChainId } from 'wagmi';
 import { parseUnits, formatUnits } from 'viem';
@@ -17,6 +17,8 @@ import {
   AlertCircle,
   Zap,
   Settings,
+  Info,
+  Lock,
 } from 'lucide-react';
 import { useV4Utils } from '@/hooks/useV4Utils';
 import { useV4Compoundor, usePendingFees } from '@/hooks/useV4Compoundor';
@@ -137,7 +139,102 @@ export default function PositionDetailContent() {
   // Form states
   const [amount0, setAmount0] = useState('');
   const [amount1, setAmount1] = useState('');
+  const [activeInput, setActiveInput] = useState<'amount0' | 'amount1' | null>(null);
   const [decreasePercent, setDecreasePercent] = useState(50);
+
+  // Calculate paired amount based on pool ratio (for increase liquidity)
+  const calculatePairedAmount = useMemo(() => {
+    if (!position) return null;
+
+    const tickLower = position.tickLower;
+    const tickUpper = position.tickUpper;
+    const currentTick = position.currentTick;
+    const sqrtPriceX96 = BigInt(position.sqrtPriceX96 || '0');
+
+    if (sqrtPriceX96 === 0n) return null;
+
+    // Calculate sqrt prices for ticks
+    const sqrtPriceCurrent = Number(sqrtPriceX96) / (2 ** 96);
+    const sqrtPriceLower = Math.sqrt(1.0001 ** tickLower);
+    const sqrtPriceUpper = Math.sqrt(1.0001 ** tickUpper);
+
+    const token0Decimals = position.pool.token0.decimals;
+    const token1Decimals = position.pool.token1.decimals;
+
+    return {
+      fromAmount0ToAmount1: (inputAmount0: string): string => {
+        if (!inputAmount0 || parseFloat(inputAmount0) === 0) return '';
+
+        const amount0Wei = parseFloat(inputAmount0);
+
+        // If current tick is below range, only token0 is needed
+        if (currentTick <= tickLower) return '0';
+        // If current tick is above range, only token1 is needed
+        if (currentTick >= tickUpper) return '';
+
+        // Within range: calculate ratio based on liquidity math
+        const numerator = sqrtPriceCurrent - sqrtPriceLower;
+        const denominator = (1 / sqrtPriceCurrent) - (1 / sqrtPriceUpper);
+
+        if (denominator === 0) return '';
+
+        const ratio = numerator / denominator;
+        const decimalAdjustment = Math.pow(10, token0Decimals - token1Decimals);
+        const amount1 = amount0Wei * ratio * decimalAdjustment;
+
+        return amount1.toFixed(6);
+      },
+      fromAmount1ToAmount0: (inputAmount1: string): string => {
+        if (!inputAmount1 || parseFloat(inputAmount1) === 0) return '';
+
+        const amount1Wei = parseFloat(inputAmount1);
+
+        // If current tick is below range, only token0 is needed
+        if (currentTick <= tickLower) return '';
+        // If current tick is above range, only token1 is needed
+        if (currentTick >= tickUpper) return '0';
+
+        // Within range: calculate ratio
+        const numerator = sqrtPriceCurrent - sqrtPriceLower;
+        const denominator = (1 / sqrtPriceCurrent) - (1 / sqrtPriceUpper);
+
+        if (numerator === 0) return '';
+
+        const ratio = numerator / denominator;
+        const decimalAdjustment = Math.pow(10, token0Decimals - token1Decimals);
+        const amount0 = amount1Wei / ratio / decimalAdjustment;
+
+        return amount0.toFixed(6);
+      },
+    };
+  }, [position]);
+
+  // Auto-calculate paired token amount when user types
+  const isAutoCalculating = useMemo(() => ({ current: false }), []);
+
+  useEffect(() => {
+    if (!calculatePairedAmount || !activeInput || isAutoCalculating.current) return;
+
+    isAutoCalculating.current = true;
+
+    if (activeInput === 'amount0' && amount0) {
+      const calculatedAmount1 = calculatePairedAmount.fromAmount0ToAmount1(amount0);
+      if (calculatedAmount1 !== '' && calculatedAmount1 !== amount1) {
+        const trimmed = parseFloat(calculatedAmount1).toString();
+        setAmount1(trimmed);
+      }
+    } else if (activeInput === 'amount1' && amount1) {
+      const calculatedAmount0 = calculatePairedAmount.fromAmount1ToAmount0(amount1);
+      if (calculatedAmount0 !== '' && calculatedAmount0 !== amount0) {
+        const trimmed = parseFloat(calculatedAmount0).toString();
+        setAmount0(trimmed);
+      }
+    }
+
+    setTimeout(() => {
+      isAutoCalculating.current = false;
+    }, 100);
+  }, [amount0, amount1, activeInput, calculatePairedAmount, isAutoCalculating]);
 
   // Compound config form
   const [minCompoundInterval, setMinCompoundInterval] = useState(3600);
@@ -556,26 +653,107 @@ export default function PositionDetailContent() {
         {activeTab === 'increase' && (
           <div className="space-y-4">
             <h3 className="text-lg font-semibold">Add Liquidity</h3>
+
+            {/* Ratio info banner */}
+            {calculatePairedAmount && (
+              <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 text-sm">
+                <div className="flex items-center gap-2 text-blue-400">
+                  <Info size={14} />
+                  <span>Amounts are locked to pool ratio. Enter one amount to auto-calculate the other.</span>
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm text-gray-400 mb-2">{position.pool.token0.symbol} Amount</label>
-                <input
-                  type="number"
-                  value={amount0}
-                  onChange={(e) => setAmount0(e.target.value)}
-                  placeholder="0.0"
-                  className="input w-full"
-                />
+                <div className="flex items-center gap-2 mb-2">
+                  <label className="block text-sm text-gray-400">{position.pool.token0.symbol} Amount</label>
+                  {activeInput === 'amount1' && amount1 && calculatePairedAmount && (
+                    <span className="text-xs bg-primary-500/20 text-primary-400 px-1.5 py-0.5 rounded flex items-center gap-1">
+                      <Lock size={10} />
+                      Calculated
+                    </span>
+                  )}
+                </div>
+                <div className="relative">
+                  <input
+                    type="number"
+                    value={amount0}
+                    onChange={(e) => {
+                      if (activeInput === 'amount1' && amount1 && calculatePairedAmount) return;
+                      setActiveInput('amount0');
+                      setAmount0(e.target.value);
+                    }}
+                    onFocus={() => {
+                      if (!(activeInput === 'amount1' && amount1 && calculatePairedAmount)) {
+                        setActiveInput('amount0');
+                      }
+                    }}
+                    placeholder="0.0"
+                    readOnly={activeInput === 'amount1' && !!amount1 && !!calculatePairedAmount}
+                    className={`input w-full ${
+                      activeInput === 'amount1' && amount1 && calculatePairedAmount
+                        ? 'bg-gray-900 cursor-not-allowed text-gray-300'
+                        : ''
+                    }`}
+                  />
+                  {activeInput === 'amount1' && amount1 && calculatePairedAmount && (
+                    <button
+                      onClick={() => {
+                        setActiveInput('amount0');
+                        setAmount1('');
+                      }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-primary-400 hover:text-primary-300"
+                    >
+                      Edit this
+                    </button>
+                  )}
+                </div>
               </div>
               <div>
-                <label className="block text-sm text-gray-400 mb-2">{position.pool.token1.symbol} Amount</label>
-                <input
-                  type="number"
-                  value={amount1}
-                  onChange={(e) => setAmount1(e.target.value)}
-                  placeholder="0.0"
-                  className="input w-full"
-                />
+                <div className="flex items-center gap-2 mb-2">
+                  <label className="block text-sm text-gray-400">{position.pool.token1.symbol} Amount</label>
+                  {activeInput === 'amount0' && amount0 && calculatePairedAmount && (
+                    <span className="text-xs bg-primary-500/20 text-primary-400 px-1.5 py-0.5 rounded flex items-center gap-1">
+                      <Lock size={10} />
+                      Calculated
+                    </span>
+                  )}
+                </div>
+                <div className="relative">
+                  <input
+                    type="number"
+                    value={amount1}
+                    onChange={(e) => {
+                      if (activeInput === 'amount0' && amount0 && calculatePairedAmount) return;
+                      setActiveInput('amount1');
+                      setAmount1(e.target.value);
+                    }}
+                    onFocus={() => {
+                      if (!(activeInput === 'amount0' && amount0 && calculatePairedAmount)) {
+                        setActiveInput('amount1');
+                      }
+                    }}
+                    placeholder="0.0"
+                    readOnly={activeInput === 'amount0' && !!amount0 && !!calculatePairedAmount}
+                    className={`input w-full ${
+                      activeInput === 'amount0' && amount0 && calculatePairedAmount
+                        ? 'bg-gray-900 cursor-not-allowed text-gray-300'
+                        : ''
+                    }`}
+                  />
+                  {activeInput === 'amount0' && amount0 && calculatePairedAmount && (
+                    <button
+                      onClick={() => {
+                        setActiveInput('amount1');
+                        setAmount0('');
+                      }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-primary-400 hover:text-primary-300"
+                    >
+                      Edit this
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
             <div>
