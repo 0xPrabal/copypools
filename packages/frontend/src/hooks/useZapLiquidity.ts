@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { useWriteContract, useWaitForTransactionReceipt, useChainId, usePublicClient, useAccount } from 'wagmi';
+import { useWriteContract, useWaitForTransactionReceipt, useChainId, usePublicClient, useAccount, useSwitchChain } from 'wagmi';
 import { parseUnits, encodeAbiParameters, keccak256 } from 'viem';
 import { getContracts, CHAIN_IDS } from '@/config/contracts';
 import V4UtilsAbi from '@/abis/V4Utils.json';
@@ -141,10 +141,11 @@ async function getSwapQuote(
 
 export function useZapLiquidity() {
   const chainId = useChainId();
-  const { address: userAddress, connector } = useAccount();
+  const { address: userAddress, connector, chainId: walletChainId } = useAccount();
   const CONTRACTS = getContracts(chainId);
   const publicClient = usePublicClient({ chainId });
-  const { writeContract, writeContractAsync, data: hash, isPending, error } = useWriteContract();
+  const { switchChainAsync } = useSwitchChain();
+  const { writeContractAsync, data: hash, isPending, error } = useWriteContract();
 
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
     hash,
@@ -371,6 +372,19 @@ export function useZapLiquidity() {
     setZapError(null);
 
     try {
+      // Switch chain if needed before executing transaction
+      console.log('[Zap] walletChainId:', walletChainId, 'requiredChainId:', chainId);
+      if (walletChainId !== chainId) {
+        console.log('[Zap] Switching chain from', walletChainId, 'to', chainId);
+        try {
+          await switchChainAsync({ chainId: chainId as 8453 | 11155111 });
+          console.log('[Zap] Chain switched successfully');
+        } catch (switchError) {
+          console.error('[Zap] Chain switch failed:', switchError);
+          throw new Error(`Please switch to the correct network (Chain ID: ${chainId})`);
+        }
+      }
+
       const { inputToken, inputAmount, targetToken0, targetToken1, fee, rangeStrategy, recipient } = params;
 
       // Parse input amount
@@ -599,6 +613,35 @@ export function useZapLiquidity() {
         // Don't throw - continue with fallback gas limit
       }
 
+      // Simulate transaction before executing
+      console.log('[Zap] Simulating swapAndMint transaction...');
+      try {
+        await publicClient?.simulateContract({
+          account: userAddress,
+          address: CONTRACTS.V4_UTILS,
+          abi: V4UtilsAbi,
+          functionName: 'swapAndMint',
+          args: [swapAndMintParams],
+          value: ethValue,
+        });
+        console.log('[Zap] Simulation successful');
+      } catch (simError: any) {
+        console.error('[Zap] Simulation failed:', simError);
+        const errorMsg = simError.message || 'Transaction simulation failed';
+        // Categorize error for better UX
+        if (errorMsg.toLowerCase().includes('insufficient balance') || errorMsg.toLowerCase().includes('exceeds balance')) {
+          throw new Error('Insufficient token balance for this operation');
+        } else if (errorMsg.toLowerCase().includes('insufficient liquidity')) {
+          throw new Error('Pool has insufficient liquidity for swap');
+        } else if (errorMsg.toLowerCase().includes('slippage')) {
+          throw new Error('Price moved too much. Adjust slippage tolerance and try again.');
+        } else if (errorMsg.toLowerCase().includes('router')) {
+          throw new Error('Swap router not approved on V4Utils');
+        } else {
+          throw new Error(`Transaction would fail: ${errorMsg}`);
+        }
+      }
+
       // Execute transaction
       console.log('[Zap] Calling writeContractAsync for swapAndMint...');
       console.log('[Zap] Contract:', CONTRACTS.V4_UTILS);
@@ -610,7 +653,7 @@ export function useZapLiquidity() {
       try {
         // Use writeContractAsync with explicit account for Privy/MetaMask compatibility
         const txHash = await writeContractAsync({
-          chainId,
+          chainId: chainId as 8453 | 11155111,
           address: CONTRACTS.V4_UTILS,
           abi: V4UtilsAbi,
           functionName: 'swapAndMint',
@@ -630,7 +673,7 @@ export function useZapLiquidity() {
       setZapError(err.message || 'Failed to execute zap');
       throw err;
     }
-  }, [chainId, CONTRACTS, publicClient, writeContractAsync, checkRouterApproved, userAddress, connector]);
+  }, [chainId, CONTRACTS, publicClient, writeContractAsync, checkRouterApproved, userAddress, connector, walletChainId, switchChainAsync]);
 
   return {
     getZapQuote,

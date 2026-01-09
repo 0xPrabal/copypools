@@ -1,4 +1,4 @@
-import { useWriteContract, useWaitForTransactionReceipt, useChainId, usePublicClient } from 'wagmi';
+import { useWriteContract, useWaitForTransactionReceipt, useChainId, usePublicClient, useAccount, useSwitchChain } from 'wagmi';
 import { getContracts } from '@/config/contracts';
 import V4UtilsAbi from '@/abis/V4Utils.json';
 
@@ -50,13 +50,49 @@ const GAS_BUFFER_MULTIPLIER = 120n;
 
 export function useV4Utils() {
   const chainId = useChainId();
+  const { address: userAddress, chainId: walletChainId } = useAccount();
   const CONTRACTS = getContracts(chainId);
   const publicClient = usePublicClient({ chainId });
-  const { writeContract, data: hash, isPending, error } = useWriteContract();
+  const { switchChainAsync } = useSwitchChain();
+  const { writeContractAsync, data: hash, isPending, error } = useWriteContract();
 
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
     hash,
   });
+
+  // Helper to ensure correct chain before transaction
+  const ensureCorrectChain = async () => {
+    if (walletChainId !== chainId) {
+      console.log('[V4Utils] Switching chain from', walletChainId, 'to', chainId);
+      try {
+        await switchChainAsync({ chainId: chainId as 8453 | 11155111 });
+        console.log('[V4Utils] Chain switched successfully');
+      } catch (switchError) {
+        console.error('[V4Utils] Chain switch failed:', switchError);
+        throw new Error(`Please switch to the correct network (Chain ID: ${chainId})`);
+      }
+    }
+  };
+
+  // Helper to categorize simulation errors for better UX
+  const handleSimulationError = (error: any, operation: string): never => {
+    const errorMsg = error.message || 'Transaction simulation failed';
+    const lowerMsg = errorMsg.toLowerCase();
+
+    if (lowerMsg.includes('insufficient balance') || lowerMsg.includes('exceeds balance')) {
+      throw new Error('Insufficient token balance for this operation');
+    } else if (lowerMsg.includes('insufficient liquidity')) {
+      throw new Error('Pool has insufficient liquidity');
+    } else if (lowerMsg.includes('slippage')) {
+      throw new Error('Price moved too much. Adjust slippage tolerance.');
+    } else if (lowerMsg.includes('position') && lowerMsg.includes('not')) {
+      throw new Error('Position not found or not owned');
+    } else if (lowerMsg.includes('deadline')) {
+      throw new Error('Transaction deadline exceeded. Please try again.');
+    } else {
+      throw new Error(`${operation} would fail: ${errorMsg}`);
+    }
+  };
 
   /**
    * Mint a new position using swapAndMint
@@ -112,6 +148,9 @@ export function useV4Utils() {
       ethValue = params.amount1Max;
     }
 
+    // Ensure correct chain before transaction
+    await ensureCorrectChain();
+
     // Estimate gas dynamically with buffer
     let gasLimit = 5000000n; // Fallback gas limit
     try {
@@ -132,15 +171,33 @@ export function useV4Utils() {
       console.warn('[V4Utils] Gas estimation failed, using fallback:', gasError);
     }
 
-    console.log('[V4Utils] Calling writeContract for swapAndMint...');
-    return writeContract({
-      chainId,
+    // Simulate transaction before executing
+    console.log('[V4Utils] Simulating swapAndMint...');
+    try {
+      await publicClient?.simulateContract({
+        account: userAddress,
+        address: CONTRACTS.V4_UTILS,
+        abi: V4UtilsAbi,
+        functionName: 'swapAndMint',
+        args: [swapAndMintParams],
+        value: ethValue,
+      });
+      console.log('[V4Utils] Simulation successful');
+    } catch (simError: any) {
+      console.error('[V4Utils] Simulation failed:', simError);
+      handleSimulationError(simError, 'Mint position');
+    }
+
+    console.log('[V4Utils] Calling writeContractAsync for swapAndMint...');
+    return writeContractAsync({
+      chainId: chainId as 8453 | 11155111,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'swapAndMint',
       args: [swapAndMintParams],
       value: ethValue,
       gas: gasLimit,
+      account: userAddress,
     });
   };
 
@@ -201,14 +258,35 @@ export function useV4Utils() {
       // Use fallback gas limit if estimation fails
     }
 
-    return writeContract({
-      chainId,
+    // Ensure correct chain before transaction
+    await ensureCorrectChain();
+
+    // Simulate transaction before executing
+    console.log('[V4Utils] Simulating swapAndIncreaseLiquidity...');
+    try {
+      await publicClient?.simulateContract({
+        account: userAddress,
+        address: CONTRACTS.V4_UTILS,
+        abi: V4UtilsAbi,
+        functionName: 'swapAndIncreaseLiquidity',
+        args: [swapAndIncreaseParams],
+        value: ethValue,
+      });
+      console.log('[V4Utils] Simulation successful');
+    } catch (simError: any) {
+      console.error('[V4Utils] Simulation failed:', simError);
+      handleSimulationError(simError, 'Increase liquidity');
+    }
+
+    return writeContractAsync({
+      chainId: chainId as 8453 | 11155111,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'swapAndIncreaseLiquidity',
       args: [swapAndIncreaseParams],
       value: ethValue,
       gas: gasLimit,
+      account: userAddress,
     });
   };
 
@@ -253,13 +331,33 @@ export function useV4Utils() {
       // Use fallback gas limit
     }
 
-    return writeContract({
-      chainId,
+    // Ensure correct chain before transaction
+    await ensureCorrectChain();
+
+    // Simulate transaction before executing
+    console.log('[V4Utils] Simulating decreaseAndSwap...');
+    try {
+      await publicClient?.simulateContract({
+        account: userAddress,
+        address: CONTRACTS.V4_UTILS,
+        abi: V4UtilsAbi,
+        functionName: 'decreaseAndSwap',
+        args: [decreaseAndSwapParams],
+      });
+      console.log('[V4Utils] Simulation successful');
+    } catch (simError: any) {
+      console.error('[V4Utils] Simulation failed:', simError);
+      handleSimulationError(simError, 'Decrease and swap');
+    }
+
+    return writeContractAsync({
+      chainId: chainId as 8453 | 11155111,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'decreaseAndSwap',
       args: [decreaseAndSwapParams],
       gas: gasLimit,
+      account: userAddress,
     });
   };
 
@@ -300,13 +398,33 @@ export function useV4Utils() {
       // Use fallback gas limit
     }
 
-    return writeContract({
-      chainId,
+    // Ensure correct chain before transaction
+    await ensureCorrectChain();
+
+    // Simulate transaction before executing
+    console.log('[V4Utils] Simulating decreaseLiquidity...');
+    try {
+      await publicClient?.simulateContract({
+        account: userAddress,
+        address: CONTRACTS.V4_UTILS,
+        abi: V4UtilsAbi,
+        functionName: 'decreaseLiquidity',
+        args: [decreaseLiquidityParams],
+      });
+      console.log('[V4Utils] Simulation successful');
+    } catch (simError: any) {
+      console.error('[V4Utils] Simulation failed:', simError);
+      handleSimulationError(simError, 'Decrease liquidity');
+    }
+
+    return writeContractAsync({
+      chainId: chainId as 8453 | 11155111,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'decreaseLiquidity',
       args: [decreaseLiquidityParams],
       gas: gasLimit,
+      account: userAddress,
     });
   };
 
@@ -353,13 +471,33 @@ export function useV4Utils() {
       // Use fallback gas limit
     }
 
-    return writeContract({
-      chainId,
+    // Ensure correct chain before transaction
+    await ensureCorrectChain();
+
+    // Simulate transaction before executing
+    console.log('[V4Utils] Simulating exitToStablecoin...');
+    try {
+      await publicClient?.simulateContract({
+        account: userAddress,
+        address: CONTRACTS.V4_UTILS,
+        abi: V4UtilsAbi,
+        functionName: 'exitToStablecoin',
+        args: [exitParams],
+      });
+      console.log('[V4Utils] Simulation successful');
+    } catch (simError: any) {
+      console.error('[V4Utils] Simulation failed:', simError);
+      handleSimulationError(simError, 'Exit to stablecoin');
+    }
+
+    return writeContractAsync({
+      chainId: chainId as 8453 | 11155111,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'exitToStablecoin',
       args: [exitParams],
       gas: gasLimit,
+      account: userAddress,
     });
   };
 
@@ -391,13 +529,33 @@ export function useV4Utils() {
       // Use fallback gas limit
     }
 
-    return writeContract({
-      chainId,
+    // Ensure correct chain before transaction
+    await ensureCorrectChain();
+
+    // Simulate transaction before executing
+    console.log('[V4Utils] Simulating collectFees...');
+    try {
+      await publicClient?.simulateContract({
+        account: userAddress,
+        address: CONTRACTS.V4_UTILS,
+        abi: V4UtilsAbi,
+        functionName: 'collectFees',
+        args: [collectFeesParams],
+      });
+      console.log('[V4Utils] Simulation successful');
+    } catch (simError: any) {
+      console.error('[V4Utils] Simulation failed:', simError);
+      handleSimulationError(simError, 'Collect fees');
+    }
+
+    return writeContractAsync({
+      chainId: chainId as 8453 | 11155111,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'collectFees',
       args: [collectFeesParams],
       gas: gasLimit,
+      account: userAddress,
     });
   };
 
@@ -435,13 +593,33 @@ export function useV4Utils() {
       // Use fallback gas limit
     }
 
-    return writeContract({
-      chainId,
+    // Ensure correct chain before transaction
+    await ensureCorrectChain();
+
+    // Simulate transaction before executing
+    console.log('[V4Utils] Simulating collectAndSwap...');
+    try {
+      await publicClient?.simulateContract({
+        account: userAddress,
+        address: CONTRACTS.V4_UTILS,
+        abi: V4UtilsAbi,
+        functionName: 'collectAndSwap',
+        args: [collectAndSwapParams],
+      });
+      console.log('[V4Utils] Simulation successful');
+    } catch (simError: any) {
+      console.error('[V4Utils] Simulation failed:', simError);
+      handleSimulationError(simError, 'Collect and swap fees');
+    }
+
+    return writeContractAsync({
+      chainId: chainId as 8453 | 11155111,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'collectAndSwap',
       args: [collectAndSwapParams],
       gas: gasLimit,
+      account: userAddress,
     });
   };
 
@@ -487,13 +665,33 @@ export function useV4Utils() {
       // Use fallback gas limit
     }
 
-    return writeContract({
-      chainId,
+    // Ensure correct chain before transaction
+    await ensureCorrectChain();
+
+    // Simulate transaction before executing
+    console.log('[V4Utils] Simulating moveRange...');
+    try {
+      await publicClient?.simulateContract({
+        account: userAddress,
+        address: CONTRACTS.V4_UTILS,
+        abi: V4UtilsAbi,
+        functionName: 'moveRange',
+        args: [moveRangeParams],
+      });
+      console.log('[V4Utils] Simulation successful');
+    } catch (simError: any) {
+      console.error('[V4Utils] Simulation failed:', simError);
+      handleSimulationError(simError, 'Move range');
+    }
+
+    return writeContractAsync({
+      chainId: chainId as 8453 | 11155111,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'moveRange',
       args: [moveRangeParams],
       gas: gasLimit,
+      account: userAddress,
     });
   };
 
@@ -521,13 +719,33 @@ export function useV4Utils() {
       // Use fallback gas limit
     }
 
-    return writeContract({
-      chainId,
+    // Ensure correct chain before transaction
+    await ensureCorrectChain();
+
+    // Simulate transaction before executing
+    console.log('[V4Utils] Simulating sweepToken...');
+    try {
+      await publicClient?.simulateContract({
+        account: userAddress,
+        address: CONTRACTS.V4_UTILS,
+        abi: V4UtilsAbi,
+        functionName: 'sweepToken',
+        args: [params.currency, params.minAmount, params.recipient],
+      });
+      console.log('[V4Utils] Simulation successful');
+    } catch (simError: any) {
+      console.error('[V4Utils] Simulation failed:', simError);
+      handleSimulationError(simError, 'Sweep token');
+    }
+
+    return writeContractAsync({
+      chainId: chainId as 8453 | 11155111,
       address: CONTRACTS.V4_UTILS,
       abi: V4UtilsAbi,
       functionName: 'sweepToken',
       args: [params.currency, params.minAmount, params.recipient],
       gas: gasLimit,
+      account: userAddress,
     });
   };
 

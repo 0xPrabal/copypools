@@ -1,14 +1,16 @@
-import { useWriteContract, useWaitForTransactionReceipt, useReadContract, useAccount, useChainId, usePublicClient, useConnectorClient } from 'wagmi';
+import { useWriteContract, useWaitForTransactionReceipt, useReadContract, useAccount, useChainId, usePublicClient, useSwitchChain } from 'wagmi';
 import ERC20Abi from '@/abis/ERC20.json';
 
 // Gas estimation multiplier (120% of estimated gas)
 const GAS_BUFFER_MULTIPLIER = 120n;
 
-export function useTokenApproval(tokenAddress: `0x${string}` | undefined, spenderAddress: `0x${string}`) {
-  const { address: userAddress, connector } = useAccount();
-  const chainId = useChainId();
-  const publicClient = usePublicClient({ chainId });
-  const { writeContract, writeContractAsync, data: hash, isPending } = useWriteContract();
+export function useTokenApproval(tokenAddress: `0x${string}` | undefined, spenderAddress: `0x${string}`, requiredChainId?: number) {
+  const { address: userAddress, connector, chainId: walletChainId } = useAccount();
+  const defaultChainId = useChainId();
+  const chainId = requiredChainId ?? defaultChainId;
+  const publicClient = usePublicClient({ chainId: chainId as 8453 | 11155111 });
+  const { switchChainAsync } = useSwitchChain();
+  const { writeContractAsync, data: hash, isPending } = useWriteContract();
 
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
     hash,
@@ -36,6 +38,7 @@ export function useTokenApproval(tokenAddress: `0x${string}` | undefined, spende
     console.log('[TokenApproval] tokenAddress:', tokenAddress);
     console.log('[TokenApproval] spenderAddress:', spenderAddress);
     console.log('[TokenApproval] isNativeToken:', isNativeToken);
+    console.log('[TokenApproval] walletChainId:', walletChainId, 'requiredChainId:', chainId);
 
     // Native ETH doesn't need approval
     if (isNativeToken) {
@@ -46,6 +49,18 @@ export function useTokenApproval(tokenAddress: `0x${string}` | undefined, spende
     if (!tokenAddress) {
       console.error('[TokenApproval] No token address provided');
       throw new Error('Token address not provided');
+    }
+
+    // Switch chain if needed
+    if (walletChainId !== chainId) {
+      console.log('[TokenApproval] Switching chain from', walletChainId, 'to', chainId);
+      try {
+        await switchChainAsync({ chainId: chainId as 8453 | 11155111 });
+        console.log('[TokenApproval] Chain switched successfully');
+      } catch (switchError) {
+        console.error('[TokenApproval] Chain switch failed:', switchError);
+        throw new Error(`Please switch to the correct network (Chain ID: ${chainId})`);
+      }
     }
 
     // Estimate gas dynamically with fallback
@@ -68,6 +83,23 @@ export function useTokenApproval(tokenAddress: `0x${string}` | undefined, spende
       // Use fallback gas limit if estimation fails
     }
 
+    // Simulate transaction before executing
+    console.log('[TokenApproval] Simulating approve...');
+    try {
+      await publicClient?.simulateContract({
+        account: userAddress,
+        address: tokenAddress,
+        abi: ERC20Abi,
+        functionName: 'approve',
+        args: [spenderAddress, amount],
+      });
+      console.log('[TokenApproval] Simulation successful');
+    } catch (simError: any) {
+      console.error('[TokenApproval] Simulation failed:', simError);
+      const errorMsg = simError.message || 'Approval simulation failed';
+      throw new Error(`Approval would fail: ${errorMsg}`);
+    }
+
     console.log('[TokenApproval] Calling writeContractAsync...');
     console.log('[TokenApproval] userAddress:', userAddress);
     console.log('[TokenApproval] connector:', connector?.name);
@@ -75,7 +107,7 @@ export function useTokenApproval(tokenAddress: `0x${string}` | undefined, spende
     try {
       // Use writeContractAsync with explicit account for Privy compatibility
       const txHash = await writeContractAsync({
-        chainId,
+        chainId: chainId as 8453 | 11155111,
         address: tokenAddress,
         abi: ERC20Abi,
         functionName: 'approve',
