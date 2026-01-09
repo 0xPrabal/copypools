@@ -1,23 +1,17 @@
 'use client';
 
-import { useAccount } from 'wagmi';
-import { useEffect, useState } from 'react';
 import { DashboardStats } from '@/components/dashboard/stats';
 import { PositionsList } from '@/components/dashboard/positions-list';
 import { RecentActivity } from '@/components/dashboard/recent-activity';
 import { QuickActions } from '@/components/dashboard/quick-actions';
 import { ConnectPrompt } from '@/components/common/connect-prompt';
+import { useWalletConnection } from '@/hooks/useWalletConnection';
 
 export default function Dashboard() {
-  const { isConnected } = useAccount();
-  const [mounted, setMounted] = useState(false);
+  const { isFullyConnected, isLoading } = useWalletConnection();
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  // Prevent hydration mismatch by not rendering until mounted
-  if (!mounted) {
+  // Show loading state while Privy is initializing
+  if (isLoading) {
     return (
       <div className="space-y-6">
         <div className="h-8 bg-gray-800 rounded w-48 animate-pulse" />
@@ -30,7 +24,8 @@ export default function Dashboard() {
     );
   }
 
-  if (!isConnected) {
+  // Use unified connection check (both Privy AND Wagmi must be connected)
+  if (!isFullyConnected) {
     return <ConnectPrompt />;
   }
 

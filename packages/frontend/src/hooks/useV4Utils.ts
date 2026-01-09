@@ -116,6 +116,7 @@ export function useV4Utils() {
     let gasLimit = 5000000n; // Fallback gas limit
     try {
       if (publicClient) {
+        console.log('[V4Utils] Estimating gas for swapAndMint...');
         const estimated = await publicClient.estimateContractGas({
           address: CONTRACTS.V4_UTILS,
           abi: V4UtilsAbi,
@@ -124,11 +125,14 @@ export function useV4Utils() {
           value: ethValue,
         });
         gasLimit = (estimated * GAS_BUFFER_MULTIPLIER) / 100n;
+        console.log('[V4Utils] Gas estimated:', estimated.toString(), '-> with buffer:', gasLimit.toString());
       }
-    } catch {
-      // Use fallback gas limit if estimation fails
+    } catch (gasError) {
+      // Log gas estimation error but continue with fallback
+      console.warn('[V4Utils] Gas estimation failed, using fallback:', gasError);
     }
 
+    console.log('[V4Utils] Calling writeContract for swapAndMint...');
     return writeContract({
       chainId,
       address: CONTRACTS.V4_UTILS,

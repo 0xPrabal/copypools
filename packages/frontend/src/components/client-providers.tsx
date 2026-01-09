@@ -37,9 +37,15 @@ export function ClientProviders({ children }: { children: React.ReactNode }) {
           theme: 'dark',
           accentColor: '#676FFF',
         },
-        loginMethods: ['email', 'wallet'],
+        loginMethods: ['wallet', 'email'], // Wallet first to prioritize external wallets
         embeddedWallets: {
           createOnLogin: 'users-without-wallets',
+          // Ensure external wallets (MetaMask, etc.) are used when available
+          showWalletUIs: true,
+        } as any,
+        // Prioritize external wallet connectors
+        externalWallets: {
+          coinbaseWallet: { connectionOptions: 'smartWalletOnly' },
         } as any,
         // Set Base as the default chain, with Sepolia as additional supported chain
         defaultChain: base,

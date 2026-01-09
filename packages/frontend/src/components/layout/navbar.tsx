@@ -2,7 +2,8 @@
 
 import { usePrivy } from '@privy-io/react-auth';
 import { useAccount, useChainId, useSwitchChain } from 'wagmi';
-import { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useState, useEffect, useCallback } from 'react';
 import { ChevronDown, Wallet, LogOut, Settings, Bell, Globe } from 'lucide-react';
 import { CHAIN_IDS } from '@/config/contracts';
 import { backendApi } from '@/lib/backend';
@@ -12,6 +13,7 @@ export function Navbar() {
   const { address } = useAccount();
   const chainId = useChainId();
   const { switchChain, isPending: isSwitching } = useSwitchChain();
+  const queryClient = useQueryClient();
   const [showDropdown, setShowDropdown] = useState(false);
   const [showNetworkDropdown, setShowNetworkDropdown] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -19,6 +21,15 @@ export function Navbar() {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Disconnect handler that clears cache to prevent stale data showing
+  const handleDisconnect = useCallback(async () => {
+    setShowDropdown(false);
+    // Clear all cached data first to prevent stale positions from showing
+    queryClient.clear();
+    // Then logout from Privy
+    await logout();
+  }, [queryClient, logout]);
 
   // Prefetch positions when wallet connects (warms up backend cache)
   useEffect(() => {
@@ -123,10 +134,7 @@ export function Navbar() {
                   <p className="text-sm font-mono">{formatAddress(address)}</p>
                 </div>
                 <button
-                  onClick={() => {
-                    logout();
-                    setShowDropdown(false);
-                  }}
+                  onClick={handleDisconnect}
                   className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-gray-700 transition-colors"
                 >
                   <LogOut size={16} />
