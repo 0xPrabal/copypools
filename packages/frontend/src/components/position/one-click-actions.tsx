@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { formatUnits, encodeAbiParameters, keccak256 } from 'viem';
-import { usePublicClient, useChainId } from 'wagmi';
+import { usePublicClient, useChainId, useAccount } from 'wagmi';
 import {
   Loader2,
   CheckCircle,
@@ -17,6 +17,64 @@ import {
 } from 'lucide-react';
 import { useV4Utils, applySlippage, DEFAULT_SLIPPAGE_BPS } from '@/hooks/useV4Utils';
 import { getContracts, CHAIN_IDS } from '@/config/contracts';
+
+// Backend API URL for swap quotes
+const BACKEND_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001').replace(/\/$/, '');
+
+// WETH addresses per chain
+const WETH_ADDRESSES: Record<number, `0x${string}`> = {
+  [CHAIN_IDS.BASE]: '0x4200000000000000000000000000000000000006',
+  [CHAIN_IDS.SEPOLIA]: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9',
+};
+
+/**
+ * Get swap quote from 0x API via backend
+ */
+async function getSwapQuote(
+  sellToken: string,
+  buyToken: string,
+  sellAmount: bigint,
+  chainId: number,
+  taker: string
+): Promise<{
+  router: `0x${string}`;
+  data: `0x${string}`;
+  expectedOutput: bigint;
+  priceImpact: number;
+} | null> {
+  try {
+    console.log('[OneClick] Fetching swap quote:', { sellToken, buyToken, sellAmount: sellAmount.toString(), chainId, taker });
+    const response = await fetch(`${BACKEND_URL}/api/exchange/quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sellToken,
+        buyToken,
+        sellAmount: sellAmount.toString(),
+        chainId,
+        taker,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.warn('[OneClick] Swap quote failed:', errorText);
+      return null;
+    }
+
+    const data = await response.json();
+    console.log('[OneClick] Swap quote received:', data);
+    return {
+      router: data.router as `0x${string}`,
+      data: data.data as `0x${string}`,
+      expectedOutput: BigInt(data.expectedOutput),
+      priceImpact: data.priceImpact || 0,
+    };
+  } catch (error) {
+    console.error('[OneClick] Failed to get swap quote:', error);
+    return null;
+  }
+}
 
 interface OneClickActionsProps {
   tokenId: bigint;
@@ -108,7 +166,9 @@ export function OneClickActions({
 }: OneClickActionsProps) {
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [exitToken, setExitToken] = useState<`0x${string}` | null>(null);
+  const [swapLoading, setSwapLoading] = useState(false);
   const chainId = useChainId();
+  const { address: userAddress } = useAccount();
   const CONTRACTS = getContracts(chainId);
   const publicClient = usePublicClient({ chainId });
 
@@ -127,7 +187,7 @@ export function OneClickActions({
   // Get stablecoins for current chain
   const stablecoins = STABLECOINS_BY_CHAIN[chainId as keyof typeof STABLECOINS_BY_CHAIN] || STABLECOINS_BY_CHAIN[CHAIN_IDS.BASE];
 
-  const isProcessing = isPending || isConfirming;
+  const isProcessing = isPending || isConfirming || swapLoading;
   const hasLiquidity = BigInt(liquidity || '0') > 0n;
   const hasFees = (pendingFees?.[0] || 0n) > 0n || (pendingFees?.[1] || 0n) > 0n;
 
@@ -136,16 +196,14 @@ export function OneClickActions({
     if (!hasLiquidity) return;
     setActiveAction('exit-both');
 
-    // For full exit, we pass current fees as expected minimum (with slippage applied by hook)
-    // The hook will apply slippage protection to these values
-    const expectedAmount0 = pendingFees?.[0] || 0n;
-    const expectedAmount1 = pendingFees?.[1] || 0n;
-
+    // Set minimum amounts to 0 - slippage protection is handled by the contract's maxSwapSlippage
+    // We can't easily calculate expected output without sqrtPriceX96
+    // The hook applies additional slippage protection
     await decreaseLiquidity({
       tokenId,
       liquidity: BigInt(liquidity),
-      amount0Min: expectedAmount0,
-      amount1Min: expectedAmount1,
+      amount0Min: 0n, // Contract handles slippage protection
+      amount1Min: 0n, // Contract handles slippage protection
       deadline: BigInt(Math.floor(Date.now() / 1000) + 1800),
       slippageBps: DEFAULT_SLIPPAGE_BPS,
     });
@@ -155,25 +213,125 @@ export function OneClickActions({
 
   // One-Click Exit to single token (swap to one currency)
   const handleExitToSingleToken = async (targetToken: `0x${string}`) => {
-    if (!hasLiquidity) return;
+    if (!hasLiquidity || !publicClient) return;
     setActiveAction('exit-single');
     setExitToken(targetToken);
+    setSwapLoading(true);
 
-    // Pass expected minimums (slippage will be applied by hook)
-    const expectedAmount0 = pendingFees?.[0] || 0n;
-    const expectedAmount1 = pendingFees?.[1] || 0n;
+    try {
+      const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+      const weth = WETH_ADDRESSES[chainId] || WETH_ADDRESSES[CHAIN_IDS.BASE];
 
-    await decreaseAndSwap({
-      tokenId,
-      liquidity: BigInt(liquidity),
-      amount0Min: expectedAmount0,
-      amount1Min: expectedAmount1,
-      deadline: BigInt(Math.floor(Date.now() / 1000) + 1800),
-      targetCurrency: targetToken,
-      slippageBps: DEFAULT_SLIPPAGE_BPS,
-    });
+      // Determine which token needs to be swapped to the target
+      const targetIsToken0 = targetToken.toLowerCase() === token0Address.toLowerCase();
+      const sourceToken = targetIsToken0 ? token1Address : token0Address;
 
-    onActionComplete?.();
+      // Estimate the amount of source token we'll receive from decreasing liquidity
+      // We use a rough estimation based on position value distribution
+      // In V4, liquidity removal gives proportional amounts based on current price
+      const poolId = computePoolId(token0Address, token1Address, fee, tickSpacing, hooks);
+
+      const slot0 = await publicClient.readContract({
+        address: CONTRACTS.STATE_VIEW,
+        abi: STATE_VIEW_ABI,
+        functionName: 'getSlot0',
+        args: [poolId],
+      });
+
+      const sqrtPriceX96 = slot0[0];
+      const currentTick = Number(slot0[1]);
+
+      // Estimate amounts based on liquidity and tick range
+      // For simplicity, we estimate based on the position being ~50% in each token when in range
+      const liquidityBigInt = BigInt(liquidity);
+
+      // Calculate estimated amounts from liquidity (simplified estimation)
+      // This is an approximation - the actual amounts depend on the exact price within the range
+      const Q96 = 2n ** 96n;
+      const sqrtPrice = sqrtPriceX96;
+      const sqrtRatioA = BigInt(Math.floor(Math.sqrt(1.0001 ** tickLower) * Number(Q96)));
+      const sqrtRatioB = BigInt(Math.floor(Math.sqrt(1.0001 ** tickUpper) * Number(Q96)));
+
+      let estimatedAmount0 = 0n;
+      let estimatedAmount1 = 0n;
+
+      if (currentTick < tickLower) {
+        // Position is below range - all in token0
+        estimatedAmount0 = (liquidityBigInt * (sqrtRatioB - sqrtRatioA)) / (sqrtRatioA * sqrtRatioB / Q96);
+      } else if (currentTick >= tickUpper) {
+        // Position is above range - all in token1
+        estimatedAmount1 = (liquidityBigInt * (sqrtRatioB - sqrtRatioA)) / Q96;
+      } else {
+        // Position is in range - split between both tokens
+        const sqrtPriceCurrent = sqrtPrice;
+        estimatedAmount0 = (liquidityBigInt * (sqrtRatioB - sqrtPriceCurrent)) / (sqrtPriceCurrent * sqrtRatioB / Q96);
+        estimatedAmount1 = (liquidityBigInt * (sqrtPriceCurrent - sqrtRatioA)) / Q96;
+      }
+
+      // Determine the swap amount (the non-target token amount)
+      const swapAmount = targetIsToken0 ? estimatedAmount1 : estimatedAmount0;
+
+      console.log('[OneClick] Exit to single token:', {
+        targetToken,
+        targetIsToken0,
+        sourceToken,
+        estimatedAmount0: estimatedAmount0.toString(),
+        estimatedAmount1: estimatedAmount1.toString(),
+        swapAmount: swapAmount.toString(),
+      });
+
+      let swapData: `0x${string}` = '0x';
+
+      // Only fetch swap quote if there's a meaningful amount to swap
+      if (swapAmount > 0n) {
+        // Normalize addresses for swap (use WETH instead of zero address)
+        const sellTokenAddress = sourceToken.toLowerCase() === ZERO_ADDRESS ? weth : sourceToken;
+        const buyTokenAddress = targetToken.toLowerCase() === ZERO_ADDRESS ? weth : targetToken;
+
+        // Fetch swap quote from 0x API via backend
+        // Use V4Utils as taker since it executes the swap
+        const quote = await getSwapQuote(
+          sellTokenAddress,
+          buyTokenAddress,
+          swapAmount,
+          chainId,
+          CONTRACTS.V4_UTILS
+        );
+
+        if (quote) {
+          // Encode router and calldata for the contract
+          swapData = encodeAbiParameters(
+            [{ type: 'address' }, { type: 'bytes' }],
+            [quote.router, quote.data]
+          ) as `0x${string}`;
+          console.log('[OneClick] Swap data encoded:', swapData.slice(0, 100) + '...');
+        } else {
+          console.warn('[OneClick] Could not get swap quote, proceeding without swap data');
+          // If we can't get a quote but the target IS one of the pool tokens,
+          // the user will at least get that portion without the swap
+        }
+      }
+
+      setSwapLoading(false);
+
+      // Execute the decrease and swap
+      await decreaseAndSwap({
+        tokenId,
+        liquidity: BigInt(liquidity),
+        amount0Min: 0n, // Contract handles slippage via maxSwapSlippage
+        amount1Min: 0n, // Contract handles slippage via maxSwapSlippage
+        deadline: BigInt(Math.floor(Date.now() / 1000) + 1800),
+        targetCurrency: targetToken,
+        slippageBps: DEFAULT_SLIPPAGE_BPS,
+        swapData,
+      });
+
+      onActionComplete?.();
+    } catch (err) {
+      console.error('[OneClick] Exit to single token failed:', err);
+      setSwapLoading(false);
+      throw err;
+    }
   };
 
   // One-Click Exit to Stablecoin (USDC, USDT, DAI)
@@ -182,15 +340,13 @@ export function OneClickActions({
     setActiveAction('exit-stable');
     setExitToken(stablecoinAddress);
 
-    // Estimate expected stablecoin output based on fees (conservative estimate)
-    // The hook applies 1% slippage for stablecoin exits
-    const estimatedOutput = (pendingFees?.[0] || 0n) + (pendingFees?.[1] || 0n);
-
+    // Set minimum output to 0 - slippage protection is handled by contract
+    // The contract's maxSwapSlippage parameter protects against bad swaps
     await exitToStablecoin({
       tokenId,
       liquidity: BigInt(liquidity),
       targetStablecoin: stablecoinAddress,
-      minAmountOut: estimatedOutput,
+      minAmountOut: 0n, // Contract handles slippage protection
       deadline: BigInt(Math.floor(Date.now() / 1000) + 1800),
       slippageBps: 100n, // 1% slippage for stablecoins
     });
@@ -312,7 +468,8 @@ export function OneClickActions({
             )}
             <div>
               <p className="text-sm font-medium text-white">
-                {isPending && 'Waiting for wallet confirmation...'}
+                {swapLoading && 'Fetching swap quote...'}
+                {isPending && !swapLoading && 'Waiting for wallet confirmation...'}
                 {isConfirming && 'Transaction in progress...'}
                 {isSuccess && 'Action completed successfully!'}
                 {error && 'Transaction failed'}

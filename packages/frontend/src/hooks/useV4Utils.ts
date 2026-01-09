@@ -294,6 +294,9 @@ export function useV4Utils() {
    * Decrease liquidity and swap to a single token using decreaseAndSwap
    * Use this when you want all tokens converted to one currency
    * @param slippageBps - Slippage tolerance in basis points (default: 50 = 0.5%)
+   * @param swapData - Encoded swap data (router address + calldata) for DEX swap.
+   *                   If not provided, the contract will skip swapping tokens that
+   *                   need to be converted, potentially resulting in lost value.
    */
   const decreaseAndSwap = async (params: {
     tokenId: bigint;
@@ -303,6 +306,7 @@ export function useV4Utils() {
     deadline: bigint;
     targetCurrency: `0x${string}`;
     slippageBps?: bigint;
+    swapData?: `0x${string}`; // Encoded (router, calldata) for DEX swap
   }) => {
     const decreaseAndSwapParams = {
       tokenId: params.tokenId,
@@ -311,7 +315,7 @@ export function useV4Utils() {
       amount1Min: applySlippage(params.amount1Min, params.slippageBps),
       deadline: params.deadline,
       targetCurrency: params.targetCurrency,
-      swapData: '0x' as `0x${string}`,
+      swapData: params.swapData || '0x' as `0x${string}`,
       maxSwapSlippage: params.slippageBps || DEFAULT_SLIPPAGE_BPS,
     };
 
