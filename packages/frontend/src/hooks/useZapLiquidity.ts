@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { useWriteContract, useWaitForTransactionReceipt, useChainId, usePublicClient } from 'wagmi';
+import { useWriteContract, useWaitForTransactionReceipt, useChainId, usePublicClient, useAccount } from 'wagmi';
 import { parseUnits, encodeAbiParameters, keccak256 } from 'viem';
 import { getContracts, CHAIN_IDS } from '@/config/contracts';
 import V4UtilsAbi from '@/abis/V4Utils.json';
@@ -141,9 +141,10 @@ async function getSwapQuote(
 
 export function useZapLiquidity() {
   const chainId = useChainId();
+  const { address: userAddress, connector } = useAccount();
   const CONTRACTS = getContracts(chainId);
   const publicClient = usePublicClient({ chainId });
-  const { writeContract, data: hash, isPending, error } = useWriteContract();
+  const { writeContract, writeContractAsync, data: hash, isPending, error } = useWriteContract();
 
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
     hash,
@@ -582,6 +583,7 @@ export function useZapLiquidity() {
       let gasLimit = 5000000n;
       try {
         if (publicClient) {
+          console.log('[Zap] Estimating gas for swapAndMint...');
           const estimated = await publicClient.estimateContractGas({
             address: CONTRACTS.V4_UTILS,
             abi: V4UtilsAbi,
@@ -590,27 +592,45 @@ export function useZapLiquidity() {
             value: ethValue,
           });
           gasLimit = (estimated * GAS_BUFFER_MULTIPLIER) / 100n;
+          console.log('[Zap] Gas estimated:', gasLimit.toString());
         }
       } catch (e) {
-        console.warn('Gas estimation failed, using fallback:', e);
+        console.warn('[Zap] Gas estimation failed, using fallback:', e);
+        // Don't throw - continue with fallback gas limit
       }
 
       // Execute transaction
-      return writeContract({
-        chainId,
-        address: CONTRACTS.V4_UTILS,
-        abi: V4UtilsAbi,
-        functionName: 'swapAndMint',
-        args: [swapAndMintParams],
-        value: ethValue,
-        gas: gasLimit,
-      });
+      console.log('[Zap] Calling writeContractAsync for swapAndMint...');
+      console.log('[Zap] Contract:', CONTRACTS.V4_UTILS);
+      console.log('[Zap] Gas limit:', gasLimit.toString());
+      console.log('[Zap] ETH value:', ethValue.toString());
+      console.log('[Zap] userAddress:', userAddress);
+      console.log('[Zap] connector:', connector?.name);
+
+      try {
+        // Use writeContractAsync with explicit account for Privy/MetaMask compatibility
+        const txHash = await writeContractAsync({
+          chainId,
+          address: CONTRACTS.V4_UTILS,
+          abi: V4UtilsAbi,
+          functionName: 'swapAndMint',
+          args: [swapAndMintParams],
+          value: ethValue,
+          gas: gasLimit,
+          account: userAddress, // Explicitly pass account for Privy/MetaMask
+        });
+        console.log('[Zap] Transaction hash:', txHash);
+        // Don't return - function returns void, hash is available via hook
+      } catch (writeError) {
+        console.error('[Zap] writeContractAsync error:', writeError);
+        throw writeError;
+      }
     } catch (err: any) {
       console.error('Zap execution error:', err);
       setZapError(err.message || 'Failed to execute zap');
       throw err;
     }
-  }, [chainId, CONTRACTS, publicClient, writeContract, checkRouterApproved]);
+  }, [chainId, CONTRACTS, publicClient, writeContractAsync, checkRouterApproved, userAddress, connector]);
 
   return {
     getZapQuote,

@@ -1,14 +1,14 @@
-import { useWriteContract, useWaitForTransactionReceipt, useReadContract, useAccount, useChainId, usePublicClient } from 'wagmi';
+import { useWriteContract, useWaitForTransactionReceipt, useReadContract, useAccount, useChainId, usePublicClient, useConnectorClient } from 'wagmi';
 import ERC20Abi from '@/abis/ERC20.json';
 
 // Gas estimation multiplier (120% of estimated gas)
 const GAS_BUFFER_MULTIPLIER = 120n;
 
 export function useTokenApproval(tokenAddress: `0x${string}` | undefined, spenderAddress: `0x${string}`) {
-  const { address: userAddress } = useAccount();
+  const { address: userAddress, connector } = useAccount();
   const chainId = useChainId();
   const publicClient = usePublicClient({ chainId });
-  const { writeContract, data: hash, isPending } = useWriteContract();
+  const { writeContract, writeContractAsync, data: hash, isPending } = useWriteContract();
 
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
     hash,
@@ -32,12 +32,19 @@ export function useTokenApproval(tokenAddress: `0x${string}` | undefined, spende
   });
 
   const approve = async (amount: bigint) => {
+    console.log('[TokenApproval] approve() called with amount:', amount.toString());
+    console.log('[TokenApproval] tokenAddress:', tokenAddress);
+    console.log('[TokenApproval] spenderAddress:', spenderAddress);
+    console.log('[TokenApproval] isNativeToken:', isNativeToken);
+
     // Native ETH doesn't need approval
     if (isNativeToken) {
+      console.log('[TokenApproval] Skipping - native token');
       return; // No-op for native ETH
     }
 
     if (!tokenAddress) {
+      console.error('[TokenApproval] No token address provided');
       throw new Error('Token address not provided');
     }
 
@@ -45,6 +52,7 @@ export function useTokenApproval(tokenAddress: `0x${string}` | undefined, spende
     let gasLimit = 100000n; // Fallback gas limit
     try {
       if (publicClient && userAddress) {
+        console.log('[TokenApproval] Estimating gas...');
         const estimated = await publicClient.estimateContractGas({
           address: tokenAddress,
           abi: ERC20Abi,
@@ -53,19 +61,34 @@ export function useTokenApproval(tokenAddress: `0x${string}` | undefined, spende
           account: userAddress,
         });
         gasLimit = (estimated * GAS_BUFFER_MULTIPLIER) / 100n;
+        console.log('[TokenApproval] Gas estimated:', gasLimit.toString());
       }
-    } catch {
+    } catch (gasError) {
+      console.warn('[TokenApproval] Gas estimation failed:', gasError);
       // Use fallback gas limit if estimation fails
     }
 
-    return writeContract({
-      chainId,
-      address: tokenAddress,
-      abi: ERC20Abi,
-      functionName: 'approve',
-      args: [spenderAddress, amount],
-      gas: gasLimit,
-    });
+    console.log('[TokenApproval] Calling writeContractAsync...');
+    console.log('[TokenApproval] userAddress:', userAddress);
+    console.log('[TokenApproval] connector:', connector?.name);
+
+    try {
+      // Use writeContractAsync with explicit account for Privy compatibility
+      const txHash = await writeContractAsync({
+        chainId,
+        address: tokenAddress,
+        abi: ERC20Abi,
+        functionName: 'approve',
+        args: [spenderAddress, amount],
+        gas: gasLimit,
+        account: userAddress, // Explicitly pass account for Privy/MetaMask
+      });
+      console.log('[TokenApproval] Transaction hash:', txHash);
+      return txHash;
+    } catch (writeError) {
+      console.error('[TokenApproval] writeContractAsync error:', writeError);
+      throw writeError;
+    }
   };
 
   const isApproved = (requiredAmount: bigint) => {

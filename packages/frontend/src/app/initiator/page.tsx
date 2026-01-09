@@ -1293,20 +1293,32 @@ export default function InitiatorPage() {
             {/* Approval Button - Single Token Mode */}
             {depositMode === 'single' && singleTokenAmount && singleTokenAddress && singleTokenData && (() => {
               const amountWei = parseUnits(singleTokenAmount, singleTokenData.decimals);
+              // For zap operations, V4Utils needs extra allowance for:
+              // 1. amountMax (110-200% of input for slippage buffer)
+              // 2. swapSourceAmount (the portion being swapped)
+              // Approve 3x the input amount to cover worst case
+              const approvalAmount = amountWei * 3n;
               const isSingleToken0 = singleTokenAddress.toLowerCase() === token0?.toLowerCase();
-              const alreadyApproved = isSingleToken0 ? isToken0Approved(amountWei) : isToken1Approved(amountWei);
+              const alreadyApproved = isSingleToken0 ? isToken0Approved(approvalAmount) : isToken1Approved(approvalAmount);
 
               return (
                 <button
                   onClick={async () => {
+                    console.log('[Initiator] Approve button clicked');
+                    console.log('[Initiator] isSingleToken0:', isSingleToken0);
+                    console.log('[Initiator] approvalAmount:', approvalAmount.toString());
                     try {
                       if (isSingleToken0) {
-                        await approveToken0(amountWei);
+                        console.log('[Initiator] Calling approveToken0...');
+                        await approveToken0(approvalAmount);
                       } else {
-                        await approveToken1(amountWei);
+                        console.log('[Initiator] Calling approveToken1...');
+                        await approveToken1(approvalAmount);
                       }
+                      console.log('[Initiator] Approval completed successfully');
                       showToast({ type: 'success', message: `${singleTokenData.symbol} approved!` });
                     } catch (error: any) {
+                      console.error('[Initiator] Approval error:', error);
                       showToast({ type: 'error', message: error.message || 'Approval failed' });
                     }
                   }}
