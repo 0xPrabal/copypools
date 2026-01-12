@@ -1,41 +1,34 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
-import { useAccount } from 'wagmi';
-import { RefreshCw, TrendingUp, Shield, ArrowUpRight, ArrowDownRight, Wallet } from 'lucide-react';
+import { RefreshCw, TrendingUp, Shield, AlertTriangle, Zap, DollarSign, Fuel, LucideIcon } from 'lucide-react';
+import { useNotifications, getTimeAgo, ActivityItem as Activity } from '@/hooks/useNotifications';
+import { NotificationType } from '@/lib/backend';
 
-interface Activity {
-  id: string;
-  type: 'compound' | 'rebalance' | 'exit' | 'deposit' | 'withdraw' | 'borrow' | 'repay';
-  timestamp: number;
-  tokenId: string;
-  details: string;
-  txHash: string;
-}
-
-const activityIcons = {
-  compound: RefreshCw,
-  rebalance: TrendingUp,
-  exit: Shield,
-  deposit: ArrowDownRight,
-  withdraw: ArrowUpRight,
-  borrow: Wallet,
-  repay: Wallet,
+const activityIcons: Record<NotificationType, LucideIcon> = {
+  compound_executed: RefreshCw,
+  compound_profitable: Zap,
+  rebalance_executed: TrendingUp,
+  rebalance_needed: TrendingUp,
+  position_out_of_range: AlertTriangle,
+  high_fees_accumulated: DollarSign,
+  gas_price_low: Fuel,
+  position_liquidatable: Shield,
 };
 
-const activityColors = {
-  compound: 'text-status-success bg-status-success/10',
-  rebalance: 'text-brand-medium bg-brand-medium/10',
-  exit: 'text-status-warning bg-status-warning/10',
-  deposit: 'text-status-success bg-status-success/10',
-  withdraw: 'text-status-error bg-status-error/10',
-  borrow: 'text-purple-400 bg-purple-500/10',
-  repay: 'text-brand-medium bg-brand-medium/10',
+const activityColors: Record<NotificationType, string> = {
+  compound_executed: 'text-status-success bg-status-success/10',
+  compound_profitable: 'text-status-success bg-status-success/10',
+  rebalance_executed: 'text-brand-medium bg-brand-medium/10',
+  rebalance_needed: 'text-status-warning bg-status-warning/10',
+  position_out_of_range: 'text-status-warning bg-status-warning/10',
+  high_fees_accumulated: 'text-status-success bg-status-success/10',
+  gas_price_low: 'text-blue-400 bg-blue-500/10',
+  position_liquidatable: 'text-status-error bg-status-error/10',
 };
 
-function ActivityItem({ activity }: { activity: Activity }) {
-  const Icon = activityIcons[activity.type];
-  const colorClass = activityColors[activity.type];
+function ActivityItemComponent({ activity }: { activity: Activity }) {
+  const Icon = activityIcons[activity.type] || AlertTriangle;
+  const colorClass = activityColors[activity.type] || 'text-text-muted bg-gray-500/10';
   const timeAgo = getTimeAgo(activity.timestamp);
 
   return (
@@ -44,34 +37,16 @@ function ActivityItem({ activity }: { activity: Activity }) {
         <Icon size={16} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-text-primary capitalize">{activity.type}</p>
-        <p className="text-xs text-text-muted truncate">{activity.details}</p>
+        <p className="text-sm font-medium text-text-primary">{activity.label}</p>
+        <p className="text-xs text-text-muted truncate">{activity.message}</p>
       </div>
       <span className="text-xs text-text-muted">{timeAgo}</span>
     </div>
   );
 }
 
-function getTimeAgo(timestamp: number): string {
-  const seconds = Math.floor(Date.now() / 1000 - timestamp);
-
-  if (seconds < 60) return 'Just now';
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
-}
-
 export function RecentActivity() {
-  const { address } = useAccount();
-
-  const { data: activities, isLoading } = useQuery({
-    queryKey: ['activities', address],
-    queryFn: async () => {
-      // Fetch from API
-      return [] as Activity[];
-    },
-    enabled: !!address,
-  });
+  const { activities, isLoading, hasActivities } = useNotifications({ limit: 10 });
 
   return (
     <div className="rounded-2xl bg-surface-card border border-gray-800/50 overflow-hidden">
@@ -86,10 +61,10 @@ export function RecentActivity() {
               <div key={i} className="h-12 bg-gray-800/50 rounded-xl animate-pulse" />
             ))}
           </div>
-        ) : activities && activities.length > 0 ? (
+        ) : hasActivities ? (
           <div className="divide-y divide-gray-800/30">
             {activities.map((activity) => (
-              <ActivityItem key={activity.id} activity={activity} />
+              <ActivityItemComponent key={activity.id} activity={activity} />
             ))}
           </div>
         ) : (

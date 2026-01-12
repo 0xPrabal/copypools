@@ -417,3 +417,55 @@ export async function fetchV4Pools(options: {
     };
   }
 }
+
+// ============ Notification Types ============
+
+export type NotificationType =
+  | 'compound_profitable'
+  | 'rebalance_needed'
+  | 'position_out_of_range'
+  | 'high_fees_accumulated'
+  | 'gas_price_low'
+  | 'position_liquidatable'
+  | 'compound_executed'
+  | 'rebalance_executed';
+
+export interface Notification {
+  id: string;
+  type: NotificationType;
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  message: string;
+  positionId?: string;
+  owner?: string;
+  data?: Record<string, unknown>;
+  timestamp: number;
+  read: boolean;
+}
+
+export interface NotificationsResponse {
+  notifications: Notification[];
+  unreadCount: number;
+}
+
+// Fetch notifications for a user
+export async function fetchNotifications(
+  address: string,
+  limit = 10
+): Promise<NotificationsResponse> {
+  try {
+    const response = await fetch(
+      `${BACKEND_URL}/api/notifications/${address}?limit=${limit}`
+    );
+
+    if (!response.ok) {
+      console.error('Failed to fetch notifications');
+      return { notifications: [], unreadCount: 0 };
+    }
+
+    return response.json();
+  } catch (error) {
+    console.error('Notifications fetch error:', error);
+    return { notifications: [], unreadCount: 0 };
+  }
+}

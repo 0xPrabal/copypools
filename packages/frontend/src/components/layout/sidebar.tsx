@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { usePositions } from '@/hooks/usePonderData';
 import { useWalletConnection } from '@/hooks/useWalletConnection';
+import { useNotifications, getTimeAgo } from '@/hooks/useNotifications';
 import { getPositionValueUsd } from '@/utils/tickMath';
 import { cn } from '@/lib/utils';
 import {
@@ -78,18 +79,12 @@ const NAV_ITEMS = [
   },
 ];
 
-// Recent activities placeholder - will be connected to real data
-const RECENT_ACTIVITIES = [
-  { type: 'Position Created', status: 'ETH / USDC' },
-  { type: 'Liquidity Added', status: '$250' },
-  { type: 'Fees Earned', status: '$3.40' },
-  { type: 'Range Updated', status: 'In Range' },
-];
 
 export function Sidebar() {
   const pathname = usePathname();
   const { data: positions, isLoading: positionsLoading } = usePositions();
   const { isFullyConnected, address } = useWalletConnection();
+  const { activities, isLoading: activitiesLoading, hasActivities } = useNotifications({ limit: 4 });
 
   // Calculate total TVL from all positions
   const totalTVL = useMemo(() => {
@@ -224,20 +219,28 @@ export function Sidebar() {
         <h3 className="mb-3 text-sm font-bold text-text-primary">
           Recent Activities
         </h3>
-        <ul className="space-y-2">
-          {RECENT_ACTIVITIES.map((activity, index) => (
-            <li
-              key={index}
-              className="flex items-center justify-between text-xs cursor-pointer hover:bg-gray-800/30 px-2 py-1.5 rounded-lg transition-colors"
-            >
-              <div className="flex gap-1">
-                <span className="text-text-secondary">{activity.type}:</span>
-                <span className="text-text-primary font-medium">{activity.status}</span>
-              </div>
-              <ArrowRightIcon className="h-4 w-4" />
-            </li>
-          ))}
-        </ul>
+        {activitiesLoading ? (
+          <div className="flex items-center justify-center py-4">
+            <Loader2 className="animate-spin text-brand-medium" size={16} />
+          </div>
+        ) : hasActivities ? (
+          <ul className="space-y-2">
+            {activities.map((activity) => (
+              <li
+                key={activity.id}
+                className="flex items-center justify-between text-xs cursor-pointer hover:bg-gray-800/30 px-2 py-1.5 rounded-lg transition-colors"
+              >
+                <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                  <span className="text-text-primary font-medium truncate">{activity.label}</span>
+                  <span className="text-text-secondary truncate text-[10px]">{getTimeAgo(activity.timestamp)}</span>
+                </div>
+                <ArrowRightIcon className="h-4 w-4 flex-shrink-0" />
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-text-muted text-xs text-center py-4">No recent activity</p>
+        )}
       </div>
     </aside>
   );
