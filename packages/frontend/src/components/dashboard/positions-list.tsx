@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { ExternalLink, MoreVertical, TrendingUp, RefreshCw, Shield, Layers, Loader2 } from 'lucide-react';
 import { usePositions, Position } from '@/hooks/usePonderData';
 import { getPositionValueUsd } from '@/utils/tickMath';
+import { cn } from '@/lib/utils';
+import { TokenPair } from '@/components/ui';
 
 function PositionRow({ position }: { position: Position }) {
   const feeTier = (position.pool.fee / 10000).toFixed(2);
@@ -45,37 +47,41 @@ function PositionRow({ position }: { position: Position }) {
   };
 
   return (
-    <div className="flex items-center justify-between p-4 hover:bg-gray-800/50 transition-colors rounded-lg">
+    <div className="flex items-center justify-between p-4 hover:bg-gray-800/30 transition-colors rounded-xl border border-transparent hover:border-gray-700/50">
       <div className="flex items-center gap-4">
-        <div className="flex -space-x-2">
-          <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-xs font-bold border-2 border-gray-900">
-            {position.pool.token0.symbol.slice(0, 2)}
-          </div>
-          <div className="w-8 h-8 bg-purple-500 rounded-full flex items-center justify-center text-xs font-bold border-2 border-gray-900">
-            {position.pool.token1.symbol.slice(0, 2)}
-          </div>
-        </div>
+        <TokenPair
+          frontSymbol={position.pool.token0.symbol}
+          backSymbol={position.pool.token1.symbol}
+          size="md"
+        />
         <div>
           <div className="flex items-center gap-2">
-            <span className="font-medium">{pairName}</span>
-            <span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded">{feeTier}%</span>
+            <span className="font-semibold text-text-primary">{pairName}</span>
+            <span className="text-xs text-text-secondary bg-gray-800 px-2 py-0.5 rounded-lg">
+              {feeTier}%
+            </span>
           </div>
-          <p className="text-sm text-gray-400">ID: {position.tokenId}</p>
+          <p className="text-sm text-text-muted">ID: {position.tokenId}</p>
         </div>
       </div>
 
       <div className="flex items-center gap-6">
         {/* Position Value */}
         <div className="text-right min-w-[100px]">
-          <p className="font-semibold text-green-400">{formatValue(positionValue.valueUsd)}</p>
-          <p className="text-xs text-gray-500">
+          <p className="font-semibold text-brand-medium">{formatValue(positionValue.valueUsd)}</p>
+          <p className="text-xs text-text-muted">
             {positionValue.amount0 > 0.0001 ? positionValue.amount0.toFixed(4) : '< 0.0001'} {position.pool.token0.symbol}
           </p>
         </div>
 
         {/* Range Status */}
         <div className="text-center">
-          <span className={`badge-${position.inRange ? 'success' : 'warning'}`}>
+          <span className={cn(
+            'inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium',
+            position.inRange
+              ? 'bg-status-success/10 text-status-success'
+              : 'bg-status-warning/10 text-status-warning'
+          )}>
             {position.inRange ? 'In Range' : 'Out of Range'}
           </span>
         </div>
@@ -83,17 +89,17 @@ function PositionRow({ position }: { position: Position }) {
         {/* Automations */}
         <div className="flex items-center gap-2">
           {position.compoundConfig?.enabled && (
-            <div className="p-1.5 bg-green-500/10 rounded text-green-400" title="Auto-Compound Active">
+            <div className="p-1.5 bg-status-success/10 rounded-lg text-status-success" title="Auto-Compound Active">
               <RefreshCw size={14} />
             </div>
           )}
           {position.rangeConfig?.enabled && (
-            <div className="p-1.5 bg-blue-500/10 rounded text-blue-400" title="Auto-Range Active">
+            <div className="p-1.5 bg-brand-medium/10 rounded-lg text-brand-medium" title="Auto-Range Active">
               <TrendingUp size={14} />
             </div>
           )}
           {position.exitConfig && position.exitConfig.exitType > 0 && (
-            <div className="p-1.5 bg-orange-500/10 rounded text-orange-400" title="Auto-Exit Active">
+            <div className="p-1.5 bg-status-warning/10 rounded-lg text-status-warning" title="Auto-Exit Active">
               <Shield size={14} />
             </div>
           )}
@@ -103,11 +109,11 @@ function PositionRow({ position }: { position: Position }) {
         <div className="flex items-center gap-2">
           <Link
             href={`/positions/${position.tokenId}`}
-            className="p-2 text-gray-400 hover:text-white transition-colors"
+            className="p-2 text-text-secondary hover:text-brand-medium transition-colors rounded-lg hover:bg-gray-800/50"
           >
             <ExternalLink size={16} />
           </Link>
-          <button className="p-2 text-gray-400 hover:text-white transition-colors">
+          <button className="p-2 text-text-secondary hover:text-text-primary transition-colors rounded-lg hover:bg-gray-800/50">
             <MoreVertical size={16} />
           </button>
         </div>
@@ -121,34 +127,44 @@ export function PositionsList() {
   const { data: positions, isLoading } = usePositions();
 
   return (
-    <div className="card">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold">Your Positions</h2>
-        <Link href="/initiator" className="btn-primary text-sm">
+    <div className="rounded-2xl bg-surface-card border border-gray-800/50 overflow-hidden">
+      <div className="flex items-center justify-between p-6 border-b border-gray-800/30">
+        <h2 className="text-lg font-bold text-text-primary">Your Positions</h2>
+        <Link
+          href="/initiator"
+          className="flex items-center gap-2 px-4 py-2 bg-gradient-hard hover:opacity-90 rounded-xl font-medium transition-all text-white text-sm"
+        >
           + New Position
         </Link>
       </div>
 
-      {isLoading ? (
-        <div className="text-center py-8">
-          <Loader2 className="mx-auto mb-3 animate-spin text-primary-500" size={32} />
-          <p className="text-gray-400">Loading your positions...</p>
-        </div>
-      ) : positions && positions.length > 0 ? (
-        <div className="space-y-2">
-          {positions.map((position) => (
-            <PositionRow key={position.id} position={position} />
-          ))}
-        </div>
-      ) : (
-        <div className="text-center py-12">
-          <Layers className="mx-auto mb-4 text-gray-600" size={48} />
-          <p className="text-gray-400 mb-4">No positions found</p>
-          <Link href="/initiator" className="btn-primary">
-            Create Your First Position
-          </Link>
-        </div>
-      )}
+      <div className="p-4">
+        {isLoading ? (
+          <div className="text-center py-8">
+            <Loader2 className="mx-auto mb-3 animate-spin text-brand-medium" size={32} />
+            <p className="text-text-secondary">Loading your positions...</p>
+          </div>
+        ) : positions && positions.length > 0 ? (
+          <div className="space-y-2">
+            {positions.map((position) => (
+              <PositionRow key={position.id} position={position} />
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-12">
+            <div className="w-16 h-16 bg-brand-medium/10 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Layers className="text-brand-medium" size={32} />
+            </div>
+            <p className="text-text-secondary mb-4">No positions found</p>
+            <Link
+              href="/initiator"
+              className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-hard hover:opacity-90 rounded-xl font-medium transition-all text-white"
+            >
+              Create Your First Position
+            </Link>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

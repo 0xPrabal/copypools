@@ -3,51 +3,71 @@ module.exports = {
   content: [
     './src/**/*.{js,ts,jsx,tsx,mdx}',
   ],
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {
-        // Violet/Purple - Futuristic Primary
-        primary: {
-          50: '#f5f3ff',
-          100: '#ede9fe',
-          200: '#ddd6fe',
-          300: '#c4b5fd',
-          400: '#a78bfa',
-          500: '#8b5cf6',
-          600: '#7c3aed',
-          700: '#6d28d9',
-          800: '#5b21b6',
-          900: '#4c1d95',
-          950: '#2e1065',
+        // Teal/Cyan - CopyPools Brand (Primary)
+        teal: {
+          50: '#f0fdfc',
+          100: '#ccfbf6',
+          200: '#99f6ed',
+          300: '#5eead4',
+          400: '#2dd4bf',
+          500: '#14b8a6',
+          600: '#0d9488',
+          700: '#0f766e',
+          800: '#115e59',
+          900: '#134e4a',
+          950: '#042f2e',
         },
-        // Cyan/Teal - High Energy Accent
-        accent: {
-          50: '#ecfeff',
-          100: '#cffafe',
-          200: '#a5f3fc',
-          300: '#67e8f9',
-          400: '#22d3ee',
-          500: '#06b6d4',
-          600: '#0891b2',
-          700: '#0e7490',
-          800: '#155e75',
-          900: '#164e63',
-          950: '#083344',
+        // Brand colors from design system
+        brand: {
+          hard: '#2c8684',
+          medium: '#39adaa',
+          soft: '#65cdca',
+          light: '#79d3d1',
+        },
+        // Surface colors
+        surface: {
+          page: 'var(--surface-page)',
+          'page-muted': 'var(--surface-page-muted)',
+          card: 'var(--surface-card)',
+        },
+        // Text colors
+        text: {
+          primary: 'var(--text-primary)',
+          secondary: 'var(--text-secondary)',
+        },
+        // Status colors
+        status: {
+          success: 'var(--success)',
+          error: 'var(--error)',
+          warning: 'var(--warning)',
+          neutral: 'var(--neutral)',
         },
         // Deep Space Dark Mode
         dark: {
-          950: '#020617', // Very deep blue/black
-          900: '#0f172a', // Slate 900
-          800: '#1e293b', // Slate 800
+          950: '#020617',
+          900: '#0f172a',
+          800: '#1e293b',
         },
       },
       fontFamily: {
-        sans: ['Inter', 'sans-serif'],
+        sans: ['Source Sans 3', 'Inter', 'sans-serif'],
+        heading: ['Space Grotesk', 'sans-serif'],
         mono: ['JetBrains Mono', 'monospace'],
       },
       backgroundImage: {
         'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
         'cyber-grid': 'linear-gradient(to right, #1e293b 1px, transparent 1px), linear-gradient(to bottom, #1e293b 1px, transparent 1px)',
+        'brand-gradient-hard': 'linear-gradient(90deg, #2c8684 0%, #329a97 100%)',
+        'brand-gradient-medium': 'linear-gradient(90deg, #39adaa 0%, #3fc0bd 100%)',
+        'brand-gradient-soft': 'linear-gradient(90deg, #65cdca 0%, #79d3d1 100%)',
+      },
+      boxShadow: {
+        'glow-teal': '0 0 20px rgba(57, 173, 170, 0.3)',
+        'glow-teal-lg': '0 0 40px rgba(57, 173, 170, 0.4)',
       },
     },
   },

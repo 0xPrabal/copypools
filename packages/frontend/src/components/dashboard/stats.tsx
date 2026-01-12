@@ -2,6 +2,7 @@
 
 import { TrendingUp, Layers, RefreshCw, Activity } from 'lucide-react';
 import { usePositions } from '@/hooks/usePonderData';
+import { cn } from '@/lib/utils';
 
 interface StatCardProps {
   title: string;
@@ -14,20 +15,28 @@ interface StatCardProps {
 
 function StatCard({ title, value, subtext, icon, loading, highlight }: StatCardProps) {
   return (
-    <div className="card">
-      <div className="flex items-start justify-between">
+    <div className="relative rounded-2xl bg-surface-card p-6 border border-gray-800/50 backdrop-blur-sm overflow-hidden">
+      {/* Subtle gradient overlay */}
+      <div className="absolute inset-0 bg-gradient-to-br from-brand-medium/5 to-transparent pointer-events-none" />
+
+      <div className="relative flex items-start justify-between">
         <div>
-          <p className="text-sm text-gray-400 mb-1">{title}</p>
+          <p className="text-sm text-text-secondary font-medium mb-1">{title}</p>
           {loading ? (
             <div className="h-8 w-24 bg-gray-800 rounded animate-pulse" />
           ) : (
-            <p className={`text-2xl font-bold ${highlight ? 'text-green-400' : ''}`}>{value}</p>
+            <p className={cn(
+              'text-2xl font-bold',
+              highlight ? 'text-status-success' : 'text-brand-medium'
+            )}>
+              {value}
+            </p>
           )}
           {subtext && (
-            <p className="text-xs text-gray-500 mt-1">{subtext}</p>
+            <p className="text-xs text-text-muted mt-1">{subtext}</p>
           )}
         </div>
-        <div className="p-3 bg-primary-500/10 rounded-lg text-primary-400">
+        <div className="p-3 bg-brand-medium/10 rounded-xl text-brand-medium">
           {icon}
         </div>
       </div>

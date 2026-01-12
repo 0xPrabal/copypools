@@ -3,37 +3,93 @@
 import { useMemo } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import {
-  LayoutDashboard,
-  Layers,
-  Plus,
-  RefreshCw,
-  TrendingUp,
-  Shield,
-  Wallet,
-  BarChart3,
-  Loader2,
-  Droplets,
-} from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { usePositions } from '@/hooks/usePonderData';
+import { useWalletConnection } from '@/hooks/useWalletConnection';
 import { getPositionValueUsd } from '@/utils/tickMath';
+import { cn } from '@/lib/utils';
+import {
+  LayoutIcon,
+  StackIcon,
+  CirclesIcon,
+  RotateClockwiseIcon,
+  BadgeUpIcon,
+  SidebarLeftIcon,
+  TransferIcon,
+  FileIcon,
+  ArrowRightIcon,
+} from '@/components/icons';
 
-const navigation = [
-  { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-  { name: 'Pools', href: '/pools', icon: Droplets },
-  { name: 'Positions', href: '/positions', icon: Layers },
-  { name: 'Initiator', href: '/initiator', icon: Plus },
-  { name: 'Auto-Compound', href: '/compound', icon: RefreshCw },
-  { name: 'Auto-Range', href: '/range', icon: TrendingUp },
-  { name: 'Auto-Exit', href: '/exit', icon: Shield },
-  { name: 'Lending', href: '/lend', icon: Wallet },
-  { name: 'Analytics', href: '/analytics', icon: BarChart3 },
+// Navigation items with descriptions
+const NAV_ITEMS = [
+  {
+    name: 'Dashboard',
+    href: '/',
+    description: 'Find and copy working strategies',
+    icon: LayoutIcon,
+  },
+  {
+    name: 'Pools',
+    href: '/pools',
+    description: 'Find pools to start earning from swaps',
+    icon: CirclesIcon,
+  },
+  {
+    name: 'Positions',
+    href: '/positions',
+    description: 'View and manage your liquidity',
+    icon: StackIcon,
+  },
+  {
+    name: 'Initiator',
+    href: '/initiator',
+    description: 'Create a new liquidity position',
+    icon: StackIcon,
+  },
+  {
+    name: 'Auto-Compound',
+    href: '/compound',
+    description: 'Reinvest fees automatically',
+    icon: RotateClockwiseIcon,
+  },
+  {
+    name: 'Auto-Range',
+    href: '/range',
+    description: 'Keep your position in range',
+    icon: BadgeUpIcon,
+  },
+  {
+    name: 'Auto-Exit',
+    href: '/exit',
+    description: 'Exit positions based on rules',
+    icon: SidebarLeftIcon,
+  },
+  {
+    name: 'Lending',
+    href: '/lend',
+    description: 'Earn by lending idle assets',
+    icon: TransferIcon,
+  },
+  {
+    name: 'Analytics',
+    href: '/analytics',
+    description: 'Track performance and earnings',
+    icon: FileIcon,
+  },
 ];
 
+// Recent activities placeholder - will be connected to real data
+const RECENT_ACTIVITIES = [
+  { type: 'Position Created', status: 'ETH / USDC' },
+  { type: 'Liquidity Added', status: '$250' },
+  { type: 'Fees Earned', status: '$3.40' },
+  { type: 'Range Updated', status: 'In Range' },
+];
 
 export function Sidebar() {
   const pathname = usePathname();
   const { data: positions, isLoading: positionsLoading } = usePositions();
+  const { isFullyConnected, address } = useWalletConnection();
 
   // Calculate total TVL from all positions
   const totalTVL = useMemo(() => {
@@ -53,8 +109,8 @@ export function Sidebar() {
           position.tickUpper,
           position.pool.token0.decimals,
           position.pool.token1.decimals,
-          0, // Let it derive from pool price
-          1  // Assume token1 is stablecoin at $1
+          0,
+          1
         );
 
         return total + (isFinite(valueUsd) ? valueUsd : 0);
@@ -71,51 +127,117 @@ export function Sidebar() {
     return `$${value.toFixed(2)}`;
   };
 
+  // Format address for display
+  const formatAddress = (addr: string): string => {
+    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  };
+
   return (
-    <aside className="w-64 glass-panel border-r border-white/5 flex flex-col h-screen sticky top-0">
-      {/* Logo */}
-      <div className="h-16 flex items-center px-6 border-b border-white/5">
-        <Link href="/" className="flex items-center group">
-          <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary-400 to-accent-400 group-hover:from-primary-300 group-hover:to-accent-300 transition-all">CopyPools</span>
+    <aside className="w-72 bg-surface-card flex flex-col h-screen sticky top-0 border-r border-gray-800/50">
+      {/* Logo Section */}
+      <div className="p-5 border-b border-gray-800/30">
+        <Link href="/" className="block">
+          <h1 className="text-2xl font-bold text-gradient-medium font-heading">
+            CopyPools
+          </h1>
         </Link>
+        <p className="mt-1 text-xs text-text-secondary font-medium">
+          Liquidity Management for Uniswap V4
+        </p>
       </div>
 
-      {/* Main Navigation */}
-      <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
-        {navigation.map((item) => {
+      {/* Profile Section */}
+      <div className="px-4 py-4 border-b border-gray-800/30">
+        <div className="rounded-xl bg-gray-900/50 p-4 text-center">
+          <div className="mx-auto mb-3 h-16 w-16 rounded-full bg-gradient-hard flex items-center justify-center">
+            {isFullyConnected && address ? (
+              <span className="text-white text-xl font-bold">
+                {address.slice(2, 4).toUpperCase()}
+              </span>
+            ) : (
+              <span className="text-white text-sm">?</span>
+            )}
+          </div>
+          <p className="text-sm font-medium text-text-primary">
+            {isFullyConnected && address ? formatAddress(address) : 'Not Connected'}
+          </p>
+        </div>
+
+        {/* TVL Display */}
+        <div className="mt-3 rounded-xl border border-gray-700/50 p-3 flex justify-between items-center">
+          <span className="text-xs text-text-secondary font-medium">
+            Protocol TVL
+          </span>
+          {positionsLoading ? (
+            <div className="flex items-center gap-2">
+              <Loader2 className="animate-spin text-brand-medium" size={14} />
+            </div>
+          ) : (
+            <span className="text-sm text-brand-medium font-bold">
+              {formatTVL(totalTVL)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Navigation */}
+      <nav className="flex-1 py-4 overflow-y-auto hide-scrollbar">
+        {NAV_ITEMS.map((item) => {
           const isActive = pathname === item.href;
+          const Icon = item.icon;
+
           return (
             <Link
               key={item.name}
               href={item.href}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
+              className={cn(
+                'block px-4 py-3 transition-all duration-200',
                 isActive
-                  ? 'bg-primary-500/10 text-primary-300 border border-primary-500/20 shadow-[0_0_15px_rgba(139,92,246,0.15)]'
-                  : 'text-gray-400 hover:text-white hover:bg-white/5'
-              }`}
+                  ? 'bg-gradient-hard'
+                  : 'hover:bg-gray-800/30'
+              )}
             >
-              <item.icon size={20} className={isActive ? 'text-primary-400' : ''} />
-              <span className="font-medium">{item.name}</span>
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <Icon isActive={isActive} className="h-5 w-5 text-text-primary" />
+                  <span className={cn(
+                    'text-sm font-semibold',
+                    isActive ? 'text-white' : 'text-text-primary'
+                  )}>
+                    {item.name}
+                  </span>
+                </div>
+                <p className={cn(
+                  'text-xs pl-7',
+                  isActive ? 'text-white/80' : 'text-text-secondary'
+                )}>
+                  {item.description}
+                </p>
+              </div>
             </Link>
           );
         })}
       </nav>
 
-      {/* Stats */}
-      <div className="px-4 py-4 border-t border-white/5">
-        <div className="bg-black/20 border border-white/5 backdrop-blur-md rounded-lg p-4">
-          <p className="text-xs text-gray-400 mb-1">Protocol TVL</p>
-          {positionsLoading ? (
-            <div className="flex items-center gap-2">
-              <Loader2 className="animate-spin text-accent-400" size={16} />
-              <span className="text-sm text-gray-500">Loading...</span>
-            </div>
-          ) : (
-            <p className="text-lg font-bold text-accent-400 neon-text-accent">
-              {formatTVL(totalTVL)}
-            </p>
-          )}
-        </div>
+      {/* Recent Activities */}
+      <div className="border-t border-gray-800/30 p-4">
+        <h3 className="mb-3 text-sm font-bold text-text-primary">
+          Recent Activities
+        </h3>
+        <ul className="space-y-2">
+          {RECENT_ACTIVITIES.map((activity, index) => (
+            <li
+              key={index}
+              className="flex items-center justify-between text-xs cursor-pointer hover:bg-gray-800/30 px-2 py-1.5 rounded-lg transition-colors"
+            >
+              <div className="flex gap-1">
+                <span className="text-text-secondary">{activity.type}:</span>
+                <span className="text-text-primary font-medium">{activity.status}</span>
+              </div>
+              <ArrowRightIcon className="h-4 w-4" />
+            </li>
+          ))}
+        </ul>
       </div>
     </aside>
   );

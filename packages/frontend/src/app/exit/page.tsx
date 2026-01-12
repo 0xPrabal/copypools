@@ -4,20 +4,22 @@ import { Shield } from 'lucide-react';
 
 export default function ExitPage() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 p-6">
       <div>
-        <h1 className="text-3xl font-bold mb-2">Auto-Exit</h1>
-        <p className="text-gray-400">
+        <h1 className="text-3xl font-bold mb-2 text-text-primary font-heading">Auto-Exit</h1>
+        <p className="text-text-secondary">
           Set stop-loss and take-profit orders for your positions
         </p>
       </div>
 
-      <div className="card">
+      <div className="rounded-2xl bg-surface-card border border-gray-800/50">
         <div className="flex items-center justify-center py-20">
           <div className="text-center">
-            <Shield className="mx-auto mb-4 text-primary-400" size={48} />
-            <h3 className="text-xl font-semibold mb-2">Auto-Exit Coming Soon</h3>
-            <p className="text-gray-400">
+            <div className="w-20 h-20 bg-brand-medium/10 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Shield className="text-brand-medium" size={40} />
+            </div>
+            <h3 className="text-xl font-semibold mb-2 text-text-primary">Auto-Exit Coming Soon</h3>
+            <p className="text-text-secondary">
               Configure automated exit strategies for risk management
             </p>
           </div>

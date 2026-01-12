@@ -2,27 +2,77 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================
+   NEW TEAL/CYAN THEME - CopyPools Design System
+   ============================================ */
+
 :root {
-  --background: 0 0% 3.9%;
-  --foreground: 0 0% 98%;
-  --card: 0 0% 7%;
-  --card-foreground: 0 0% 98%;
-  --popover: 0 0% 7%;
-  --popover-foreground: 0 0% 98%;
-  --primary: 24 95% 53%;
+  /* Brand gradients */
+  --brand-primary-hard: linear-gradient(90deg, #2c8684 0%, #329a97 100%);
+  --brand-primary-medium: linear-gradient(90deg, #39adaa 0%, #3fc0bd 100%);
+  --brand-primary-soft: linear-gradient(90deg, #65cdca 0%, #79d3d1 100%);
+
+  --border-gradient-subtle: linear-gradient(90deg, #c5eceb 0%, #d9f2f2 100%);
+  --border-gradient-default: linear-gradient(90deg, #0f2e2d 0%, #133a39 100%);
+
+  /* Surfaces - Light mode */
+  --surface-page: #fafafa;
+  --surface-page-muted: #f5f5f5;
+  --surface-card: #ffffff;
+
+  /* Text - Light mode */
+  --text-primary: #0d2626;
+  --text-secondary: #5c7070;
+
+  /* Status colors */
+  --success: #85e0ba;
+  --error: #ebadad;
+  --warning: #ebccad;
+  --neutral: #add6eb;
+
+  /* Legacy variables (mapped to new theme) */
+  --background: 192 15% 8%;
+  --foreground: 180 30% 95%;
+  --card: 192 20% 10%;
+  --card-foreground: 180 30% 95%;
+  --popover: 192 20% 10%;
+  --popover-foreground: 180 30% 95%;
+  --primary: 178 50% 35%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 0 0% 14.9%;
-  --secondary-foreground: 0 0% 98%;
-  --muted: 0 0% 14.9%;
-  --muted-foreground: 0 0% 63.9%;
-  --accent: 33 100% 50%;
-  --accent-foreground: 0 0% 98%;
+  --secondary: 180 10% 15%;
+  --secondary-foreground: 180 30% 95%;
+  --muted: 180 10% 15%;
+  --muted-foreground: 180 10% 50%;
+  --accent: 178 60% 45%;
+  --accent-foreground: 0 0% 100%;
   --destructive: 0 62.8% 30.6%;
   --destructive-foreground: 0 0% 98%;
-  --border: 0 0% 14.9%;
-  --input: 0 0% 14.9%;
-  --ring: 24 95% 53%;
+  --border: 180 15% 20%;
+  --input: 180 15% 20%;
+  --ring: 178 50% 35%;
   --radius: 0.5rem;
+}
+
+/* Dark mode */
+.dark {
+  --surface-page: #191919;
+  --surface-page-muted: #262626;
+  --surface-card: #212121;
+
+  --text-primary: #f7fcfc;
+  --text-secondary: #deeded;
+
+  --success: #0f8a57;
+  --error: #c03f3f;
+  --warning: #e5801a;
+  --neutral: #3f95c0;
+
+  --background: 0 0% 6%;
+  --foreground: 180 30% 97%;
+  --card: 0 0% 9%;
+  --card-foreground: 180 30% 97%;
+  --popover: 0 0% 9%;
+  --popover-foreground: 180 30% 97%;
 }
 
 * {
@@ -30,9 +80,14 @@
 }
 
 body {
-  background-color: hsl(var(--background));
-  color: hsl(var(--foreground));
+  background-color: var(--surface-page);
+  color: var(--text-primary);
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+/* Headings use heading font */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading), 'Space Grotesk', sans-serif;
 }
 
 /* Custom scrollbar */
@@ -42,7 +97,7 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: hsl(var(--secondary));
+  background: var(--surface-page-muted);
 }
 
 ::-webkit-scrollbar-thumb {
@@ -51,18 +106,31 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--primary));
+  background: #39adaa;
 }
 
-/* Animations */
+/* Hide scrollbar utility */
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ============================================
+   ANIMATIONS
+   ============================================ */
+
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
 
 @keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 5px rgba(249, 115, 22, 0.3); }
-  50% { box-shadow: 0 0 20px rgba(249, 115, 22, 0.6); }
+  0%, 100% { box-shadow: 0 0 5px rgba(57, 173, 170, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(57, 173, 170, 0.6); }
 }
 
 @keyframes float {
@@ -125,9 +193,74 @@ body {
   animation: scale-in 0.2s ease-out forwards;
 }
 
-/* Gradient backgrounds */
+/* ============================================
+   BRAND GRADIENT UTILITIES (New Teal Theme)
+   ============================================ */
+
+/* Background gradients */
+.bg-gradient-hard {
+  background: var(--brand-primary-hard);
+}
+
+.bg-gradient-medium {
+  background: var(--brand-primary-medium);
+}
+
+.bg-gradient-soft {
+  background: var(--brand-primary-soft);
+}
+
+/* Text gradients */
+.text-gradient-hard {
+  background: var(--brand-primary-hard);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.text-gradient-medium {
+  background: var(--brand-primary-medium);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.text-gradient-soft {
+  background: var(--brand-primary-soft);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Border gradients */
+.border-gradient-subtle {
+  border: 1px solid #c5eceb;
+}
+
+.border-gradient-default {
+  border: 1px solid #0f2e2d;
+}
+
+.border-b-gradient-subtle {
+  background-image: var(--border-gradient-subtle);
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
+  background-position: bottom;
+}
+
+.border-t-gradient-subtle {
+  background-image: var(--border-gradient-subtle);
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
+  background-position: top;
+}
+
+/* ============================================
+   LEGACY GRADIENT BACKGROUNDS (Updated to Teal)
+   ============================================ */
+
 .gradient-primary {
-  background: linear-gradient(135deg, #f97316 0%, #ea580c 50%, #c2410c 100%);
+  background: linear-gradient(135deg, #2c8684 0%, #39adaa 50%, #65cdca 100%);
 }
 
 .gradient-success {
@@ -148,7 +281,7 @@ body {
 
 .gradient-border {
   position: relative;
-  background: linear-gradient(135deg, rgba(249, 115, 22, 0.1) 0%, rgba(251, 146, 60, 0.1) 100%);
+  background: linear-gradient(135deg, rgba(57, 173, 170, 0.1) 0%, rgba(101, 205, 202, 0.1) 100%);
 }
 
 .gradient-border::before {
@@ -157,7 +290,7 @@ body {
   inset: 0;
   border-radius: inherit;
   padding: 1px;
-  background: linear-gradient(135deg, rgba(249, 115, 22, 0.5), rgba(251, 146, 60, 0.5));
+  background: linear-gradient(135deg, rgba(57, 173, 170, 0.5), rgba(101, 205, 202, 0.5));
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
@@ -165,7 +298,10 @@ body {
   pointer-events: none;
 }
 
-/* Glass effect */
+/* ============================================
+   GLASS EFFECT
+   ============================================ */
+
 .glass {
   background: rgba(17, 24, 39, 0.7);
   backdrop-filter: blur(12px);
@@ -175,22 +311,25 @@ body {
 
 .glass-hover:hover {
   background: rgba(17, 24, 39, 0.85);
-  border-color: rgba(249, 115, 22, 0.3);
+  border-color: rgba(57, 173, 170, 0.3);
 }
 
-/* Card styles */
+/* ============================================
+   CARD STYLES
+   ============================================ */
+
 .card {
   @apply bg-gray-900/80 border border-gray-800/50 rounded-2xl p-6 backdrop-blur-sm;
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
 }
 
 .card-hover {
-  @apply transition-all duration-300 hover:border-primary-500/40 hover:shadow-xl;
+  @apply transition-all duration-300 hover:border-teal-500/40 hover:shadow-xl;
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
 }
 
 .card-hover:hover {
-  box-shadow: 0 20px 40px -15px rgba(249, 115, 22, 0.25);
+  box-shadow: 0 20px 40px -15px rgba(57, 173, 170, 0.25);
   transform: translateY(-2px);
 }
 
@@ -201,17 +340,20 @@ body {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
-/* Button styles */
+/* ============================================
+   BUTTON STYLES
+   ============================================ */
+
 .btn-primary {
   @apply font-medium px-5 py-2.5 rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed;
-  background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+  background: linear-gradient(135deg, #2c8684 0%, #39adaa 100%);
   color: white;
-  box-shadow: 0 4px 14px -3px rgba(249, 115, 22, 0.5);
+  box-shadow: 0 4px 14px -3px rgba(57, 173, 170, 0.5);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, #fb923c 0%, #f97316 100%);
-  box-shadow: 0 6px 20px -3px rgba(249, 115, 22, 0.6);
+  background: linear-gradient(135deg, #39adaa 0%, #65cdca 100%);
+  box-shadow: 0 6px 20px -3px rgba(57, 173, 170, 0.6);
   transform: translateY(-1px);
 }
 
@@ -240,7 +382,10 @@ body {
   @apply text-white bg-gray-800/50;
 }
 
-/* Status badges */
+/* ============================================
+   STATUS BADGES
+   ============================================ */
+
 .badge-success {
   @apply px-3 py-1.5 rounded-full text-xs font-semibold tracking-wide;
   background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(52, 211, 153, 0.1) 100%);
@@ -264,12 +409,15 @@ body {
 
 .badge-info {
   @apply px-3 py-1.5 rounded-full text-xs font-semibold tracking-wide;
-  background: linear-gradient(135deg, rgba(249, 115, 22, 0.15) 0%, rgba(251, 146, 60, 0.1) 100%);
-  color: #fb923c;
-  border: 1px solid rgba(249, 115, 22, 0.3);
+  background: linear-gradient(135deg, rgba(57, 173, 170, 0.15) 0%, rgba(101, 205, 202, 0.1) 100%);
+  color: #65cdca;
+  border: 1px solid rgba(57, 173, 170, 0.3);
 }
 
-/* Input styles */
+/* ============================================
+   INPUT STYLES
+   ============================================ */
+
 .input {
   @apply w-full px-4 py-3 rounded-xl transition-all duration-200;
   background: rgba(17, 24, 39, 0.8);
@@ -279,15 +427,18 @@ body {
 
 .input:focus {
   outline: none;
-  border-color: rgba(249, 115, 22, 0.5);
-  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.1);
+  border-color: rgba(57, 173, 170, 0.5);
+  box-shadow: 0 0 0 3px rgba(57, 173, 170, 0.1);
 }
 
 .input::placeholder {
   color: rgba(156, 163, 175, 0.6);
 }
 
-/* Stat card styles */
+/* ============================================
+   STAT CARD STYLES
+   ============================================ */
+
 .stat-card {
   @apply rounded-2xl p-5 relative overflow-hidden;
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(31, 41, 55, 0.7) 100%);
@@ -301,11 +452,14 @@ body {
   right: 0;
   width: 100px;
   height: 100px;
-  background: radial-gradient(circle, rgba(249, 115, 22, 0.1) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(57, 173, 170, 0.1) 0%, transparent 70%);
   pointer-events: none;
 }
 
-/* Action card styles */
+/* ============================================
+   ACTION CARD STYLES
+   ============================================ */
+
 .action-card {
   @apply rounded-xl p-4 transition-all duration-300 cursor-pointer relative overflow-hidden;
   background: rgba(31, 41, 55, 0.4);
@@ -320,8 +474,8 @@ body {
 }
 
 .action-card-primary:hover {
-  border-color: rgba(249, 115, 22, 0.4);
-  box-shadow: 0 10px 25px -10px rgba(249, 115, 22, 0.3);
+  border-color: rgba(57, 173, 170, 0.4);
+  box-shadow: 0 10px 25px -10px rgba(57, 173, 170, 0.3);
 }
 
 .action-card-success:hover {
@@ -334,7 +488,10 @@ body {
   box-shadow: 0 10px 25px -10px rgba(245, 158, 11, 0.3);
 }
 
-/* Progress bar */
+/* ============================================
+   PROGRESS BAR
+   ============================================ */
+
 .progress-bar {
   @apply h-2 rounded-full overflow-hidden;
   background: rgba(55, 65, 81, 0.5);
@@ -342,10 +499,13 @@ body {
 
 .progress-bar-fill {
   @apply h-full rounded-full transition-all duration-500;
-  background: linear-gradient(90deg, #f97316, #fb923c);
+  background: linear-gradient(90deg, #2c8684, #39adaa);
 }
 
-/* Tab styles */
+/* ============================================
+   TAB STYLES
+   ============================================ */
+
 .tab-group {
   @apply flex gap-1 p-1 rounded-xl;
   background: rgba(17, 24, 39, 0.6);
@@ -363,11 +523,14 @@ body {
 
 .tab-item-active {
   @apply text-white;
-  background: linear-gradient(135deg, rgba(249, 115, 22, 0.2) 0%, rgba(251, 146, 60, 0.2) 100%);
-  border: 1px solid rgba(249, 115, 22, 0.3);
+  background: linear-gradient(135deg, rgba(57, 173, 170, 0.2) 0%, rgba(101, 205, 202, 0.2) 100%);
+  border: 1px solid rgba(57, 173, 170, 0.3);
 }
 
-/* Tooltip */
+/* ============================================
+   TOOLTIP
+   ============================================ */
+
 .tooltip {
   @apply absolute z-50 px-3 py-2 text-xs rounded-lg opacity-0 invisible transition-all duration-200 pointer-events-none;
   background: rgba(17, 24, 39, 0.95);
@@ -380,9 +543,12 @@ body {
   transform: translateY(-4px);
 }
 
-/* Glow effects */
+/* ============================================
+   GLOW EFFECTS
+   ============================================ */
+
 .glow-primary {
-  box-shadow: 0 0 20px rgba(249, 115, 22, 0.3);
+  box-shadow: 0 0 20px rgba(57, 173, 170, 0.3);
 }
 
 .glow-success {
@@ -393,15 +559,18 @@ body {
   box-shadow: 0 0 20px rgba(245, 158, 11, 0.3);
 }
 
-/* Icon containers */
+/* ============================================
+   ICON CONTAINERS
+   ============================================ */
+
 .icon-container {
   @apply flex items-center justify-center rounded-xl;
   background: linear-gradient(135deg, rgba(55, 65, 81, 0.5) 0%, rgba(31, 41, 55, 0.5) 100%);
 }
 
 .icon-container-primary {
-  background: linear-gradient(135deg, rgba(249, 115, 22, 0.15) 0%, rgba(251, 146, 60, 0.1) 100%);
-  color: #fb923c;
+  background: linear-gradient(135deg, rgba(57, 173, 170, 0.15) 0%, rgba(101, 205, 202, 0.1) 100%);
+  color: #65cdca;
 }
 
 .icon-container-success {
@@ -414,7 +583,10 @@ body {
   color: #fbbf24;
 }
 
-/* Divider */
+/* ============================================
+   DIVIDER
+   ============================================ */
+
 .divider {
   @apply h-px my-4;
   background: linear-gradient(90deg, transparent, rgba(75, 85, 99, 0.5), transparent);

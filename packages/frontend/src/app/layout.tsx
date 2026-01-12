@@ -1,11 +1,21 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+import { Space_Grotesk, Source_Sans_3 } from 'next/font/google';
 import './globals.css';
 import { Providers } from '@/components/providers';
 import { Navbar } from '@/components/layout/navbar';
 import { Sidebar } from '@/components/layout/sidebar';
 
-const inter = Inter({ subsets: ['latin'] });
+const spaceGrotesk = Space_Grotesk({
+  subsets: ['latin'],
+  variable: '--font-heading',
+  display: 'swap',
+});
+
+const sourceSans = Source_Sans_3({
+  subsets: ['latin'],
+  variable: '--font-body',
+  display: 'swap',
+});
 
 // Force dynamic rendering for all pages since they use client-side providers
 export const dynamic = 'force-dynamic';
@@ -24,8 +34,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <body className={`${inter.className} bg-gray-950 text-white`}>
+    <html lang="en" className="dark" suppressHydrationWarning>
+      <body className={`${sourceSans.variable} ${spaceGrotesk.variable} font-sans bg-surface-page text-text-primary`}>
         <Providers>
           <div className="flex min-h-screen">
             <Sidebar />

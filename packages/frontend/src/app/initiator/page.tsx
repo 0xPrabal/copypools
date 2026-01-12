@@ -15,6 +15,7 @@ import { TOKENS_BY_CHAIN } from '@/config/tokens';
 import ERC20Abi from '@/abis/ERC20.json';
 import StateViewAbi from '@/abis/StateView.json';
 import { getTickSpacing, calculateTickRange, getFullRangeTicks, getTickFromSqrtPrice } from '@/utils/tickMath';
+import { cn } from '@/lib/utils';
 
 const FEE_TIERS = [
   { label: '0.05%', value: 500 },
@@ -815,24 +816,26 @@ export default function InitiatorPage() {
 
   if (!isConnected) {
     return (
-      <div className="max-w-2xl mx-auto card py-12 text-center">
-        <p className="text-lg text-gray-400">Please connect your wallet to create a position</p>
+      <div className="max-w-2xl mx-auto p-6">
+        <div className="rounded-2xl bg-surface-card border border-gray-800/50 py-12 text-center">
+          <p className="text-lg text-text-secondary">Please connect your wallet to create a position</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-4xl mx-auto p-6">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Create New Position</h1>
-        <p className="text-gray-400">
+        <h1 className="text-3xl font-bold mb-2 text-text-primary font-heading">Create New Position</h1>
+        <p className="text-text-secondary">
           Initialize a new liquidity position on Uniswap V4
         </p>
         {hasPoolParams && token0Data && token1Data && (
-          <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-purple-500/10 border border-purple-500/30 rounded-lg text-purple-300 text-sm">
+          <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-brand-medium/10 border border-brand-medium/30 rounded-lg text-brand-medium text-sm">
             <span>Selected pool:</span>
             <span className="font-semibold">{token0Data.symbol}/{token1Data.symbol}</span>
-            <span className="text-purple-400/70">({(fee / 10000).toFixed(2)}% fee)</span>
+            <span className="text-brand-soft">({(fee / 10000).toFixed(2)}% fee)</span>
           </div>
         )}
       </div>
@@ -842,19 +845,21 @@ export default function InitiatorPage() {
           {[1, 2, 3].map((s) => (
             <div key={s} className="flex items-center flex-1">
               <div
-                className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
+                className={cn(
+                  'w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all',
                   s <= step
-                    ? 'bg-primary-500 text-white'
-                    : 'bg-gray-800 text-gray-400'
-                }`}
+                    ? 'bg-gradient-hard text-white shadow-lg shadow-brand-medium/20'
+                    : 'bg-gray-800 text-text-muted'
+                )}
               >
                 {s}
               </div>
               {s < 3 && (
                 <div
-                  className={`flex-1 h-1 mx-2 ${
-                    s < step ? 'bg-primary-500' : 'bg-gray-800'
-                  }`}
+                  className={cn(
+                    'flex-1 h-1 mx-2 rounded-full transition-all',
+                    s < step ? 'bg-gradient-hard' : 'bg-gray-800'
+                  )}
                 />
               )}
             </div>
@@ -863,23 +868,23 @@ export default function InitiatorPage() {
 
       {/* Step 1: Select Pool */}
       {step === 1 && (
-        <div className="card space-y-6">
+        <div className="rounded-2xl bg-surface-card border border-gray-800/50 p-6 space-y-6">
           <div>
-            <h2 className="text-xl font-semibold mb-4">Select Pool</h2>
-            <p className="text-gray-400 text-sm mb-6">
+            <h2 className="text-xl font-semibold mb-4 text-text-primary">Select Pool</h2>
+            <p className="text-text-secondary text-sm mb-6">
               Choose the token pair and fee tier for your position
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-2">
+              <label className="block text-sm font-medium mb-2 text-text-primary">
                 Token 0
               </label>
               <select
                 value={token0}
                 onChange={(e) => setToken0(e.target.value)}
-                className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-primary-500"
+                className="w-full px-4 py-3 bg-gray-800/50 border border-gray-700 rounded-xl focus:outline-none focus:border-brand-medium transition-colors text-text-primary"
               >
                 <option value="">Select token</option>
                 {TOKENS.map(t => (
@@ -889,13 +894,13 @@ export default function InitiatorPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-2">
+              <label className="block text-sm font-medium mb-2 text-text-primary">
                 Token 1
               </label>
               <select
                 value={token1}
                 onChange={(e) => setToken1(e.target.value)}
-                className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-primary-500"
+                className="w-full px-4 py-3 bg-gray-800/50 border border-gray-700 rounded-xl focus:outline-none focus:border-brand-medium transition-colors text-text-primary"
               >
                 <option value="">Select token</option>
                 {TOKENS.map(t => (
@@ -906,17 +911,18 @@ export default function InitiatorPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-2">Fee Tier</label>
+            <label className="block text-sm font-medium mb-2 text-text-primary">Fee Tier</label>
             <div className="grid grid-cols-3 gap-3">
               {FEE_TIERS.map((tier) => (
                 <button
                   key={tier.value}
                   onClick={() => setFee(tier.value)}
-                  className={`px-4 py-3 border rounded-lg transition-colors ${
+                  className={cn(
+                    'px-4 py-3 border rounded-xl transition-all font-medium',
                     fee === tier.value
-                      ? 'bg-primary-500 border-primary-500 text-white'
-                      : 'bg-gray-800 border-gray-700 hover:border-primary-500'
-                  }`}
+                      ? 'bg-gradient-hard border-brand-medium text-white shadow-lg shadow-brand-medium/20'
+                      : 'bg-gray-800/50 border-gray-700 hover:border-brand-medium/50 text-text-primary'
+                  )}
                 >
                   {tier.label}
                 </button>
@@ -927,7 +933,7 @@ export default function InitiatorPage() {
           <button
             onClick={() => setStep(2)}
             disabled={!token0 || !token1}
-            className="btn-primary w-full py-3 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full py-3 bg-gradient-hard hover:opacity-90 rounded-xl font-medium transition-all text-white disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Continue
           </button>
@@ -936,67 +942,70 @@ export default function InitiatorPage() {
 
       {/* Step 2: Set Price Range */}
       {step === 2 && (
-        <div className="card space-y-6">
+        <div className="rounded-2xl bg-surface-card border border-gray-800/50 p-6 space-y-6">
           <div>
-            <h2 className="text-xl font-semibold mb-4">Set Price Range</h2>
-            <p className="text-gray-400 text-sm mb-2">
+            <h2 className="text-xl font-semibold mb-4 text-text-primary">Set Price Range</h2>
+            <p className="text-text-secondary text-sm mb-2">
               Choose a range strategy for your liquidity position
             </p>
           </div>
 
           {/* Range Strategy Selection */}
           <div className="space-y-3">
-            <label className="block text-sm font-medium mb-2">Range Strategy</label>
+            <label className="block text-sm font-medium mb-2 text-text-primary">Range Strategy</label>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <button
                 onClick={() => {
                   setMinPrice('full');
                   setMaxPrice('full');
                 }}
-                className={`p-4 border rounded-lg transition-colors text-left ${
+                className={cn(
+                  'p-4 border rounded-xl transition-all text-left',
                   minPrice === 'full'
-                    ? 'bg-primary-500/20 border-primary-500 text-white'
-                    : 'bg-gray-800 border-gray-700 hover:border-primary-500'
-                }`}
+                    ? 'bg-brand-medium/10 border-brand-medium text-white'
+                    : 'bg-gray-800/50 border-gray-700 hover:border-brand-medium/50'
+                )}
               >
-                <div className="font-medium mb-1">Full Range</div>
-                <p className="text-xs text-gray-400">Liquidity at all prices. Lowest fees, lowest risk.</p>
+                <div className="font-medium mb-1 text-text-primary">Full Range</div>
+                <p className="text-xs text-text-muted">Liquidity at all prices. Lowest fees, lowest risk.</p>
               </button>
               <button
                 onClick={() => {
                   setMinPrice('wide');
                   setMaxPrice('wide');
                 }}
-                className={`p-4 border rounded-lg transition-colors text-left ${
+                className={cn(
+                  'p-4 border rounded-xl transition-all text-left',
                   minPrice === 'wide'
-                    ? 'bg-primary-500/20 border-primary-500 text-white'
-                    : 'bg-gray-800 border-gray-700 hover:border-primary-500'
-                }`}
+                    ? 'bg-brand-medium/10 border-brand-medium text-white'
+                    : 'bg-gray-800/50 border-gray-700 hover:border-brand-medium/50'
+                )}
               >
-                <div className="font-medium mb-1">Wide Range</div>
-                <p className="text-xs text-gray-400">±50% around current price. Balanced approach.</p>
+                <div className="font-medium mb-1 text-text-primary">Wide Range</div>
+                <p className="text-xs text-text-muted">±50% around current price. Balanced approach.</p>
               </button>
               <button
                 onClick={() => {
                   setMinPrice('concentrated');
                   setMaxPrice('concentrated');
                 }}
-                className={`p-4 border rounded-lg transition-colors text-left ${
+                className={cn(
+                  'p-4 border rounded-xl transition-all text-left',
                   minPrice === 'concentrated'
-                    ? 'bg-primary-500/20 border-primary-500 text-white'
-                    : 'bg-gray-800 border-gray-700 hover:border-primary-500'
-                }`}
+                    ? 'bg-brand-medium/10 border-brand-medium text-white'
+                    : 'bg-gray-800/50 border-gray-700 hover:border-brand-medium/50'
+                )}
               >
-                <div className="font-medium mb-1">Concentrated</div>
-                <p className="text-xs text-gray-400">±10% around current price. Higher fees, higher risk.</p>
+                <div className="font-medium mb-1 text-text-primary">Concentrated</div>
+                <p className="text-xs text-text-muted">±10% around current price. Higher fees, higher risk.</p>
               </button>
             </div>
           </div>
 
           {/* Range Info */}
-          <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 flex items-start gap-2">
-            <Info className="text-blue-400 mt-0.5 flex-shrink-0" size={16} />
-            <div className="text-xs text-blue-200">
+          <div className="bg-brand-medium/10 border border-brand-medium/20 rounded-xl p-3 flex items-start gap-2">
+            <Info className="text-brand-medium mt-0.5 flex-shrink-0" size={16} />
+            <div className="text-xs text-brand-soft">
               <p className="font-medium mb-1">
                 {minPrice === 'full' && 'Full Range Position'}
                 {minPrice === 'wide' && 'Wide Range Position'}
@@ -1015,14 +1024,14 @@ export default function InitiatorPage() {
           <div className="flex gap-3">
             <button
               onClick={() => setStep(1)}
-              className="btn-secondary flex-1 py-3"
+              className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 rounded-xl font-medium transition-colors text-text-primary border border-gray-700"
             >
               Back
             </button>
             <button
               onClick={() => setStep(3)}
               disabled={!minPrice || !maxPrice}
-              className="btn-primary flex-1 py-3 disabled:opacity-50"
+              className="flex-1 py-3 bg-gradient-hard hover:opacity-90 rounded-xl font-medium transition-all text-white disabled:opacity-50"
             >
               Continue
             </button>
@@ -1032,10 +1041,10 @@ export default function InitiatorPage() {
 
       {/* Step 3: Deposit Amounts */}
       {step === 3 && (
-        <div className="card space-y-6">
+        <div className="rounded-2xl bg-surface-card border border-gray-800/50 p-6 space-y-6">
           <div>
-            <h2 className="text-xl font-semibold mb-4">Deposit Amounts</h2>
-            <p className="text-gray-400 text-sm mb-4">
+            <h2 className="text-xl font-semibold mb-4 text-text-primary">Deposit Amounts</h2>
+            <p className="text-text-secondary text-sm mb-4">
               Choose how to provide liquidity
             </p>
           </div>
@@ -1044,22 +1053,24 @@ export default function InitiatorPage() {
           <div className="flex items-center gap-2 p-1 bg-gray-800/50 rounded-xl w-fit">
             <button
               onClick={() => setDepositMode('single')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+              className={cn(
+                'flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all',
                 depositMode === 'single'
-                  ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg'
-                  : 'text-gray-400 hover:text-white'
-              }`}
+                  ? 'bg-gradient-hard text-white shadow-lg'
+                  : 'text-text-muted hover:text-text-primary'
+              )}
             >
               <Zap size={16} />
               Single Token
             </button>
             <button
               onClick={() => setDepositMode('both')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+              className={cn(
+                'flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all',
                 depositMode === 'both'
-                  ? 'bg-primary-500 text-white shadow-lg'
-                  : 'text-gray-400 hover:text-white'
-              }`}
+                  ? 'bg-brand-medium text-white shadow-lg'
+                  : 'text-text-muted hover:text-text-primary'
+              )}
             >
               Both Tokens
             </button>
@@ -1067,12 +1078,12 @@ export default function InitiatorPage() {
 
           {/* Pool Price Warning */}
           {!poolPriceInfo.isRealistic && poolPriceInfo.warning && (
-            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 flex items-start gap-3">
-              <AlertCircle className="text-red-400 mt-0.5 flex-shrink-0" size={20} />
+            <div className="bg-status-error/10 border border-status-error/30 rounded-xl p-4 flex items-start gap-3">
+              <AlertCircle className="text-status-error mt-0.5 flex-shrink-0" size={20} />
               <div>
-                <p className="font-medium text-red-400 mb-1">Warning: Unrealistic Pool Price</p>
+                <p className="font-medium text-status-error mb-1">Warning: Unrealistic Pool Price</p>
                 <p className="text-sm text-red-200">{poolPriceInfo.warning}</p>
-                <p className="text-xs text-gray-400 mt-2">
+                <p className="text-xs text-text-muted mt-2">
                   Creating a position in this pool may result in unexpected token ratios.
                   Your tokens might be refunded if the position range doesn&apos;t match the pool price.
                 </p>
@@ -1082,12 +1093,12 @@ export default function InitiatorPage() {
 
           {/* Token Prices Info */}
           {token0Data && token1Data && (token0Price !== null || token1Price !== null) && (
-            <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3">
+            <div className="bg-brand-medium/10 border border-brand-medium/30 rounded-xl p-3">
               <div className="flex items-center gap-2 mb-2">
-                <Info className="text-blue-400 flex-shrink-0" size={16} />
-                <span className="text-sm font-medium text-blue-200">Token Prices</span>
+                <Info className="text-brand-medium flex-shrink-0" size={16} />
+                <span className="text-sm font-medium text-brand-soft">Token Prices</span>
               </div>
-              <div className="flex gap-4 text-sm text-gray-300">
+              <div className="flex gap-4 text-sm text-text-secondary">
                 <span>
                   {token0Data.symbol} = {token0Price !== null ? `$${token0Price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: token0Price < 1 ? 4 : 2 })}` : 'N/A'}
                 </span>
@@ -1101,33 +1112,35 @@ export default function InitiatorPage() {
           {/* Single Token Deposit UI */}
           {depositMode === 'single' && (
             <div className="space-y-4">
-              <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3 flex items-start gap-2">
-                <Zap className="text-purple-400 mt-0.5 flex-shrink-0" size={16} />
-                <p className="text-xs text-purple-200">
+              <div className="bg-brand-soft/10 border border-brand-soft/30 rounded-xl p-3 flex items-start gap-2">
+                <Zap className="text-brand-soft mt-0.5 flex-shrink-0" size={16} />
+                <p className="text-xs text-brand-soft">
                   Deposit a single token and we&apos;ll automatically swap a portion to create a balanced position.
                 </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-2">Select Token</label>
+                <label className="block text-sm font-medium mb-2 text-text-primary">Select Token</label>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     onClick={() => setSingleTokenAddress(token0)}
-                    className={`p-3 rounded-lg border transition-all ${
+                    className={cn(
+                      'p-3 rounded-xl border transition-all',
                       singleTokenAddress === token0
-                        ? 'bg-primary-500/20 border-primary-500 text-white'
-                        : 'bg-gray-800 border-gray-700 hover:border-gray-600 text-gray-300'
-                    }`}
+                        ? 'bg-brand-medium/10 border-brand-medium text-white'
+                        : 'bg-gray-800/50 border-gray-700 hover:border-gray-600 text-text-secondary'
+                    )}
                   >
                     {token0Data?.symbol || 'Token 0'}
                   </button>
                   <button
                     onClick={() => setSingleTokenAddress(token1)}
-                    className={`p-3 rounded-lg border transition-all ${
+                    className={cn(
+                      'p-3 rounded-xl border transition-all',
                       singleTokenAddress === token1
-                        ? 'bg-primary-500/20 border-primary-500 text-white'
-                        : 'bg-gray-800 border-gray-700 hover:border-gray-600 text-gray-300'
-                    }`}
+                        ? 'bg-brand-medium/10 border-brand-medium text-white'
+                        : 'bg-gray-800/50 border-gray-700 hover:border-gray-600 text-text-secondary'
+                    )}
                   >
                     {token1Data?.symbol || 'Token 1'}
                   </button>
@@ -1136,11 +1149,11 @@ export default function InitiatorPage() {
 
               <div>
                 <div className="flex justify-between items-center mb-2">
-                  <label className="block text-sm font-medium">
+                  <label className="block text-sm font-medium text-text-primary">
                     Amount
                   </label>
                   {singleTokenAddress && (
-                    <span className="text-xs text-gray-400">
+                    <span className="text-xs text-text-muted">
                       Balance: {singleTokenAddress === token0 && balance0 != null && token0Data
                         ? parseFloat(formatUnits(BigInt(balance0.toString()), token0Data.decimals)).toFixed(4)
                         : singleTokenAddress === token1 && balance1 != null && token1Data
@@ -1155,38 +1168,38 @@ export default function InitiatorPage() {
                   onChange={(e) => setSingleTokenAmount(e.target.value)}
                   placeholder="0.00"
                   step="0.01"
-                  className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-primary-500"
+                  className="w-full px-4 py-3 bg-gray-800/50 border border-gray-700 rounded-xl focus:outline-none focus:border-brand-medium transition-colors text-text-primary"
                 />
               </div>
 
               {/* Zap Quote Preview */}
               {zapQuoteLoading && (
-                <div className="flex items-center justify-center gap-2 py-4 text-gray-400">
+                <div className="flex items-center justify-center gap-2 py-4 text-text-muted">
                   <Loader2 className="animate-spin" size={16} />
                   <span className="text-sm">Getting quote...</span>
                 </div>
               )}
 
               {zapQuote && singleTokenData && (
-                <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700/50">
+                <div className="bg-gray-800/30 rounded-xl p-4 border border-gray-700/50">
                   <div className="flex items-center gap-2 mb-3">
-                    <Info size={14} className="text-blue-400" />
-                    <span className="text-sm font-medium text-gray-300">Position Preview</span>
+                    <Info size={14} className="text-brand-medium" />
+                    <span className="text-sm font-medium text-text-secondary">Position Preview</span>
                   </div>
                   <div className="space-y-3 text-sm">
                     {/* Your deposit */}
                     <div className="flex justify-between items-center">
-                      <span className="text-gray-400">Your deposit</span>
-                      <span className="text-white font-medium">
+                      <span className="text-text-muted">Your deposit</span>
+                      <span className="text-text-primary font-medium">
                         {singleTokenAmount} {singleTokenData.symbol}
                       </span>
                     </div>
 
                     {/* Breakdown */}
                     <div className="bg-gray-900/50 rounded-lg p-3 space-y-2">
-                      <div className="flex justify-between text-gray-400">
+                      <div className="flex justify-between text-text-muted">
                         <span>↳ Kept as {zapQuote.swapFromToken.symbol}</span>
-                        <span className="text-gray-300">
+                        <span className="text-text-secondary">
                           {(() => {
                             const inputWei = parseUnits(singleTokenAmount, singleTokenData.decimals);
                             const kept = inputWei - zapQuote.swapAmount;
@@ -1194,9 +1207,9 @@ export default function InitiatorPage() {
                           })()}
                         </span>
                       </div>
-                      <div className="flex justify-between text-gray-400">
+                      <div className="flex justify-between text-text-muted">
                         <span>↳ Swapped to {zapQuote.swapToToken.symbol}</span>
-                        <span className="text-gray-300">
+                        <span className="text-text-secondary">
                           {formatUnits(zapQuote.swapAmount, zapQuote.swapFromToken.decimals).slice(0, 10)} → {(() => {
                             // Show expected output from swap
                             const swapToIsToken0 = zapQuote.swapToToken.address.toLowerCase() === token0Data?.address.toLowerCase();
@@ -1209,16 +1222,16 @@ export default function InitiatorPage() {
 
                     {/* Position will contain */}
                     <div className="border-t border-gray-700 pt-3 mt-3">
-                      <div className="text-gray-400 font-medium mb-2">Position will contain:</div>
+                      <div className="text-text-muted font-medium mb-2">Position will contain:</div>
                       <div className="flex justify-between">
-                        <span className="text-white">{token0Data?.symbol}</span>
-                        <span className="text-white font-medium">
+                        <span className="text-text-primary">{token0Data?.symbol}</span>
+                        <span className="text-text-primary font-medium">
                           {token0Data && formatUnits(zapQuote.expectedAmount0, token0Data.decimals).slice(0, 10)}
                         </span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-white">{token1Data?.symbol}</span>
-                        <span className="text-white font-medium">
+                        <span className="text-text-primary">{token1Data?.symbol}</span>
+                        <span className="text-text-primary font-medium">
                           {token1Data && formatUnits(zapQuote.expectedAmount1, token1Data.decimals).slice(0, 10)}
                         </span>
                       </div>
@@ -1226,8 +1239,8 @@ export default function InitiatorPage() {
 
                     {zapQuote.priceImpact > 0 && (
                       <div className="flex justify-between pt-2">
-                        <span className="text-gray-400">Price Impact</span>
-                        <span className={zapQuote.priceImpact > 1 ? 'text-yellow-400' : 'text-green-400'}>
+                        <span className="text-text-muted">Price Impact</span>
+                        <span className={zapQuote.priceImpact > 1 ? 'text-status-warning' : 'text-status-success'}>
                           {zapQuote.priceImpact.toFixed(2)}%
                         </span>
                       </div>
@@ -1243,8 +1256,8 @@ export default function InitiatorPage() {
             <div className="space-y-4">
               {/* Ratio info banner */}
               {calculatePairedAmount && (
-                <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 text-sm">
-                  <div className="flex items-center gap-2 text-blue-400">
+                <div className="bg-brand-medium/10 border border-brand-medium/30 rounded-xl p-3 text-sm">
+                  <div className="flex items-center gap-2 text-brand-medium">
                     <Info size={14} />
                     <span>Amounts are locked to pool ratio. Enter one amount to auto-calculate the other.</span>
                   </div>
@@ -1254,11 +1267,11 @@ export default function InitiatorPage() {
               <div>
                 <div className="flex justify-between items-center mb-2">
                   <div className="flex items-center gap-2">
-                    <label className="block text-sm font-medium">
+                    <label className="block text-sm font-medium text-text-primary">
                       {token0Data?.symbol} Amount
                     </label>
                     {activeInput === 'amount1' && amount1 && calculatePairedAmount && (
-                      <span className="text-xs bg-primary-500/20 text-primary-400 px-1.5 py-0.5 rounded flex items-center gap-1">
+                      <span className="text-xs bg-brand-medium/20 text-brand-medium px-1.5 py-0.5 rounded flex items-center gap-1">
                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                         </svg>
@@ -1275,7 +1288,7 @@ export default function InitiatorPage() {
                           setAmount0(maxAmount);
                         }
                       }}
-                      className="text-xs text-gray-400 hover:text-primary-400 transition-colors"
+                      className="text-xs text-text-muted hover:text-brand-medium transition-colors"
                     >
                       Balance: {parseFloat(formatUnits(BigInt(balance0.toString()), token0Data.decimals)).toFixed(4)} (Max)
                     </button>
@@ -1301,11 +1314,12 @@ export default function InitiatorPage() {
                     placeholder="0.00"
                     step="0.01"
                     readOnly={activeInput === 'amount1' && !!amount1 && !!calculatePairedAmount}
-                    className={`w-full px-4 py-3 bg-gray-800 border rounded-lg focus:outline-none ${
+                    className={cn(
+                      'w-full px-4 py-3 bg-gray-800/50 border rounded-xl focus:outline-none transition-colors text-text-primary',
                       activeInput === 'amount1' && amount1 && calculatePairedAmount
-                        ? 'border-primary-500/50 bg-gray-900 cursor-not-allowed text-gray-300'
-                        : 'border-gray-700 focus:border-primary-500'
-                    }`}
+                        ? 'border-brand-medium/50 bg-gray-900 cursor-not-allowed text-text-secondary'
+                        : 'border-gray-700 focus:border-brand-medium'
+                    )}
                   />
                   {activeInput === 'amount1' && amount1 && calculatePairedAmount && (
                     <button
@@ -1313,14 +1327,14 @@ export default function InitiatorPage() {
                         setActiveInput('amount0');
                         setAmount1('');
                       }}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-primary-400 hover:text-primary-300"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-brand-medium hover:text-brand-soft"
                     >
                       Edit this instead
                     </button>
                   )}
                 </div>
                 {balance0 != null && token0Data && amount0 && parseUnits(amount0, token0Data.decimals) > BigInt(balance0.toString()) && (
-                  <div className="flex items-center gap-1 mt-1 text-red-400 text-xs">
+                  <div className="flex items-center gap-1 mt-1 text-status-error text-xs">
                     <AlertCircle size={12} />
                     <span>Insufficient balance</span>
                   </div>
@@ -1330,11 +1344,11 @@ export default function InitiatorPage() {
               <div>
                 <div className="flex justify-between items-center mb-2">
                   <div className="flex items-center gap-2">
-                    <label className="block text-sm font-medium">
+                    <label className="block text-sm font-medium text-text-primary">
                       {token1Data?.symbol} Amount
                     </label>
                     {activeInput === 'amount0' && amount0 && calculatePairedAmount && (
-                      <span className="text-xs bg-primary-500/20 text-primary-400 px-1.5 py-0.5 rounded flex items-center gap-1">
+                      <span className="text-xs bg-brand-medium/20 text-brand-medium px-1.5 py-0.5 rounded flex items-center gap-1">
                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                         </svg>
@@ -1351,7 +1365,7 @@ export default function InitiatorPage() {
                           setAmount1(maxAmount);
                         }
                       }}
-                      className="text-xs text-gray-400 hover:text-primary-400 transition-colors"
+                      className="text-xs text-text-muted hover:text-brand-medium transition-colors"
                     >
                       Balance: {parseFloat(formatUnits(BigInt(balance1.toString()), token1Data.decimals)).toFixed(4)} (Max)
                     </button>
@@ -1377,11 +1391,12 @@ export default function InitiatorPage() {
                     placeholder="0.00"
                     step="0.01"
                     readOnly={activeInput === 'amount0' && !!amount0 && !!calculatePairedAmount}
-                    className={`w-full px-4 py-3 bg-gray-800 border rounded-lg focus:outline-none ${
+                    className={cn(
+                      'w-full px-4 py-3 bg-gray-800/50 border rounded-xl focus:outline-none transition-colors text-text-primary',
                       activeInput === 'amount0' && amount0 && calculatePairedAmount
-                        ? 'border-primary-500/50 bg-gray-900 cursor-not-allowed text-gray-300'
-                        : 'border-gray-700 focus:border-primary-500'
-                    }`}
+                        ? 'border-brand-medium/50 bg-gray-900 cursor-not-allowed text-text-secondary'
+                        : 'border-gray-700 focus:border-brand-medium'
+                    )}
                   />
                   {activeInput === 'amount0' && amount0 && calculatePairedAmount && (
                     <button
@@ -1389,14 +1404,14 @@ export default function InitiatorPage() {
                         setActiveInput('amount1');
                         setAmount0('');
                       }}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-primary-400 hover:text-primary-300"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-brand-medium hover:text-brand-soft"
                     >
                       Edit this instead
                     </button>
                   )}
                 </div>
                 {balance1 != null && token1Data && amount1 && parseUnits(amount1, token1Data.decimals) > BigInt(balance1.toString()) && (
-                  <div className="flex items-center gap-1 mt-1 text-red-400 text-xs">
+                  <div className="flex items-center gap-1 mt-1 text-status-error text-xs">
                     <AlertCircle size={12} />
                     <span>Insufficient balance</span>
                   </div>
@@ -1407,33 +1422,33 @@ export default function InitiatorPage() {
 
           {/* Loading state for pool data */}
           {isLoadingSlot0 && (
-            <div className="flex items-center gap-2 text-xs text-gray-400">
+            <div className="flex items-center gap-2 text-xs text-text-muted">
               <Loader2 className="animate-spin" size={12} />
               <span>Loading pool data...</span>
             </div>
           )}
 
-          <div className="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-2">
+          <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700/50 space-y-2">
             <div className="flex justify-between text-sm">
-              <span className="text-gray-400">Selected Pool</span>
-              <span className="font-medium">{token0Data?.symbol}/{token1Data?.symbol}</span>
+              <span className="text-text-muted">Selected Pool</span>
+              <span className="font-medium text-text-primary">{token0Data?.symbol}/{token1Data?.symbol}</span>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-gray-400">Fee Tier</span>
-              <span className="font-medium">{(fee / 10000)}%</span>
+              <span className="text-text-muted">Fee Tier</span>
+              <span className="font-medium text-text-primary">{(fee / 10000)}%</span>
             </div>
             {currentTick !== 0 && (
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Current Tick</span>
-                <span className="font-mono text-xs">{currentTick.toLocaleString()}</span>
+                <span className="text-text-muted">Current Tick</span>
+                <span className="font-mono text-xs text-text-secondary">{currentTick.toLocaleString()}</span>
               </div>
             )}
           </div>
 
           {/* Info about selected range */}
-          <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 flex items-start gap-2">
-            <Info className="text-blue-400 mt-0.5 flex-shrink-0" size={16} />
-            <div className="text-xs text-blue-200">
+          <div className="bg-brand-medium/10 border border-brand-medium/20 rounded-xl p-3 flex items-start gap-2">
+            <Info className="text-brand-medium mt-0.5 flex-shrink-0" size={16} />
+            <div className="text-xs text-brand-soft">
               <p className="font-medium mb-1">
                 {minPrice === 'full' && 'Full Range Position'}
                 {minPrice === 'wide' && 'Wide Range Position'}
@@ -1452,7 +1467,7 @@ export default function InitiatorPage() {
             <div className="flex gap-3">
               <button
                 onClick={() => setStep(2)}
-                className="btn-secondary flex-1 py-3"
+                className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 rounded-xl font-medium transition-colors text-text-primary border border-gray-700"
               >
                 Back
               </button>
@@ -1464,7 +1479,7 @@ export default function InitiatorPage() {
                   return (
                     <button
                       disabled
-                      className="btn-primary flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard rounded-xl font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Zap size={16} />
                       Create Position
@@ -1498,7 +1513,7 @@ export default function InitiatorPage() {
                         }
                       }}
                       disabled={isApproving}
-                      className="btn-primary flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 disabled:opacity-50"
+                      className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard hover:opacity-90 rounded-xl font-medium text-white disabled:opacity-50 transition-all"
                     >
                       {isApproving && <Loader2 className="animate-spin" size={18} />}
                       {isApproving ? 'Approving...' : `Approve ${singleTokenData.symbol}`}
@@ -1511,7 +1526,7 @@ export default function InitiatorPage() {
                   <button
                     onClick={handleZap}
                     disabled={zapIsPending || zapIsConfirming}
-                    className="btn-primary flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard hover:opacity-90 rounded-xl font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                   >
                     {(zapIsPending || zapIsConfirming) && <Loader2 className="animate-spin" size={18} />}
                     {zapIsPending ? 'Confirm in Wallet...' : zapIsConfirming ? 'Creating...' : (
@@ -1531,7 +1546,7 @@ export default function InitiatorPage() {
                   return (
                     <button
                       disabled
-                      className="btn-primary flex-1 py-3 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard rounded-xl font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Create Position
                     </button>
@@ -1567,7 +1582,7 @@ export default function InitiatorPage() {
                         }
                       }}
                       disabled={isApproving}
-                      className="btn-primary flex-1 py-3 flex items-center justify-center gap-2 disabled:opacity-50"
+                      className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard hover:opacity-90 rounded-xl font-medium text-white disabled:opacity-50 transition-all"
                     >
                       {isApproving && <Loader2 className="animate-spin" size={18} />}
                       {isApproving ? 'Approving...' : `Approve ${tokenToApprove}`}
@@ -1580,7 +1595,7 @@ export default function InitiatorPage() {
                   <button
                     onClick={handleMintPosition}
                     disabled={isPending || isConfirming || !poolPriceInfo.isRealistic}
-                    className="btn-primary flex-1 py-3 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard hover:opacity-90 rounded-xl font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                   >
                     {(isPending || isConfirming) && <Loader2 className="animate-spin" size={18} />}
                     {isPending ? 'Confirm in Wallet...' : isConfirming ? 'Creating...' : !poolPriceInfo.isRealistic ? 'Pool Price Invalid' : 'Create Position'}
@@ -1594,34 +1609,34 @@ export default function InitiatorPage() {
 
       {/* Help Section - Chain-specific info */}
       {chainId === CHAIN_IDS.SEPOLIA && (
-        <div className="card mt-8 border-blue-500/20 bg-blue-500/5">
+        <div className="rounded-2xl bg-surface-card border border-brand-medium/20 p-6 mt-8">
           <div className="flex items-start gap-3">
-            <AlertCircle className="text-blue-400 mt-1" size={20} />
+            <AlertCircle className="text-brand-medium mt-1" size={20} />
             <div>
-              <h3 className="font-semibold text-blue-400 mb-2">Need Test Tokens?</h3>
-              <p className="text-sm text-gray-300 mb-3">
+              <h3 className="font-semibold text-brand-medium mb-2">Need Test Tokens?</h3>
+              <p className="text-sm text-text-secondary mb-3">
                 You need Sepolia testnet tokens to create positions. Here&apos;s how to get them:
               </p>
               <div className="space-y-2 text-sm">
                 <div>
-                  <span className="font-medium text-white">1. Get Sepolia ETH:</span>
-                  <ul className="ml-4 mt-1 space-y-1 text-gray-400">
-                    <li>• Visit <a href="https://sepoliafaucet.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">sepoliafaucet.com</a></li>
-                    <li>• Or <a href="https://www.alchemy.com/faucets/ethereum-sepolia" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Alchemy Sepolia Faucet</a></li>
+                  <span className="font-medium text-text-primary">1. Get Sepolia ETH:</span>
+                  <ul className="ml-4 mt-1 space-y-1 text-text-muted">
+                    <li>• Visit <a href="https://sepoliafaucet.com" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">sepoliafaucet.com</a></li>
+                    <li>• Or <a href="https://www.alchemy.com/faucets/ethereum-sepolia" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">Alchemy Sepolia Faucet</a></li>
                   </ul>
                 </div>
                 <div>
-                  <span className="font-medium text-white">2. Get WETH (Wrapped ETH):</span>
-                  <ul className="ml-4 mt-1 space-y-1 text-gray-400">
-                    <li>• Go to <a href="https://sepolia.etherscan.io/address/0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9#writeContract" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">WETH Contract on Etherscan</a></li>
+                  <span className="font-medium text-text-primary">2. Get WETH (Wrapped ETH):</span>
+                  <ul className="ml-4 mt-1 space-y-1 text-text-muted">
+                    <li>• Go to <a href="https://sepolia.etherscan.io/address/0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9#writeContract" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">WETH Contract on Etherscan</a></li>
                     <li>• Connect wallet and use &quot;deposit&quot; function to wrap your ETH</li>
                   </ul>
                 </div>
                 <div>
-                  <span className="font-medium text-white">3. Get USDC/DAI:</span>
-                  <ul className="ml-4 mt-1 space-y-1 text-gray-400">
-                    <li>• USDC: <a href="https://sepolia.etherscan.io/address/0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">0x1c7D...7238</a></li>
-                    <li>• DAI: <a href="https://sepolia.etherscan.io/address/0x68194a729C2450ad26072b3D33ADaCbcef39D574" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">0x6819...D574</a></li>
+                  <span className="font-medium text-text-primary">3. Get USDC/DAI:</span>
+                  <ul className="ml-4 mt-1 space-y-1 text-text-muted">
+                    <li>• USDC: <a href="https://sepolia.etherscan.io/address/0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">0x1c7D...7238</a></li>
+                    <li>• DAI: <a href="https://sepolia.etherscan.io/address/0x68194a729C2450ad26072b3D33ADaCbcef39D574" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">0x6819...D574</a></li>
                     <li>• Use a Sepolia faucet or testnet swap to get these tokens</li>
                   </ul>
                 </div>
@@ -1632,21 +1647,21 @@ export default function InitiatorPage() {
       )}
 
       {chainId === CHAIN_IDS.BASE && (
-        <div className="card mt-8 border-blue-500/20 bg-blue-500/5">
+        <div className="rounded-2xl bg-surface-card border border-brand-medium/20 p-6 mt-8">
           <div className="flex items-start gap-3">
-            <Info className="text-blue-400 mt-1" size={20} />
+            <Info className="text-brand-medium mt-1" size={20} />
             <div>
-              <h3 className="font-semibold text-blue-400 mb-2">Getting Started on Base</h3>
-              <p className="text-sm text-gray-300 mb-3">
+              <h3 className="font-semibold text-brand-medium mb-2">Getting Started on Base</h3>
+              <p className="text-sm text-text-secondary mb-3">
                 You need tokens on Base mainnet to create positions.
               </p>
               <div className="space-y-2 text-sm">
                 <div>
-                  <span className="font-medium text-white">Get tokens on Base:</span>
-                  <ul className="ml-4 mt-1 space-y-1 text-gray-400">
-                    <li>• Bridge from Ethereum via <a href="https://bridge.base.org" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Base Bridge</a></li>
-                    <li>• Buy directly on <a href="https://www.coinbase.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Coinbase</a> and withdraw to Base</li>
-                    <li>• Swap on <a href="https://app.uniswap.org" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Uniswap</a></li>
+                  <span className="font-medium text-text-primary">Get tokens on Base:</span>
+                  <ul className="ml-4 mt-1 space-y-1 text-text-muted">
+                    <li>• Bridge from Ethereum via <a href="https://bridge.base.org" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">Base Bridge</a></li>
+                    <li>• Buy directly on <a href="https://www.coinbase.com" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">Coinbase</a> and withdraw to Base</li>
+                    <li>• Swap on <a href="https://app.uniswap.org" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">Uniswap</a></li>
                   </ul>
                 </div>
               </div>

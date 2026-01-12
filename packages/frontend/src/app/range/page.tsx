@@ -10,7 +10,7 @@ const RangeContent = dynamic(
     ssr: false,
     loading: () => (
       <div className="flex items-center justify-center min-h-[400px]">
-        <Loader2 className="animate-spin text-primary-500" size={48} />
+        <Loader2 className="animate-spin text-brand-medium" size={48} />
       </div>
     ),
   }

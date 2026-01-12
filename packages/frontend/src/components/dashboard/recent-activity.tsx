@@ -24,13 +24,13 @@ const activityIcons = {
 };
 
 const activityColors = {
-  compound: 'text-green-400 bg-green-500/10',
-  rebalance: 'text-blue-400 bg-blue-500/10',
-  exit: 'text-orange-400 bg-orange-500/10',
-  deposit: 'text-green-400 bg-green-500/10',
-  withdraw: 'text-red-400 bg-red-500/10',
+  compound: 'text-status-success bg-status-success/10',
+  rebalance: 'text-brand-medium bg-brand-medium/10',
+  exit: 'text-status-warning bg-status-warning/10',
+  deposit: 'text-status-success bg-status-success/10',
+  withdraw: 'text-status-error bg-status-error/10',
   borrow: 'text-purple-400 bg-purple-500/10',
-  repay: 'text-blue-400 bg-blue-500/10',
+  repay: 'text-brand-medium bg-brand-medium/10',
 };
 
 function ActivityItem({ activity }: { activity: Activity }) {
@@ -40,14 +40,14 @@ function ActivityItem({ activity }: { activity: Activity }) {
 
   return (
     <div className="flex items-start gap-3 py-3">
-      <div className={`p-2 rounded-lg ${colorClass}`}>
+      <div className={`p-2 rounded-xl ${colorClass}`}>
         <Icon size={16} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium capitalize">{activity.type}</p>
-        <p className="text-xs text-gray-400 truncate">{activity.details}</p>
+        <p className="text-sm font-medium text-text-primary capitalize">{activity.type}</p>
+        <p className="text-xs text-text-muted truncate">{activity.details}</p>
       </div>
-      <span className="text-xs text-gray-500">{timeAgo}</span>
+      <span className="text-xs text-text-muted">{timeAgo}</span>
     </div>
   );
 }
@@ -74,26 +74,30 @@ export function RecentActivity() {
   });
 
   return (
-    <div className="card">
-      <h2 className="text-lg font-semibold mb-4">Recent Activity</h2>
+    <div className="rounded-2xl bg-surface-card border border-gray-800/50 overflow-hidden">
+      <div className="p-6 border-b border-gray-800/30">
+        <h2 className="text-lg font-bold text-text-primary">Recent Activity</h2>
+      </div>
 
-      {isLoading ? (
-        <div className="space-y-4">
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-12 bg-gray-800 rounded animate-pulse" />
-          ))}
-        </div>
-      ) : activities && activities.length > 0 ? (
-        <div className="divide-y divide-gray-800">
-          {activities.map((activity) => (
-            <ActivityItem key={activity.id} activity={activity} />
-          ))}
-        </div>
-      ) : (
-        <div className="text-center py-8">
-          <p className="text-gray-400 text-sm">No recent activity</p>
-        </div>
-      )}
+      <div className="p-4">
+        {isLoading ? (
+          <div className="space-y-4">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="h-12 bg-gray-800/50 rounded-xl animate-pulse" />
+            ))}
+          </div>
+        ) : activities && activities.length > 0 ? (
+          <div className="divide-y divide-gray-800/30">
+            {activities.map((activity) => (
+              <ActivityItem key={activity.id} activity={activity} />
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-8">
+            <p className="text-text-muted text-sm">No recent activity</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
