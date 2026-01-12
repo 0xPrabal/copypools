@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAccount, useReadContract, useBalance, useChainId, usePublicClient } from 'wagmi';
-import { Plus, Loader2, AlertCircle, Info, Zap, ArrowRight, ChevronDown } from 'lucide-react';
+import { Loader2, AlertCircle, Info, Zap, ChevronDown, Check, AlertTriangle } from 'lucide-react';
 import { parseUnits, formatUnits, keccak256, encodeAbiParameters } from 'viem';
 import { useV4Utils } from '@/hooks/useV4Utils';
 import { useZapLiquidity, ZapToken, ZapQuote } from '@/hooks/useZapLiquidity';
@@ -14,13 +14,17 @@ import { getContracts, CHAIN_IDS } from '@/config/contracts';
 import { TOKENS_BY_CHAIN } from '@/config/tokens';
 import ERC20Abi from '@/abis/ERC20.json';
 import StateViewAbi from '@/abis/StateView.json';
-import { getTickSpacing, calculateTickRange, getFullRangeTicks, getTickFromSqrtPrice } from '@/utils/tickMath';
+import { getTickSpacing, calculateTickRange, getFullRangeTicks } from '@/utils/tickMath';
 import { cn } from '@/lib/utils';
+import { Stepper, PositionSummaryCard } from '@/components/position';
+import { Slider } from '@/components/ui/slider';
+
+type RangeStrategy = 'full' | 'wide' | 'concentrated' | 'custom';
 
 const FEE_TIERS = [
-  { label: '0.05%', value: 500 },
-  { label: '0.30%', value: 3000 },
-  { label: '1.00%', value: 10000 },
+  { label: '0.05%', value: 500, description: 'Best for stable or low-volatility pairs' },
+  { label: '0.30%', value: 3000, description: 'Balanced option for most pairs' },
+  { label: '1.00%', value: 10000, description: 'Higher fees, higher risk, lower volume' },
 ];
 
 export default function InitiatorPage() {
@@ -32,6 +36,7 @@ export default function InitiatorPage() {
   const { showToast } = useToast();
   const [step, setStep] = useState(1);
   const [depositMode, setDepositMode] = useState<'single' | 'both'>('both');
+  const [rangeStrategy, setRangeStrategy] = useState<RangeStrategy>('full');
 
   // Parse URL parameters (from pools page navigation)
   const searchParams = useSearchParams();
@@ -46,9 +51,7 @@ export default function InitiatorPage() {
   // Form state
   const [token0, setToken0] = useState('');
   const [token1, setToken1] = useState('');
-  const [fee, setFee] = useState(3000); // Default to 0.30% fee tier
-  const [minPrice, setMinPrice] = useState('');
-  const [maxPrice, setMaxPrice] = useState('');
+  const [fee, setFee] = useState(3000);
   const [amount0, setAmount0] = useState('');
   const [amount1, setAmount1] = useState('');
   const [activeInput, setActiveInput] = useState<'amount0' | 'amount1' | null>(null);
@@ -58,7 +61,12 @@ export default function InitiatorPage() {
   const [singleTokenAmount, setSingleTokenAmount] = useState('');
   const [zapQuote, setZapQuote] = useState<ZapQuote | null>(null);
 
-  // Reset tokens when chain changes (only if not coming from pools page with params)
+  // Price range state for slider
+  const [priceRange, setPriceRange] = useState([2000, 5000]);
+  const absoluteMin = 1000;
+  const absoluteMax = 10000;
+
+  // Reset tokens when chain changes
   useEffect(() => {
     if (!hasPoolParams) {
       setToken0('');
@@ -66,28 +74,20 @@ export default function InitiatorPage() {
     }
   }, [chainId, hasPoolParams]);
 
-  // Initialize state from URL params when coming from pools page
+  // Initialize from URL params
   useEffect(() => {
     if (hasPoolParams && urlToken0 && urlToken1 && urlFee) {
-      // Set tokens and fee
       setToken0(urlToken0);
       setToken1(urlToken1);
       const parsedFee = parseInt(urlFee);
-      if (!isNaN(parsedFee)) {
-        setFee(parsedFee);
-      }
-
-      // Always skip to step 2 (range selection) when pool is preselected from pools page
-      // Token data will be fetched on-chain if not in predefined list
+      if (!isNaN(parsedFee)) setFee(parsedFee);
       setStep(2);
-      // Default single token to token0
       setSingleTokenAddress(urlToken0);
     }
   }, [hasPoolParams, urlToken0, urlToken1, urlFee]);
 
   const { mintPosition, isPending, isConfirming, isSuccess, hash } = useV4Utils();
 
-  // Zap liquidity hook for single-token deposits
   const {
     getZapQuote,
     executeZap,
@@ -96,10 +96,9 @@ export default function InitiatorPage() {
     isConfirming: zapIsConfirming,
     isSuccess: zapIsSuccess,
     hash: zapHash,
-    error: zapError,
   } = useZapLiquidity();
 
-  // Get token data from TOKENS list (for known tokens)
+  // Token data resolution
   const token0FromList = useMemo(() => {
     if (!token0) return undefined;
     return TOKENS.find(t => t.address.toLowerCase() === token0.toLowerCase());
@@ -110,7 +109,6 @@ export default function InitiatorPage() {
     return TOKENS.find(t => t.address.toLowerCase() === token1.toLowerCase());
   }, [TOKENS, token1]);
 
-  // Fetch token data on-chain for unknown tokens
   const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
   const token0NeedsOnChain = !!token0 && !token0FromList && token0.toLowerCase() !== ZERO_ADDRESS;
   const token1NeedsOnChain = !!token1 && !token1FromList && token1.toLowerCase() !== ZERO_ADDRESS;
@@ -143,21 +141,14 @@ export default function InitiatorPage() {
     query: { enabled: token1NeedsOnChain },
   });
 
-  // Combined token data: use predefined list if available, otherwise use on-chain data
   const token0Data = useMemo(() => {
     if (token0FromList) return token0FromList;
     if (!token0) return undefined;
-    // Native ETH
     if (token0.toLowerCase() === ZERO_ADDRESS) {
       return { symbol: 'ETH', address: ZERO_ADDRESS as `0x${string}`, decimals: 18, isNative: true };
     }
-    // On-chain data for unknown tokens
     if (token0Symbol && token0Decimals !== undefined) {
-      return {
-        symbol: token0Symbol as string,
-        address: token0 as `0x${string}`,
-        decimals: Number(token0Decimals),
-      };
+      return { symbol: token0Symbol as string, address: token0 as `0x${string}`, decimals: Number(token0Decimals) };
     }
     return undefined;
   }, [token0, token0FromList, token0Symbol, token0Decimals]);
@@ -165,50 +156,32 @@ export default function InitiatorPage() {
   const token1Data = useMemo(() => {
     if (token1FromList) return token1FromList;
     if (!token1) return undefined;
-    // Native ETH
     if (token1.toLowerCase() === ZERO_ADDRESS) {
       return { symbol: 'ETH', address: ZERO_ADDRESS as `0x${string}`, decimals: 18, isNative: true };
     }
-    // On-chain data for unknown tokens
     if (token1Symbol && token1Decimals !== undefined) {
-      return {
-        symbol: token1Symbol as string,
-        address: token1 as `0x${string}`,
-        decimals: Number(token1Decimals),
-      };
+      return { symbol: token1Symbol as string, address: token1 as `0x${string}`, decimals: Number(token1Decimals) };
     }
     return undefined;
   }, [token1, token1FromList, token1Symbol, token1Decimals]);
 
-  // Check if tokens are native ETH
   const token0IsNative = token0 ? token0.toLowerCase() === ZERO_ADDRESS : (token0Data?.isNative || false);
   const token1IsNative = token1 ? token1.toLowerCase() === ZERO_ADDRESS : (token1Data?.isNative || false);
 
-  // Fetch USD prices for tokens
   const { token0Price, token1Price } = useTokenPrices(token0, token1, chainId);
 
-  // Debug logging for balance checking
-  console.log('=== Balance Debug ===');
-  console.log('token0:', token0, 'isNative:', token0IsNative);
-  console.log('token1:', token1, 'isNative:', token1IsNative);
-
-  // Read native ETH balance
+  // Balances
   const { data: ethBalance } = useBalance({
     address: address,
-    query: {
-      enabled: !!address && (token0IsNative || token1IsNative),
-    },
+    query: { enabled: !!address && (token0IsNative || token1IsNative) },
   });
 
-  // Read ERC20 token balances (only for non-native tokens)
   const { data: balance0ERC20 } = useReadContract({
     address: token0 as `0x${string}`,
     abi: ERC20Abi,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
-    query: {
-      enabled: !!address && !!token0 && !token0IsNative,
-    },
+    query: { enabled: !!address && !!token0 && !token0IsNative },
   });
 
   const { data: balance1ERC20 } = useReadContract({
@@ -216,21 +189,11 @@ export default function InitiatorPage() {
     abi: ERC20Abi,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
-    query: {
-      enabled: !!address && !!token1 && !token1IsNative,
-    },
+    query: { enabled: !!address && !!token1 && !token1IsNative },
   });
 
-  // Use native ETH balance for native tokens, ERC20 balance otherwise
-  const balance0 = token0IsNative ? ethBalance?.value : balance0ERC20;
-  const balance1 = token1IsNative ? ethBalance?.value : balance1ERC20;
-
-  // Debug logging for balances
-  console.log('ethBalance:', ethBalance?.value?.toString());
-  console.log('balance0ERC20:', balance0ERC20?.toString());
-  console.log('balance1ERC20:', balance1ERC20?.toString());
-  console.log('final balance0:', balance0?.toString());
-  console.log('final balance1:', balance1?.toString());
+  const balance0 = token0IsNative ? ethBalance?.value : (balance0ERC20 as bigint | undefined);
+  const balance1 = token1IsNative ? ethBalance?.value : (balance1ERC20 as bigint | undefined);
 
   const {
     approve: approveToken0,
@@ -248,8 +211,7 @@ export default function InitiatorPage() {
     refetch: refetchApproval1,
   } = useTokenApproval(token1 as `0x${string}`, CONTRACTS.V4_UTILS);
 
-
-  // Get pool info to determine current tick
+  // Pool info
   const sortedToken0 = token0 && token1 && token0.toLowerCase() < token1.toLowerCase() ? token0 : token1;
   const sortedToken1 = token0 && token1 && token0.toLowerCase() < token1.toLowerCase() ? token1 : token0;
 
@@ -277,542 +239,284 @@ export default function InitiatorPage() {
     abi: StateViewAbi,
     functionName: 'getSlot0',
     args: poolId ? [poolId] : undefined,
-    query: {
-      // Load slot0 data as soon as we have tokens and a range strategy selected (step 2+)
-      enabled: !!poolId && step >= 2,
-    },
+    query: { enabled: !!poolId && step >= 2 },
   });
 
-  // Extract current tick from slot0 - slot0Data is [sqrtPriceX96, tick, protocolFee, lpFee]
   const slot0Array = slot0Data as readonly [bigint, number, number, number] | undefined;
   const currentTick = slot0Array ? Number(slot0Array[1]) : 0;
   const currentSqrtPriceX96 = slot0Array ? slot0Array[0] : BigInt(0);
 
-  // Calculate pool price and check if it's realistic
-  const poolPriceInfo = (() => {
+  // Pool price calculation
+  const poolPriceInfo = useMemo(() => {
     if (!currentSqrtPriceX96 || currentSqrtPriceX96 === BigInt(0)) {
-      return { price: 0, isRealistic: false, warning: 'Pool not initialized', token0Symbol: '', token1Symbol: '' };
+      return { price: 0, isRealistic: false, warning: 'Pool not initialized' };
     }
-
     const Q96 = BigInt(2) ** BigInt(96);
     const sqrtPrice = Number(currentSqrtPriceX96) / Number(Q96);
     const rawPrice = sqrtPrice * sqrtPrice;
-
-    // Get decimals for sorted tokens
     const sortedToken0Data = sortedToken0 === token0 ? token0Data : token1Data;
     const sortedToken1Data = sortedToken0 === token0 ? token1Data : token0Data;
-
     if (!sortedToken0Data || !sortedToken1Data) {
-      return { price: 0, isRealistic: false, warning: 'Token data not available', token0Symbol: '', token1Symbol: '' };
+      return { price: 0, isRealistic: false, warning: 'Token data not available' };
     }
-
     const decimalAdjustment = Math.pow(10, sortedToken0Data.decimals - sortedToken1Data.decimals);
     const adjustedPrice = rawPrice * decimalAdjustment;
-
-    // Price represents: 1 token0 = adjustedPrice token1
-    // For user-friendly display, show price in the more intuitive direction
     let displayPrice = adjustedPrice;
-    let priceToken0Symbol = sortedToken0Data.symbol;
-    let priceToken1Symbol = sortedToken1Data.symbol;
-
-    // If price is very small (< 0.001), invert it for better readability
     if (adjustedPrice < 0.001 && adjustedPrice > 0) {
       displayPrice = 1 / adjustedPrice;
-      priceToken0Symbol = sortedToken1Data.symbol;
-      priceToken1Symbol = sortedToken0Data.symbol;
     }
-
-    // Basic sanity check - price should be positive and finite
     const isRealistic = displayPrice > 0 && isFinite(displayPrice);
-    const warning = isRealistic ? '' : 'Pool price appears invalid';
+    return { price: displayPrice, isRealistic, warning: isRealistic ? '' : 'Pool price appears invalid' };
+  }, [currentSqrtPriceX96, sortedToken0, token0, token0Data, token1Data]);
 
-    return {
-      price: displayPrice,
-      isRealistic,
-      warning,
-      rawPrice: adjustedPrice,
-      token0Symbol: priceToken0Symbol,
-      token1Symbol: priceToken1Symbol,
-    };
-  })();
+  const currentPrice = poolPriceInfo.price || 3400;
+  const isInRange = priceRange[0] <= currentPrice && currentPrice <= priceRange[1];
 
-  // Calculate token ratio based on current price and tick range
+  // Handle range strategy change
+  const handleStrategyChange = (strategy: RangeStrategy) => {
+    setRangeStrategy(strategy);
+    switch (strategy) {
+      case 'full':
+        setPriceRange([absoluteMin, absoluteMax]);
+        break;
+      case 'wide':
+        const wideRange = currentPrice * 0.5;
+        setPriceRange([Math.max(absoluteMin, Math.round(currentPrice - wideRange)), Math.min(absoluteMax, Math.round(currentPrice + wideRange))]);
+        break;
+      case 'concentrated':
+        const concentratedRange = currentPrice * 0.1;
+        setPriceRange([Math.max(absoluteMin, Math.round(currentPrice - concentratedRange)), Math.min(absoluteMax, Math.round(currentPrice + concentratedRange))]);
+        break;
+    }
+  };
+
+  // Paired amount calculation
   const calculatePairedAmount = useMemo(() => {
-    if (!currentSqrtPriceX96 || currentSqrtPriceX96 === BigInt(0) || !token0Data || !token1Data || !minPrice) {
+    if (!currentSqrtPriceX96 || currentSqrtPriceX96 === BigInt(0) || !token0Data || !token1Data || !rangeStrategy) {
       return null;
     }
-
     const tickSpacing = getTickSpacing(fee);
-    let tickLower: number;
-    let tickUpper: number;
-
-    if (minPrice === 'full') {
+    let tickLower: number, tickUpper: number;
+    if (rangeStrategy === 'full') {
       [tickLower, tickUpper] = getFullRangeTicks(tickSpacing);
-    } else if (minPrice === 'wide') {
+    } else if (rangeStrategy === 'wide') {
       [tickLower, tickUpper] = calculateTickRange(currentTick, tickSpacing, 2000);
-    } else if (minPrice === 'concentrated') {
+    } else if (rangeStrategy === 'concentrated') {
       [tickLower, tickUpper] = calculateTickRange(currentTick, tickSpacing, 100);
     } else {
       return null;
     }
-
-    // Calculate sqrt prices for range bounds
     const sqrtPriceLower = Math.sqrt(1.0001 ** tickLower);
     const sqrtPriceUpper = Math.sqrt(1.0001 ** tickUpper);
     const Q96 = BigInt(2) ** BigInt(96);
     const sqrtPriceCurrent = Number(currentSqrtPriceX96) / Number(Q96);
-
-    // Determine if we're in range
-    const currentTickNum = currentTick;
-
-    // Get sorted token data for proper calculation
     const sortedToken0Data = sortedToken0 === token0 ? token0Data : token1Data;
     const sortedToken1Data = sortedToken0 === token0 ? token1Data : token0Data;
     const isSorted = sortedToken0 === token0;
 
     return {
-      // Calculate amount1 from amount0
       fromAmount0ToAmount1: (inputAmount0: string): string => {
         if (!inputAmount0 || parseFloat(inputAmount0) === 0) return '';
-
         const amount0Wei = parseFloat(inputAmount0);
-
-        // If current tick is below range, only token0 is needed
-        if (currentTickNum <= tickLower) {
-          return '0';
-        }
-        // If current tick is above range, only token1 is needed
-        if (currentTickNum >= tickUpper) {
-          return ''; // Can't calculate - need to show that position is out of range
-        }
-
-        // Within range: calculate ratio
-        // amount0 = L * (1/sqrtP - 1/sqrtPu)
-        // amount1 = L * (sqrtP - sqrtPl)
-        // ratio = amount1/amount0 = (sqrtP - sqrtPl) / (1/sqrtP - 1/sqrtPu)
+        if (currentTick <= tickLower) return '0';
+        if (currentTick >= tickUpper) return '';
         const numerator = sqrtPriceCurrent - sqrtPriceLower;
         const denominator = (1 / sqrtPriceCurrent) - (1 / sqrtPriceUpper);
-
         if (denominator === 0) return '';
-
         const ratio = numerator / denominator;
-
-        // Adjust for decimal differences between tokens
         const decimalAdjustment = Math.pow(10, sortedToken0Data.decimals - sortedToken1Data.decimals);
         const amount1 = amount0Wei * ratio * decimalAdjustment;
-
-        // If tokens were swapped in sorting, swap the result
-        if (!isSorted) {
-          return (amount0Wei / ratio / decimalAdjustment).toFixed(6);
-        }
-
+        if (!isSorted) return (amount0Wei / ratio / decimalAdjustment).toFixed(6);
         return amount1.toFixed(6);
       },
-      // Calculate amount0 from amount1
       fromAmount1ToAmount0: (inputAmount1: string): string => {
         if (!inputAmount1 || parseFloat(inputAmount1) === 0) return '';
-
         const amount1Wei = parseFloat(inputAmount1);
-
-        // If current tick is below range, only token0 is needed
-        if (currentTickNum <= tickLower) {
-          return ''; // Can't calculate - only token0 needed
-        }
-        // If current tick is above range, only token1 is needed
-        if (currentTickNum >= tickUpper) {
-          return '0';
-        }
-
-        // Within range: calculate ratio
+        if (currentTick <= tickLower) return '';
+        if (currentTick >= tickUpper) return '0';
         const numerator = sqrtPriceCurrent - sqrtPriceLower;
         const denominator = (1 / sqrtPriceCurrent) - (1 / sqrtPriceUpper);
-
         if (numerator === 0) return '';
-
         const ratio = numerator / denominator;
-
-        // Adjust for decimal differences between tokens
         const decimalAdjustment = Math.pow(10, sortedToken0Data.decimals - sortedToken1Data.decimals);
         const amount0 = amount1Wei / ratio / decimalAdjustment;
-
-        // If tokens were swapped in sorting, swap the result
-        if (!isSorted) {
-          return (amount1Wei * ratio * decimalAdjustment).toFixed(6);
-        }
-
+        if (!isSorted) return (amount1Wei * ratio * decimalAdjustment).toFixed(6);
         return amount0.toFixed(6);
       },
       tickLower,
       tickUpper,
-      sqrtPriceCurrent,
-      sqrtPriceLower,
-      sqrtPriceUpper,
     };
-  }, [currentSqrtPriceX96, currentTick, token0Data, token1Data, minPrice, fee, sortedToken0, token0]);
+  }, [currentSqrtPriceX96, currentTick, token0Data, token1Data, rangeStrategy, fee, sortedToken0, token0]);
 
-  // Auto-calculate paired token amount when user types
-  // Use refs to prevent infinite loops
+  // Auto-calculate paired amount
   const isAutoCalculating = useMemo(() => ({ current: false }), []);
 
   useEffect(() => {
     if (!calculatePairedAmount || !activeInput || isAutoCalculating.current) return;
-
     isAutoCalculating.current = true;
-
     if (activeInput === 'amount0' && amount0) {
-      const calculatedAmount1 = calculatePairedAmount.fromAmount0ToAmount1(amount0);
-      if (calculatedAmount1 !== '' && calculatedAmount1 !== amount1) {
-        // Trim trailing zeros for cleaner display
-        const trimmed = parseFloat(calculatedAmount1).toString();
-        setAmount1(trimmed);
+      const calculated = calculatePairedAmount.fromAmount0ToAmount1(amount0);
+      if (calculated !== '' && calculated !== amount1) {
+        setAmount1(parseFloat(calculated).toString());
       }
     } else if (activeInput === 'amount1' && amount1) {
-      const calculatedAmount0 = calculatePairedAmount.fromAmount1ToAmount0(amount1);
-      if (calculatedAmount0 !== '' && calculatedAmount0 !== amount0) {
-        const trimmed = parseFloat(calculatedAmount0).toString();
-        setAmount0(trimmed);
+      const calculated = calculatePairedAmount.fromAmount1ToAmount0(amount1);
+      if (calculated !== '' && calculated !== amount0) {
+        setAmount0(parseFloat(calculated).toString());
       }
     }
-
-    // Reset flag after a short delay to allow the state to settle
-    setTimeout(() => {
-      isAutoCalculating.current = false;
-    }, 100);
+    setTimeout(() => { isAutoCalculating.current = false; }, 100);
   }, [amount0, amount1, activeInput, calculatePairedAmount, isAutoCalculating]);
 
-  // Handle transaction success - navigate to created position
+  // Handle transaction success
   useEffect(() => {
     if (isSuccess && hash && publicClient) {
-      showToast({
-        type: 'success',
-        message: 'Position created successfully!',
-        txHash: hash,
-        chainId,
-      });
-
-      // Parse tokenId from transaction receipt and navigate
+      showToast({ type: 'success', message: 'Position created successfully!', txHash: hash, chainId });
       const getTokenIdAndNavigate = async () => {
         try {
           const receipt = await publicClient.waitForTransactionReceipt({ hash });
-          // Look for Transfer event from PositionManager (NFT mint)
-          // The tokenId is in the third topic of the Transfer event
           const positionManagerAddress = CONTRACTS.POSITION_MANAGER.toLowerCase();
           const transferLog = receipt.logs.find(log =>
             log.address.toLowerCase() === positionManagerAddress &&
-            log.topics[0] === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' // Transfer event
+            log.topics[0] === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
           );
-
           if (transferLog && transferLog.topics[3]) {
-            const tokenId = BigInt(transferLog.topics[3]).toString();
-            router.push(`/positions/${tokenId}`);
+            router.push(`/positions/${BigInt(transferLog.topics[3]).toString()}`);
             return;
           }
-
-          // Fallback: navigate to positions list
           router.push('/positions');
-        } catch (error) {
-          console.error('Error parsing tokenId:', error);
-          router.push('/positions');
-        }
+        } catch { router.push('/positions'); }
       };
-
       getTokenIdAndNavigate();
     }
   }, [isSuccess, hash, showToast, chainId, publicClient, router, CONTRACTS.POSITION_MANAGER]);
 
-  const handleApprovals = async () => {
-    if (!address || !token0Data || !token1Data) return;
-
-    try {
-      const amount0Wei = parseUnits(amount0, token0Data.decimals);
-      const amount1Wei = parseUnits(amount1, token1Data.decimals);
-
-      // Approve token 0 (skip if native ETH - no approval needed)
-      if (!token0IsNative && !isToken0Approved(amount0Wei)) {
-        showToast({ type: 'info', message: `Approving ${token0Data.symbol}...` });
-        await approveToken0(amount0Wei);
-      }
-
-      // Approve token 1 (skip if native ETH - no approval needed)
-      if (!token1IsNative && !isToken1Approved(amount1Wei)) {
-        showToast({ type: 'info', message: `Approving ${token1Data.symbol}...` });
-        await approveToken1(amount1Wei);
-      }
-
-      showToast({ type: 'success', message: 'Tokens approved!' });
-    } catch (error: any) {
-      showToast({ type: 'error', message: error.message || 'Approval failed' });
-    }
-  };
-
+  // Handle mint position
   const handleMintPosition = async () => {
     if (!address || !token0Data || !token1Data) return;
-
     try {
       const amount0Wei = parseUnits(amount0, token0Data.decimals);
       const amount1Wei = parseUnits(amount1, token1Data.decimals);
-
-      // Check balances (skip check for native ETH - wallet will handle it)
-      const userBalance0 = balance0 ? BigInt(balance0.toString()) : BigInt(0);
-      const userBalance1 = balance1 ? BigInt(balance1.toString()) : BigInt(0);
-
-      // Only check ERC20 token balances - native ETH will be checked by wallet
-      if (!token0IsNative && userBalance0 < amount0Wei) {
-        showToast({
-          type: 'error',
-          message: `Insufficient ${token0Data.symbol} balance. You have ${formatUnits(userBalance0, token0Data.decimals)} but need ${amount0}`,
-        });
-        return;
-      }
-
-      if (!token1IsNative && userBalance1 < amount1Wei) {
-        showToast({
-          type: 'error',
-          message: `Insufficient ${token1Data.symbol} balance. You have ${formatUnits(userBalance1, token1Data.decimals)} but need ${amount1}`,
-        });
-        return;
-      }
-
-      // CRITICAL: Sort currencies by address (Uniswap V4 requirement)
       const token0Address = token0 as `0x${string}`;
       const token1Address = token1 as `0x${string}`;
-
-      const sortedCurrency0 = token0Address.toLowerCase() < token1Address.toLowerCase()
-        ? token0Address
-        : token1Address;
-      const sortedCurrency1 = token0Address.toLowerCase() < token1Address.toLowerCase()
-        ? token1Address
-        : token0Address;
-
-      // Swap amounts if currencies were swapped
+      const sortedCurrency0 = token0Address.toLowerCase() < token1Address.toLowerCase() ? token0Address : token1Address;
+      const sortedCurrency1 = token0Address.toLowerCase() < token1Address.toLowerCase() ? token1Address : token0Address;
       const needsSwap = sortedCurrency0 !== token0Address;
-      const finalAmount0Desired = needsSwap ? amount1Wei : amount0Wei;
-      const finalAmount1Desired = needsSwap ? amount0Wei : amount1Wei;
-
-      // Calculate tick spacing based on fee tier
+      const finalAmount0 = needsSwap ? amount1Wei : amount0Wei;
+      const finalAmount1 = needsSwap ? amount0Wei : amount1Wei;
       const tickSpacing = getTickSpacing(fee);
-
-      // Calculate tick range based on selected strategy
-      let alignedTickLower: number;
-      let alignedTickUpper: number;
-
-      if (minPrice === 'full' || currentTick === 0) {
-        // Full range or no pool data - use max range
+      let alignedTickLower: number, alignedTickUpper: number;
+      if (rangeStrategy === 'full' || currentTick === 0) {
         [alignedTickLower, alignedTickUpper] = getFullRangeTicks(tickSpacing);
-      } else if (minPrice === 'wide') {
-        // Wide range: ~±50% around current price (2000 tick spacings)
+      } else if (rangeStrategy === 'wide') {
         [alignedTickLower, alignedTickUpper] = calculateTickRange(currentTick, tickSpacing, 2000);
-      } else if (minPrice === 'concentrated') {
-        // Concentrated: ~±10% around current price (100 tick spacings)
-        [alignedTickLower, alignedTickUpper] = calculateTickRange(currentTick, tickSpacing, 100);
       } else {
-        // Default to wide range
-        [alignedTickLower, alignedTickUpper] = calculateTickRange(currentTick, tickSpacing, 1000);
+        [alignedTickLower, alignedTickUpper] = calculateTickRange(currentTick, tickSpacing, 100);
       }
-
-      // Debug logging
-      console.log('=== Position Creation Debug ===');
-      console.log('Selected tokens:', { token0Data, token1Data });
-      console.log('Input amounts:', { amount0, amount1 });
-      console.log('Parsed amounts:', { amount0Wei: amount0Wei.toString(), amount1Wei: amount1Wei.toString() });
-      console.log('Addresses:', { token0Address, token1Address });
-      console.log('Sorted:', { sortedCurrency0, sortedCurrency1 });
-      console.log('Needs swap:', needsSwap);
-      console.log('Pool state:', {
-        currentTick,
-        currentSqrtPriceX96: currentSqrtPriceX96.toString(),
-        tickSpacing
-      });
-      console.log('Tick range:', { alignedTickLower, alignedTickUpper });
-      console.log('Final amounts:', {
-        finalAmount0Desired: finalAmount0Desired.toString(),
-        finalAmount1Desired: finalAmount1Desired.toString()
-      });
-
       showToast({ type: 'info', message: 'Creating position...' });
-
       await mintPosition({
         currency0: sortedCurrency0,
         currency1: sortedCurrency1,
         fee,
         tickLower: alignedTickLower,
         tickUpper: alignedTickUpper,
-        amount0Desired: finalAmount0Desired,
-        amount1Desired: finalAmount1Desired,
-        amount0Max: (finalAmount0Desired * BigInt(110)) / BigInt(100), // 10% buffer for max
-        amount1Max: (finalAmount1Desired * BigInt(110)) / BigInt(100),
+        amount0Desired: finalAmount0,
+        amount1Desired: finalAmount1,
+        amount0Max: (finalAmount0 * BigInt(110)) / BigInt(100),
+        amount1Max: (finalAmount1 * BigInt(110)) / BigInt(100),
         recipient: address,
-        deadline: BigInt(Math.floor(Date.now() / 1000) + 3600), // 1 hour
+        deadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
       });
     } catch (error: any) {
-      console.error('Position creation error:', error);
-
-      // Provide more helpful error messages
       let errorMessage = 'Transaction failed';
-
-      if (error.message?.includes('Pool not initialized')) {
-        errorMessage = 'Pool not initialized. The selected token pair pool needs to be created first.';
-      } else if (error.message?.includes('TickSpacing')) {
-        errorMessage = 'Invalid tick range for the selected fee tier.';
-      } else if (error.message?.includes('user rejected')) {
-        errorMessage = 'Transaction rejected by user';
-      } else if (error.message?.includes('insufficient funds')) {
-        errorMessage = 'Insufficient ETH for gas fees';
-      } else if (error.shortMessage) {
-        errorMessage = error.shortMessage;
-      } else if (error.message) {
-        errorMessage = error.message;
-      }
-
+      if (error.message?.includes('Pool not initialized')) errorMessage = 'Pool not initialized.';
+      else if (error.message?.includes('user rejected')) errorMessage = 'Transaction rejected';
+      else if (error.shortMessage) errorMessage = error.shortMessage;
       showToast({ type: 'error', message: errorMessage });
     }
   };
 
-  // Get single token data - use resolved token0Data/token1Data which support on-chain fetched data
+  // Zap handling
   const singleTokenData = useMemo(() => {
     if (!singleTokenAddress) return undefined;
-    // Use the already-resolved token data (which includes on-chain fetched data for unknown tokens)
-    if (token0 && singleTokenAddress.toLowerCase() === token0.toLowerCase()) {
-      return token0Data;
-    }
-    if (token1 && singleTokenAddress.toLowerCase() === token1.toLowerCase()) {
-      return token1Data;
-    }
-    // Fallback to TOKENS list for other cases
+    if (token0 && singleTokenAddress.toLowerCase() === token0.toLowerCase()) return token0Data;
+    if (token1 && singleTokenAddress.toLowerCase() === token1.toLowerCase()) return token1Data;
     return TOKENS.find(t => t.address.toLowerCase() === singleTokenAddress.toLowerCase());
   }, [singleTokenAddress, token0, token1, token0Data, token1Data, TOKENS]);
 
-  // Fetch zap quote when single token amount changes
   useEffect(() => {
     const fetchZapQuote = async () => {
       if (depositMode !== 'single' || !singleTokenAmount || parseFloat(singleTokenAmount) <= 0 || !singleTokenData || !token0Data || !token1Data || !address) {
         setZapQuote(null);
         return;
       }
-
-      const inputToken: ZapToken = {
-        symbol: singleTokenData.symbol,
-        address: singleTokenData.address,
-        decimals: singleTokenData.decimals,
-        isNative: singleTokenData.isNative,
-      };
-
-      const targetToken0: ZapToken = {
-        symbol: token0Data.symbol,
-        address: token0Data.address,
-        decimals: token0Data.decimals,
-        isNative: token0Data.isNative,
-      };
-
-      const targetToken1: ZapToken = {
-        symbol: token1Data.symbol,
-        address: token1Data.address,
-        decimals: token1Data.decimals,
-        isNative: token1Data.isNative,
-      };
-
-      const rangeStrategy = minPrice === 'full' ? 'full' : minPrice === 'wide' ? 'wide' : 'concentrated';
-
-      const quote = await getZapQuote({
-        inputToken,
-        inputAmount: singleTokenAmount,
-        targetToken0,
-        targetToken1,
-        fee,
-        rangeStrategy,
-        recipient: address,
-      });
-
+      const inputToken: ZapToken = { symbol: singleTokenData.symbol, address: singleTokenData.address, decimals: singleTokenData.decimals, isNative: singleTokenData.isNative };
+      const targetToken0: ZapToken = { symbol: token0Data.symbol, address: token0Data.address, decimals: token0Data.decimals, isNative: token0Data.isNative };
+      const targetToken1: ZapToken = { symbol: token1Data.symbol, address: token1Data.address, decimals: token1Data.decimals, isNative: token1Data.isNative };
+      const zapRangeStrategy = rangeStrategy === 'custom' ? 'wide' : rangeStrategy;
+      const quote = await getZapQuote({ inputToken, inputAmount: singleTokenAmount, targetToken0, targetToken1, fee, rangeStrategy: zapRangeStrategy, recipient: address });
       setZapQuote(quote);
     };
-
     const debounce = setTimeout(fetchZapQuote, 500);
     return () => clearTimeout(debounce);
-  }, [depositMode, singleTokenAmount, singleTokenData, token0Data, token1Data, fee, minPrice, address, getZapQuote]);
+  }, [depositMode, singleTokenAmount, singleTokenData, token0Data, token1Data, fee, rangeStrategy, address, getZapQuote]);
 
-  // Handle zap execution
   const handleZap = async () => {
     if (!address || !singleTokenData || !token0Data || !token1Data || !singleTokenAmount) return;
-
     try {
       showToast({ type: 'info', message: 'Creating position with auto-swap...' });
-
-      const inputToken: ZapToken = {
-        symbol: singleTokenData.symbol,
-        address: singleTokenData.address,
-        decimals: singleTokenData.decimals,
-        isNative: singleTokenData.isNative,
-      };
-
-      const targetToken0: ZapToken = {
-        symbol: token0Data.symbol,
-        address: token0Data.address,
-        decimals: token0Data.decimals,
-        isNative: token0Data.isNative,
-      };
-
-      const targetToken1: ZapToken = {
-        symbol: token1Data.symbol,
-        address: token1Data.address,
-        decimals: token1Data.decimals,
-        isNative: token1Data.isNative,
-      };
-
-      const rangeStrategy = minPrice === 'full' ? 'full' : minPrice === 'wide' ? 'wide' : 'concentrated';
-
-      await executeZap({
-        inputToken,
-        inputAmount: singleTokenAmount,
-        targetToken0,
-        targetToken1,
-        fee,
-        rangeStrategy,
-        recipient: address,
-      });
+      const inputToken: ZapToken = { symbol: singleTokenData.symbol, address: singleTokenData.address, decimals: singleTokenData.decimals, isNative: singleTokenData.isNative };
+      const targetToken0: ZapToken = { symbol: token0Data.symbol, address: token0Data.address, decimals: token0Data.decimals, isNative: token0Data.isNative };
+      const targetToken1: ZapToken = { symbol: token1Data.symbol, address: token1Data.address, decimals: token1Data.decimals, isNative: token1Data.isNative };
+      const zapRangeStrategy = rangeStrategy === 'custom' ? 'wide' : rangeStrategy;
+      await executeZap({ inputToken, inputAmount: singleTokenAmount, targetToken0, targetToken1, fee, rangeStrategy: zapRangeStrategy, recipient: address });
     } catch (error: any) {
-      console.error('Zap execution error:', error);
       showToast({ type: 'error', message: error.message || 'Transaction failed' });
     }
   };
 
-  // Handle zap success - navigate to created position
   useEffect(() => {
     if (zapIsSuccess && zapHash && publicClient) {
-      showToast({
-        type: 'success',
-        message: 'Position created successfully!',
-        txHash: zapHash,
-        chainId,
-      });
-
-      // Parse tokenId from transaction receipt and navigate
+      showToast({ type: 'success', message: 'Position created successfully!', txHash: zapHash, chainId });
       const getTokenIdAndNavigate = async () => {
         try {
           const receipt = await publicClient.waitForTransactionReceipt({ hash: zapHash });
-          // Look for Transfer event from PositionManager (NFT mint)
           const positionManagerAddress = CONTRACTS.POSITION_MANAGER.toLowerCase();
           const transferLog = receipt.logs.find(log =>
             log.address.toLowerCase() === positionManagerAddress &&
-            log.topics[0] === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' // Transfer event
+            log.topics[0] === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
           );
-
           if (transferLog && transferLog.topics[3]) {
-            const tokenId = BigInt(transferLog.topics[3]).toString();
-            router.push(`/positions/${tokenId}`);
+            router.push(`/positions/${BigInt(transferLog.topics[3]).toString()}`);
             return;
           }
-
-          // Fallback: navigate to positions list
           router.push('/positions');
-        } catch (error) {
-          console.error('Error parsing tokenId:', error);
-          router.push('/positions');
-        }
+        } catch { router.push('/positions'); }
       };
-
       getTokenIdAndNavigate();
     }
   }, [zapIsSuccess, zapHash, showToast, chainId, publicClient, router, CONTRACTS.POSITION_MANAGER]);
+
+  const formatPrice = (price: number) => {
+    if (price >= 1000000) return `$${(price / 1000000).toFixed(2)}M`;
+    if (price >= 1000) return `$${price.toLocaleString()}`;
+    return `$${price.toFixed(2)}`;
+  };
+
+  const formatBalance = (balance: bigint | undefined, decimals: number) => {
+    if (!balance) return '0';
+    return parseFloat(formatUnits(balance, decimals)).toFixed(4);
+  };
+
+  // Get range strategy name for display
+  const getRangeStrategyName = () => {
+    switch (rangeStrategy) {
+      case 'full': return 'Full Range';
+      case 'wide': return 'Wide Range';
+      case 'concentrated': return 'Concentrated';
+      default: return 'Custom';
+    }
+  };
 
   if (!isConnected) {
     return (
@@ -825,850 +529,561 @@ export default function InitiatorPage() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto p-6">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2 text-text-primary font-heading">Create New Position</h1>
-        <p className="text-text-secondary">
-          Initialize a new liquidity position on Uniswap V4
-        </p>
-        {hasPoolParams && token0Data && token1Data && (
-          <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-brand-medium/10 border border-brand-medium/30 rounded-lg text-brand-medium text-sm">
-            <span>Selected pool:</span>
-            <span className="font-semibold">{token0Data.symbol}/{token1Data.symbol}</span>
-            <span className="text-brand-soft">({(fee / 10000).toFixed(2)}% fee)</span>
-          </div>
-        )}
-      </div>
+    <div className="px-4 lg:px-20 py-6 lg:py-10">
+      <section className="w-full max-w-6xl mx-auto">
+        {/* Stepper */}
+        <Stepper currentStep={step} />
 
-      {/* Step Indicator */}
-      <div className="flex items-center gap-4 mb-8">
-          {[1, 2, 3].map((s) => (
-            <div key={s} className="flex items-center flex-1">
-              <div
-                className={cn(
-                  'w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all',
-                  s <= step
-                    ? 'bg-gradient-hard text-white shadow-lg shadow-brand-medium/20'
-                    : 'bg-gray-800 text-text-muted'
-                )}
-              >
-                {s}
-              </div>
-              {s < 3 && (
-                <div
-                  className={cn(
-                    'flex-1 h-1 mx-2 rounded-full transition-all',
-                    s < step ? 'bg-gradient-hard' : 'bg-gray-800'
-                  )}
-                />
-              )}
-            </div>
-          ))}
-      </div>
-
-      {/* Step 1: Select Pool */}
-      {step === 1 && (
-        <div className="rounded-2xl bg-surface-card border border-gray-800/50 p-6 space-y-6">
-          <div>
-            <h2 className="text-xl font-semibold mb-4 text-text-primary">Select Pool</h2>
-            <p className="text-text-secondary text-sm mb-6">
-              Choose the token pair and fee tier for your position
+        {/* Body - Two Column Layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-[35%_65%] bg-surface-card rounded-b-2xl border border-t-0 border-gray-800/50">
+          {/* Left / Preview */}
+          <div className="p-5 lg:border-r border-[#C5ECEB] dark:border-gray-700">
+            <h3 className="text-base font-bold text-brand-medium mb-2">Preview</h3>
+            <p className="text-text-secondary text-sm font-medium max-w-48 mb-8">
+              Here&apos;s a quick summary of your selections so far
             </p>
+
+            <PositionSummaryCard
+              currentStep={step}
+              token0Data={token0Data}
+              token1Data={token1Data}
+              fee={fee}
+              rangeStrategy={step >= 2 ? getRangeStrategyName() : undefined}
+              minPrice={step >= 2 ? formatPrice(priceRange[0]) : undefined}
+              maxPrice={step >= 2 ? formatPrice(priceRange[1]) : undefined}
+              currentPrice={step >= 2 ? formatPrice(currentPrice) : undefined}
+              isInRange={isInRange}
+            />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-2 text-text-primary">
-                Token 0
-              </label>
-              <select
-                value={token0}
-                onChange={(e) => setToken0(e.target.value)}
-                className="w-full px-4 py-3 bg-gray-800/50 border border-gray-700 rounded-xl focus:outline-none focus:border-brand-medium transition-colors text-text-primary"
-              >
-                <option value="">Select token</option>
-                {TOKENS.map(t => (
-                  <option key={t.address} value={t.address}>{t.symbol}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2 text-text-primary">
-                Token 1
-              </label>
-              <select
-                value={token1}
-                onChange={(e) => setToken1(e.target.value)}
-                className="w-full px-4 py-3 bg-gray-800/50 border border-gray-700 rounded-xl focus:outline-none focus:border-brand-medium transition-colors text-text-primary"
-              >
-                <option value="">Select token</option>
-                {TOKENS.map(t => (
-                  <option key={t.address} value={t.address}>{t.symbol}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
+          {/* Right / Selection */}
           <div>
-            <label className="block text-sm font-medium mb-2 text-text-primary">Fee Tier</label>
-            <div className="grid grid-cols-3 gap-3">
-              {FEE_TIERS.map((tier) => (
+            {/* Step 1: Select Tokens */}
+            {step === 1 && (
+              <div className="px-6 lg:px-10 py-10">
+                <h3 className="text-base font-bold text-brand-medium mb-2">Select Tokens</h3>
+                <p className="text-text-secondary text-sm font-medium mb-8">
+                  Choose the token pair and fee tier for your liquidity position
+                </p>
+
+                {/* Token selectors */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-10 max-w-xl">
+                  <div>
+                    <label className="block text-xs text-text-secondary font-medium mb-2">Token 1</label>
+                    <div className="relative">
+                      <select
+                        value={token0}
+                        onChange={(e) => setToken0(e.target.value)}
+                        className="w-full bg-surface-page dark:bg-gray-800 rounded-xl px-4 py-3 text-text-primary text-sm font-medium border border-gray-200 dark:border-gray-700 focus:outline-none focus:border-brand-medium appearance-none cursor-pointer"
+                      >
+                        <option value="">Select token</option>
+                        {TOKENS.filter(t => t.address.toLowerCase() !== token1.toLowerCase()).map((token) => (
+                          <option key={token.address} value={token.address}>{token.symbol}</option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-text-muted pointer-events-none" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-text-secondary font-medium mb-2">Token 2</label>
+                    <div className="relative">
+                      <select
+                        value={token1}
+                        onChange={(e) => setToken1(e.target.value)}
+                        className="w-full bg-surface-page dark:bg-gray-800 rounded-xl px-4 py-3 text-text-primary text-sm font-medium border border-gray-200 dark:border-gray-700 focus:outline-none focus:border-brand-medium appearance-none cursor-pointer"
+                      >
+                        <option value="">Select token</option>
+                        {TOKENS.filter(t => t.address.toLowerCase() !== token0.toLowerCase()).map((token) => (
+                          <option key={token.address} value={token.address}>{token.symbol}</option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-text-muted pointer-events-none" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Fee tier */}
+                <h3 className="text-base font-bold text-brand-medium mb-2">Fee Tier</h3>
+                <p className="text-text-secondary text-sm font-medium mb-6 max-w-xl">
+                  Select how much trading fee you earn when users swap through this pool
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 lg:gap-6 mb-12 max-w-3xl">
+                  {FEE_TIERS.map((tier) => (
+                    <div
+                      key={tier.value}
+                      onClick={() => setFee(tier.value)}
+                      className={cn(
+                        'rounded-2xl p-6 cursor-pointer transition-all',
+                        fee === tier.value
+                          ? 'bg-gradient-hard text-white'
+                          : 'border border-[#CDEEEE] dark:border-gray-700 text-brand-medium hover:border-brand-medium'
+                      )}
+                    >
+                      <h3 className={cn('text-base font-bold mb-2', fee === tier.value ? 'text-white' : 'text-text-primary')}>{tier.label}</h3>
+                      <p className={cn('text-sm', fee === tier.value ? 'text-white/90' : 'text-text-secondary')}>{tier.description}</p>
+                    </div>
+                  ))}
+                </div>
+
                 <button
-                  key={tier.value}
-                  onClick={() => setFee(tier.value)}
-                  className={cn(
-                    'px-4 py-3 border rounded-xl transition-all font-medium',
-                    fee === tier.value
-                      ? 'bg-gradient-hard border-brand-medium text-white shadow-lg shadow-brand-medium/20'
-                      : 'bg-gray-800/50 border-gray-700 hover:border-brand-medium/50 text-text-primary'
-                  )}
+                  onClick={() => {
+                    setStep(2);
+                    setSingleTokenAddress(token0);
+                  }}
+                  disabled={!token0 || !token1}
+                  className="w-full max-w-3xl py-3 bg-gradient-hard hover:opacity-90 rounded-xl font-medium transition-all text-white disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {tier.label}
+                  Continue
                 </button>
-              ))}
-            </div>
-          </div>
-
-          <button
-            onClick={() => setStep(2)}
-            disabled={!token0 || !token1}
-            className="w-full py-3 bg-gradient-hard hover:opacity-90 rounded-xl font-medium transition-all text-white disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Continue
-          </button>
-        </div>
-      )}
-
-      {/* Step 2: Set Price Range */}
-      {step === 2 && (
-        <div className="rounded-2xl bg-surface-card border border-gray-800/50 p-6 space-y-6">
-          <div>
-            <h2 className="text-xl font-semibold mb-4 text-text-primary">Set Price Range</h2>
-            <p className="text-text-secondary text-sm mb-2">
-              Choose a range strategy for your liquidity position
-            </p>
-          </div>
-
-          {/* Range Strategy Selection */}
-          <div className="space-y-3">
-            <label className="block text-sm font-medium mb-2 text-text-primary">Range Strategy</label>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <button
-                onClick={() => {
-                  setMinPrice('full');
-                  setMaxPrice('full');
-                }}
-                className={cn(
-                  'p-4 border rounded-xl transition-all text-left',
-                  minPrice === 'full'
-                    ? 'bg-brand-medium/10 border-brand-medium text-white'
-                    : 'bg-gray-800/50 border-gray-700 hover:border-brand-medium/50'
-                )}
-              >
-                <div className="font-medium mb-1 text-text-primary">Full Range</div>
-                <p className="text-xs text-text-muted">Liquidity at all prices. Lowest fees, lowest risk.</p>
-              </button>
-              <button
-                onClick={() => {
-                  setMinPrice('wide');
-                  setMaxPrice('wide');
-                }}
-                className={cn(
-                  'p-4 border rounded-xl transition-all text-left',
-                  minPrice === 'wide'
-                    ? 'bg-brand-medium/10 border-brand-medium text-white'
-                    : 'bg-gray-800/50 border-gray-700 hover:border-brand-medium/50'
-                )}
-              >
-                <div className="font-medium mb-1 text-text-primary">Wide Range</div>
-                <p className="text-xs text-text-muted">±50% around current price. Balanced approach.</p>
-              </button>
-              <button
-                onClick={() => {
-                  setMinPrice('concentrated');
-                  setMaxPrice('concentrated');
-                }}
-                className={cn(
-                  'p-4 border rounded-xl transition-all text-left',
-                  minPrice === 'concentrated'
-                    ? 'bg-brand-medium/10 border-brand-medium text-white'
-                    : 'bg-gray-800/50 border-gray-700 hover:border-brand-medium/50'
-                )}
-              >
-                <div className="font-medium mb-1 text-text-primary">Concentrated</div>
-                <p className="text-xs text-text-muted">±10% around current price. Higher fees, higher risk.</p>
-              </button>
-            </div>
-          </div>
-
-          {/* Range Info */}
-          <div className="bg-brand-medium/10 border border-brand-medium/20 rounded-xl p-3 flex items-start gap-2">
-            <Info className="text-brand-medium mt-0.5 flex-shrink-0" size={16} />
-            <div className="text-xs text-brand-soft">
-              <p className="font-medium mb-1">
-                {minPrice === 'full' && 'Full Range Position'}
-                {minPrice === 'wide' && 'Wide Range Position'}
-                {minPrice === 'concentrated' && 'Concentrated Position'}
-                {!minPrice && 'Select a Range Strategy'}
-              </p>
-              <p>
-                {minPrice === 'full' && 'Your position will provide liquidity across all possible prices. This is safest for volatile pairs but earns lower fees.'}
-                {minPrice === 'wide' && 'Your position will cover a wide range around the current price (±50%). Good balance of fee earnings and impermanent loss protection.'}
-                {minPrice === 'concentrated' && 'Your position will be concentrated near the current price (±10%). Higher fee earnings but requires active management.'}
-                {!minPrice && 'Choose a strategy above to continue.'}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex gap-3">
-            <button
-              onClick={() => setStep(1)}
-              className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 rounded-xl font-medium transition-colors text-text-primary border border-gray-700"
-            >
-              Back
-            </button>
-            <button
-              onClick={() => setStep(3)}
-              disabled={!minPrice || !maxPrice}
-              className="flex-1 py-3 bg-gradient-hard hover:opacity-90 rounded-xl font-medium transition-all text-white disabled:opacity-50"
-            >
-              Continue
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Step 3: Deposit Amounts */}
-      {step === 3 && (
-        <div className="rounded-2xl bg-surface-card border border-gray-800/50 p-6 space-y-6">
-          <div>
-            <h2 className="text-xl font-semibold mb-4 text-text-primary">Deposit Amounts</h2>
-            <p className="text-text-secondary text-sm mb-4">
-              Choose how to provide liquidity
-            </p>
-          </div>
-
-          {/* Deposit Mode Toggle */}
-          <div className="flex items-center gap-2 p-1 bg-gray-800/50 rounded-xl w-fit">
-            <button
-              onClick={() => setDepositMode('single')}
-              className={cn(
-                'flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all',
-                depositMode === 'single'
-                  ? 'bg-gradient-hard text-white shadow-lg'
-                  : 'text-text-muted hover:text-text-primary'
-              )}
-            >
-              <Zap size={16} />
-              Single Token
-            </button>
-            <button
-              onClick={() => setDepositMode('both')}
-              className={cn(
-                'flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all',
-                depositMode === 'both'
-                  ? 'bg-brand-medium text-white shadow-lg'
-                  : 'text-text-muted hover:text-text-primary'
-              )}
-            >
-              Both Tokens
-            </button>
-          </div>
-
-          {/* Pool Price Warning */}
-          {!poolPriceInfo.isRealistic && poolPriceInfo.warning && (
-            <div className="bg-status-error/10 border border-status-error/30 rounded-xl p-4 flex items-start gap-3">
-              <AlertCircle className="text-status-error mt-0.5 flex-shrink-0" size={20} />
-              <div>
-                <p className="font-medium text-status-error mb-1">Warning: Unrealistic Pool Price</p>
-                <p className="text-sm text-red-200">{poolPriceInfo.warning}</p>
-                <p className="text-xs text-text-muted mt-2">
-                  Creating a position in this pool may result in unexpected token ratios.
-                  Your tokens might be refunded if the position range doesn&apos;t match the pool price.
-                </p>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Token Prices Info */}
-          {token0Data && token1Data && (token0Price !== null || token1Price !== null) && (
-            <div className="bg-brand-medium/10 border border-brand-medium/30 rounded-xl p-3">
-              <div className="flex items-center gap-2 mb-2">
-                <Info className="text-brand-medium flex-shrink-0" size={16} />
-                <span className="text-sm font-medium text-brand-soft">Token Prices</span>
-              </div>
-              <div className="flex gap-4 text-sm text-text-secondary">
-                <span>
-                  {token0Data.symbol} = {token0Price !== null ? `$${token0Price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: token0Price < 1 ? 4 : 2 })}` : 'N/A'}
-                </span>
-                <span>
-                  {token1Data.symbol} = {token1Price !== null ? `$${token1Price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: token1Price < 1 ? 4 : 2 })}` : 'N/A'}
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* Single Token Deposit UI */}
-          {depositMode === 'single' && (
-            <div className="space-y-4">
-              <div className="bg-brand-soft/10 border border-brand-soft/30 rounded-xl p-3 flex items-start gap-2">
-                <Zap className="text-brand-soft mt-0.5 flex-shrink-0" size={16} />
-                <p className="text-xs text-brand-soft">
-                  Deposit a single token and we&apos;ll automatically swap a portion to create a balanced position.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2 text-text-primary">Select Token</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => setSingleTokenAddress(token0)}
-                    className={cn(
-                      'p-3 rounded-xl border transition-all',
-                      singleTokenAddress === token0
-                        ? 'bg-brand-medium/10 border-brand-medium text-white'
-                        : 'bg-gray-800/50 border-gray-700 hover:border-gray-600 text-text-secondary'
-                    )}
-                  >
-                    {token0Data?.symbol || 'Token 0'}
-                  </button>
-                  <button
-                    onClick={() => setSingleTokenAddress(token1)}
-                    className={cn(
-                      'p-3 rounded-xl border transition-all',
-                      singleTokenAddress === token1
-                        ? 'bg-brand-medium/10 border-brand-medium text-white'
-                        : 'bg-gray-800/50 border-gray-700 hover:border-gray-600 text-text-secondary'
-                    )}
-                  >
-                    {token1Data?.symbol || 'Token 1'}
-                  </button>
+            {/* Step 2: Set Price Range */}
+            {step === 2 && (
+              <div className="p-6 lg:p-12">
+                <div className="mb-10">
+                  <h2 className="text-base font-bold text-brand-medium mb-2">Set Price Range</h2>
+                  <p className="text-text-secondary text-sm font-medium">
+                    Choose a range strategy for your liquidity position
+                  </p>
                 </div>
-              </div>
 
-              <div>
-                <div className="flex justify-between items-center mb-2">
-                  <label className="block text-sm font-medium text-text-primary">
-                    Amount
-                  </label>
-                  {singleTokenAddress && (
-                    <span className="text-xs text-text-muted">
-                      Balance: {singleTokenAddress === token0 && balance0 != null && token0Data
-                        ? parseFloat(formatUnits(BigInt(balance0.toString()), token0Data.decimals)).toFixed(4)
-                        : singleTokenAddress === token1 && balance1 != null && token1Data
-                        ? parseFloat(formatUnits(BigInt(balance1.toString()), token1Data.decimals)).toFixed(4)
-                        : '0'}
+                {/* Price scale */}
+                <div className="mb-10">
+                  <div className="flex items-center justify-between mb-6">
+                    <div>
+                      <div className="text-sm text-text-primary">Min price</div>
+                      <div className="text-brand-medium font-semibold">{formatPrice(priceRange[0])}</div>
+                    </div>
+                    <span className="text-xs font-medium text-[#2C6E68] dark:text-brand-soft bg-[#C5ECEB] dark:bg-brand-medium/20 rounded-xl px-2 py-1 text-center">
+                      <span className="block">Current price</span>
+                      <span className="block">{formatPrice(currentPrice)}</span>
                     </span>
-                  )}
+                    <div className="text-right">
+                      <div className="text-sm text-text-primary">Max price</div>
+                      <div className="text-brand-medium font-semibold">{formatPrice(priceRange[1])}</div>
+                    </div>
+                  </div>
+
+                  <div className="relative py-2">
+                    <Slider
+                      min={absoluteMin}
+                      max={absoluteMax}
+                      step={10}
+                      value={priceRange}
+                      onValueChange={(values) => {
+                        setPriceRange(values);
+                        setRangeStrategy('custom');
+                      }}
+                      className="w-full"
+                    />
+                  </div>
+
+                  <div className="flex justify-between text-sm text-text-muted mt-3">
+                    <span>{formatPrice(absoluteMin)}</span>
+                    <span>{formatPrice(absoluteMax)}</span>
+                  </div>
                 </div>
-                <input
-                  type="number"
-                  value={singleTokenAmount}
-                  onChange={(e) => setSingleTokenAmount(e.target.value)}
-                  placeholder="0.00"
-                  step="0.01"
-                  className="w-full px-4 py-3 bg-gray-800/50 border border-gray-700 rounded-xl focus:outline-none focus:border-brand-medium transition-colors text-text-primary"
-                />
+
+                {/* Status */}
+                <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-gray-100 dark:bg-gray-800/50 px-6 py-4 mb-6">
+                  <div className="flex items-center gap-4">
+                    <span className={cn('inline-flex items-center gap-2 rounded-full text-sm font-medium', isInRange ? 'text-status-success' : 'text-status-warning')}>
+                      {isInRange ? <Check className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+                      {isInRange ? 'In Range' : 'Out of Range'}
+                    </span>
+                    <div className="flex items-center gap-2 text-sm text-text-secondary">
+                      <span className={cn('h-2.5 w-2.5 rounded-full', isInRange ? 'bg-status-success' : 'bg-status-warning')} />
+                      {isInRange ? 'Earning fees' : 'Not earning fees'}
+                    </div>
+                  </div>
+                  <div className="text-sm text-text-secondary">
+                    Your range: <span className="font-semibold">{formatPrice(priceRange[0])} – {formatPrice(priceRange[1])}</span>
+                  </div>
+                </div>
+
+                {/* How it works */}
+                <div className="flex gap-4 rounded-2xl bg-gray-100 dark:bg-gray-800/50 p-6 mb-12">
+                  <Info className="h-5 w-5 text-brand-medium flex-shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-bold text-base text-text-primary mb-1">How it works</div>
+                    <p className="text-[13px] text-text-secondary font-medium">
+                      While the market price is between your Min and Max, your liquidity is active and earning fees.
+                      Price moves outside? Earned fees pause.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Range strategy */}
+                <div className="mb-12">
+                  <h3 className="text-base font-bold text-brand-medium mb-2">Range Strategy</h3>
+                  <p className="text-text-secondary text-sm font-medium mb-6">
+                    Pick a ready-made range based on your risk level
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 lg:gap-6">
+                    {[
+                      { key: 'full' as RangeStrategy, title: 'Full range', description: 'Liquidity at all prices. Lowest fees, lowest risks' },
+                      { key: 'wide' as RangeStrategy, title: 'Wide range', description: '50% around current price. Balanced approach' },
+                      { key: 'concentrated' as RangeStrategy, title: 'Concentrated', description: '10% around current price. Higher fees, higher risk' },
+                    ].map((s) => (
+                      <div
+                        key={s.key}
+                        onClick={() => handleStrategyChange(s.key)}
+                        className={cn(
+                          'rounded-2xl p-6 cursor-pointer transition-all',
+                          rangeStrategy === s.key
+                            ? 'bg-gradient-hard text-white'
+                            : 'border border-[#CDEEEE] dark:border-gray-700 text-text-primary hover:border-brand-medium'
+                        )}
+                      >
+                        <div className="text-lg font-semibold mb-2">{s.title}</div>
+                        <p className={cn('text-sm', rangeStrategy === s.key ? 'text-white/90' : 'text-text-muted')}>{s.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <button onClick={() => setStep(1)} className="flex-1 py-3 border-2 border-brand-medium text-brand-medium hover:bg-brand-medium/10 rounded-xl font-medium transition-colors">
+                    Back
+                  </button>
+                  <button onClick={() => setStep(3)} className="flex-1 py-3 bg-gradient-hard hover:opacity-90 rounded-xl font-medium transition-all text-white">
+                    Continue
+                  </button>
+                </div>
               </div>
+            )}
 
-              {/* Zap Quote Preview */}
-              {zapQuoteLoading && (
-                <div className="flex items-center justify-center gap-2 py-4 text-text-muted">
-                  <Loader2 className="animate-spin" size={16} />
-                  <span className="text-sm">Getting quote...</span>
+            {/* Step 3: Deposit Amount */}
+            {step === 3 && (
+              <div className="p-6 lg:p-12">
+                <div className="mb-8">
+                  <h2 className="text-base font-bold text-brand-medium mb-2">Deposit Amount</h2>
+                  <p className="text-text-secondary text-sm font-medium">Choose how to provide liquidity</p>
                 </div>
-              )}
 
-              {zapQuote && singleTokenData && (
-                <div className="bg-gray-800/30 rounded-xl p-4 border border-gray-700/50">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Info size={14} className="text-brand-medium" />
-                    <span className="text-sm font-medium text-text-secondary">Position Preview</span>
-                  </div>
-                  <div className="space-y-3 text-sm">
-                    {/* Your deposit */}
-                    <div className="flex justify-between items-center">
-                      <span className="text-text-muted">Your deposit</span>
-                      <span className="text-text-primary font-medium">
-                        {singleTokenAmount} {singleTokenData.symbol}
-                      </span>
-                    </div>
-
-                    {/* Breakdown */}
-                    <div className="bg-gray-900/50 rounded-lg p-3 space-y-2">
-                      <div className="flex justify-between text-text-muted">
-                        <span>↳ Kept as {zapQuote.swapFromToken.symbol}</span>
-                        <span className="text-text-secondary">
-                          {(() => {
-                            const inputWei = parseUnits(singleTokenAmount, singleTokenData.decimals);
-                            const kept = inputWei - zapQuote.swapAmount;
-                            return formatUnits(kept, singleTokenData.decimals).slice(0, 10);
-                          })()}
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-text-muted">
-                        <span>↳ Swapped to {zapQuote.swapToToken.symbol}</span>
-                        <span className="text-text-secondary">
-                          {formatUnits(zapQuote.swapAmount, zapQuote.swapFromToken.decimals).slice(0, 10)} → {(() => {
-                            // Show expected output from swap
-                            const swapToIsToken0 = zapQuote.swapToToken.address.toLowerCase() === token0Data?.address.toLowerCase();
-                            const expectedSwapOutput = swapToIsToken0 ? zapQuote.expectedAmount0 : zapQuote.expectedAmount1;
-                            return formatUnits(expectedSwapOutput, zapQuote.swapToToken.decimals).slice(0, 8);
-                          })()}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Position will contain */}
-                    <div className="border-t border-gray-700 pt-3 mt-3">
-                      <div className="text-text-muted font-medium mb-2">Position will contain:</div>
-                      <div className="flex justify-between">
-                        <span className="text-text-primary">{token0Data?.symbol}</span>
-                        <span className="text-text-primary font-medium">
-                          {token0Data && formatUnits(zapQuote.expectedAmount0, token0Data.decimals).slice(0, 10)}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-text-primary">{token1Data?.symbol}</span>
-                        <span className="text-text-primary font-medium">
-                          {token1Data && formatUnits(zapQuote.expectedAmount1, token1Data.decimals).slice(0, 10)}
-                        </span>
-                      </div>
-                    </div>
-
-                    {zapQuote.priceImpact > 0 && (
-                      <div className="flex justify-between pt-2">
-                        <span className="text-text-muted">Price Impact</span>
-                        <span className={zapQuote.priceImpact > 1 ? 'text-status-warning' : 'text-status-success'}>
-                          {zapQuote.priceImpact.toFixed(2)}%
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Both Tokens Deposit UI */}
-          {depositMode === 'both' && (
-            <div className="space-y-4">
-              {/* Ratio info banner */}
-              {calculatePairedAmount && (
-                <div className="bg-brand-medium/10 border border-brand-medium/30 rounded-xl p-3 text-sm">
-                  <div className="flex items-center gap-2 text-brand-medium">
-                    <Info size={14} />
-                    <span>Amounts are locked to pool ratio. Enter one amount to auto-calculate the other.</span>
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <div className="flex justify-between items-center mb-2">
-                  <div className="flex items-center gap-2">
-                    <label className="block text-sm font-medium text-text-primary">
-                      {token0Data?.symbol} Amount
-                    </label>
-                    {activeInput === 'amount1' && amount1 && calculatePairedAmount && (
-                      <span className="text-xs bg-brand-medium/20 text-brand-medium px-1.5 py-0.5 rounded flex items-center gap-1">
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                        </svg>
-                        Calculated
-                      </span>
-                    )}
-                  </div>
-                  {balance0 != null && token0Data && (
-                    <button
-                      onClick={() => {
-                        if (balance0) {
-                          setActiveInput('amount0');
-                          const maxAmount = formatUnits(BigInt(balance0.toString()), token0Data.decimals);
-                          setAmount0(maxAmount);
-                        }
-                      }}
-                      className="text-xs text-text-muted hover:text-brand-medium transition-colors"
-                    >
-                      Balance: {parseFloat(formatUnits(BigInt(balance0.toString()), token0Data.decimals)).toFixed(4)} (Max)
-                    </button>
-                  )}
-                </div>
-                <div className="relative">
-                  <input
-                    type="number"
-                    value={amount0}
-                    onChange={(e) => {
-                      if (activeInput === 'amount1' && amount1 && calculatePairedAmount) {
-                        // Don't allow editing when locked to ratio
-                        return;
-                      }
-                      setActiveInput('amount0');
-                      setAmount0(e.target.value);
-                    }}
-                    onFocus={() => {
-                      if (!(activeInput === 'amount1' && amount1 && calculatePairedAmount)) {
-                        setActiveInput('amount0');
-                      }
-                    }}
-                    placeholder="0.00"
-                    step="0.01"
-                    readOnly={activeInput === 'amount1' && !!amount1 && !!calculatePairedAmount}
+                {/* Deposit Mode Toggle */}
+                <div className="flex items-center gap-2 p-1 bg-gray-100 dark:bg-gray-800/50 rounded-xl w-fit mb-8">
+                  <button
+                    onClick={() => setDepositMode('single')}
                     className={cn(
-                      'w-full px-4 py-3 bg-gray-800/50 border rounded-xl focus:outline-none transition-colors text-text-primary',
-                      activeInput === 'amount1' && amount1 && calculatePairedAmount
-                        ? 'border-brand-medium/50 bg-gray-900 cursor-not-allowed text-text-secondary'
-                        : 'border-gray-700 focus:border-brand-medium'
+                      'flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all',
+                      depositMode === 'single' ? 'bg-gradient-hard text-white shadow-lg' : 'text-text-muted hover:text-text-primary'
                     )}
-                  />
-                  {activeInput === 'amount1' && amount1 && calculatePairedAmount && (
-                    <button
-                      onClick={() => {
-                        setActiveInput('amount0');
-                        setAmount1('');
-                      }}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-brand-medium hover:text-brand-soft"
-                    >
-                      Edit this instead
-                    </button>
-                  )}
+                  >
+                    <Zap size={16} />
+                    Single Token
+                  </button>
+                  <button
+                    onClick={() => setDepositMode('both')}
+                    className={cn(
+                      'flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all',
+                      depositMode === 'both' ? 'bg-gradient-hard text-white shadow-lg' : 'text-text-muted hover:text-text-primary'
+                    )}
+                  >
+                    Both Tokens
+                  </button>
                 </div>
-                {balance0 != null && token0Data && amount0 && parseUnits(amount0, token0Data.decimals) > BigInt(balance0.toString()) && (
-                  <div className="flex items-center gap-1 mt-1 text-status-error text-xs">
-                    <AlertCircle size={12} />
-                    <span>Insufficient balance</span>
+
+                {/* Token Prices Info */}
+                {token0Data && token1Data && (token0Price !== null || token1Price !== null) && (
+                  <div className="bg-brand-medium/10 border border-brand-medium/30 rounded-xl p-3 mb-6">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Info className="text-brand-medium flex-shrink-0" size={16} />
+                      <span className="text-sm font-medium text-brand-medium">Token Prices</span>
+                    </div>
+                    <div className="flex gap-4 text-sm text-text-secondary">
+                      <span>{token0Data.symbol} = {token0Price !== null ? `$${token0Price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: token0Price < 1 ? 4 : 2 })}` : 'N/A'}</span>
+                      <span>{token1Data.symbol} = {token1Price !== null ? `$${token1Price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: token1Price < 1 ? 4 : 2 })}` : 'N/A'}</span>
+                    </div>
                   </div>
                 )}
-              </div>
 
-              <div>
-                <div className="flex justify-between items-center mb-2">
-                  <div className="flex items-center gap-2">
-                    <label className="block text-sm font-medium text-text-primary">
-                      {token1Data?.symbol} Amount
-                    </label>
-                    {activeInput === 'amount0' && amount0 && calculatePairedAmount && (
-                      <span className="text-xs bg-brand-medium/20 text-brand-medium px-1.5 py-0.5 rounded flex items-center gap-1">
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                        </svg>
-                        Calculated
-                      </span>
+                {/* Single Token Mode */}
+                {depositMode === 'single' && (
+                  <div className="space-y-6 mb-8">
+                    <div className="bg-brand-soft/10 border border-brand-soft/30 rounded-xl p-3 flex items-start gap-2">
+                      <Zap className="text-brand-soft mt-0.5 flex-shrink-0" size={16} />
+                      <p className="text-xs text-brand-soft">
+                        Deposit a single token and we&apos;ll automatically swap a portion to create a balanced position.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium mb-2 text-text-primary">Select Token</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => token0Data && setSingleTokenAddress(token0Data.address)}
+                          className={cn(
+                            'p-3 rounded-xl border transition-all',
+                            singleTokenAddress === token0Data?.address
+                              ? 'bg-brand-medium/10 border-brand-medium text-white'
+                              : 'bg-gray-100 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700 hover:border-gray-400 text-text-secondary'
+                          )}
+                        >
+                          {token0Data?.symbol || 'Token 0'}
+                        </button>
+                        <button
+                          onClick={() => token1Data && setSingleTokenAddress(token1Data.address)}
+                          className={cn(
+                            'p-3 rounded-xl border transition-all',
+                            singleTokenAddress === token1Data?.address
+                              ? 'bg-brand-medium/10 border-brand-medium text-white'
+                              : 'bg-gray-100 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700 hover:border-gray-400 text-text-secondary'
+                          )}
+                        >
+                          {token1Data?.symbol || 'Token 1'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between items-center mb-2">
+                        <label className="block text-sm font-medium text-text-primary">Amount</label>
+                        {singleTokenData && (
+                          <span className="text-xs text-text-muted">
+                            Balance: {formatBalance(singleTokenAddress === token0 ? balance0 : balance1, singleTokenData.decimals)}
+                          </span>
+                        )}
+                      </div>
+                      <input
+                        type="number"
+                        value={singleTokenAmount}
+                        onChange={(e) => setSingleTokenAmount(e.target.value)}
+                        placeholder="0.00"
+                        step="0.01"
+                        className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl focus:outline-none focus:border-brand-medium transition-colors text-text-primary"
+                      />
+                    </div>
+
+                    {zapQuoteLoading && (
+                      <div className="flex items-center justify-center gap-2 py-4 text-text-muted">
+                        <Loader2 className="animate-spin" size={16} />
+                        <span className="text-sm">Getting quote...</span>
+                      </div>
                     )}
-                  </div>
-                  {balance1 != null && token1Data && (
-                    <button
-                      onClick={() => {
-                        if (balance1) {
-                          setActiveInput('amount1');
-                          const maxAmount = formatUnits(BigInt(balance1.toString()), token1Data.decimals);
-                          setAmount1(maxAmount);
-                        }
-                      }}
-                      className="text-xs text-text-muted hover:text-brand-medium transition-colors"
-                    >
-                      Balance: {parseFloat(formatUnits(BigInt(balance1.toString()), token1Data.decimals)).toFixed(4)} (Max)
-                    </button>
-                  )}
-                </div>
-                <div className="relative">
-                  <input
-                    type="number"
-                    value={amount1}
-                    onChange={(e) => {
-                      if (activeInput === 'amount0' && amount0 && calculatePairedAmount) {
-                        // Don't allow editing when locked to ratio
-                        return;
-                      }
-                      setActiveInput('amount1');
-                      setAmount1(e.target.value);
-                    }}
-                    onFocus={() => {
-                      if (!(activeInput === 'amount0' && amount0 && calculatePairedAmount)) {
-                        setActiveInput('amount1');
-                      }
-                    }}
-                    placeholder="0.00"
-                    step="0.01"
-                    readOnly={activeInput === 'amount0' && !!amount0 && !!calculatePairedAmount}
-                    className={cn(
-                      'w-full px-4 py-3 bg-gray-800/50 border rounded-xl focus:outline-none transition-colors text-text-primary',
-                      activeInput === 'amount0' && amount0 && calculatePairedAmount
-                        ? 'border-brand-medium/50 bg-gray-900 cursor-not-allowed text-text-secondary'
-                        : 'border-gray-700 focus:border-brand-medium'
+
+                    {zapQuote && singleTokenData && (
+                      <div className="bg-gray-100 dark:bg-gray-800/30 rounded-xl p-4 border border-gray-200 dark:border-gray-700/50">
+                        <div className="flex items-center gap-2 mb-3">
+                          <Info size={14} className="text-brand-medium" />
+                          <span className="text-sm font-medium text-text-secondary">Position Preview</span>
+                        </div>
+                        <div className="space-y-3 text-sm">
+                          <div className="flex justify-between items-center">
+                            <span className="text-text-muted">Your deposit</span>
+                            <span className="text-text-primary font-medium">{singleTokenAmount} {singleTokenData.symbol}</span>
+                          </div>
+                          {zapQuote.priceImpact > 0 && (
+                            <div className="flex justify-between pt-2">
+                              <span className="text-text-muted">Price Impact</span>
+                              <span className={zapQuote.priceImpact > 1 ? 'text-status-warning' : 'text-status-success'}>
+                                {zapQuote.priceImpact.toFixed(2)}%
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     )}
-                  />
-                  {activeInput === 'amount0' && amount0 && calculatePairedAmount && (
-                    <button
-                      onClick={() => {
-                        setActiveInput('amount1');
-                        setAmount0('');
-                      }}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-brand-medium hover:text-brand-soft"
-                    >
-                      Edit this instead
-                    </button>
-                  )}
-                </div>
-                {balance1 != null && token1Data && amount1 && parseUnits(amount1, token1Data.decimals) > BigInt(balance1.toString()) && (
-                  <div className="flex items-center gap-1 mt-1 text-status-error text-xs">
-                    <AlertCircle size={12} />
-                    <span>Insufficient balance</span>
                   </div>
                 )}
-              </div>
-            </div>
-          )}
 
-          {/* Loading state for pool data */}
-          {isLoadingSlot0 && (
-            <div className="flex items-center gap-2 text-xs text-text-muted">
-              <Loader2 className="animate-spin" size={12} />
-              <span>Loading pool data...</span>
-            </div>
-          )}
+                {/* Both Tokens Mode */}
+                {depositMode === 'both' && (
+                  <div className="space-y-6 mb-8">
+                    {calculatePairedAmount && (
+                      <div className="bg-brand-medium/10 border border-brand-medium/30 rounded-xl p-3 text-sm">
+                        <div className="flex items-center gap-2 text-brand-medium">
+                          <Info size={14} />
+                          <span>Amounts are locked to pool ratio. Enter one amount to auto-calculate the other.</span>
+                        </div>
+                      </div>
+                    )}
 
-          <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700/50 space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="text-text-muted">Selected Pool</span>
-              <span className="font-medium text-text-primary">{token0Data?.symbol}/{token1Data?.symbol}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-text-muted">Fee Tier</span>
-              <span className="font-medium text-text-primary">{(fee / 10000)}%</span>
-            </div>
-            {currentTick !== 0 && (
-              <div className="flex justify-between text-sm">
-                <span className="text-text-muted">Current Tick</span>
-                <span className="font-mono text-xs text-text-secondary">{currentTick.toLocaleString()}</span>
+                    <div>
+                      <div className="flex justify-between items-center mb-2">
+                        <label className="block text-sm font-medium text-text-primary">{token0Data?.symbol} Amount</label>
+                        {balance0 !== undefined && token0Data && (
+                          <button
+                            onClick={() => {
+                              setActiveInput('amount0');
+                              setAmount0(formatUnits(BigInt(balance0.toString()), token0Data.decimals));
+                            }}
+                            className="text-xs text-text-muted hover:text-brand-medium transition-colors"
+                          >
+                            Balance: {formatBalance(balance0, token0Data.decimals)} (Max)
+                          </button>
+                        )}
+                      </div>
+                      <input
+                        type="number"
+                        value={amount0}
+                        onChange={(e) => { setActiveInput('amount0'); setAmount0(e.target.value); }}
+                        placeholder="0.00"
+                        step="0.01"
+                        className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl focus:outline-none focus:border-brand-medium transition-colors text-text-primary"
+                      />
+                      {balance0 !== undefined && token0Data && amount0 && parseUnits(amount0, token0Data.decimals) > BigInt(balance0.toString()) && (
+                        <div className="flex items-center gap-1 mt-1 text-status-error text-xs">
+                          <AlertCircle size={12} />
+                          <span>Insufficient balance</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between items-center mb-2">
+                        <label className="block text-sm font-medium text-text-primary">{token1Data?.symbol} Amount</label>
+                        {balance1 !== undefined && token1Data && (
+                          <button
+                            onClick={() => {
+                              setActiveInput('amount1');
+                              setAmount1(formatUnits(BigInt(balance1.toString()), token1Data.decimals));
+                            }}
+                            className="text-xs text-text-muted hover:text-brand-medium transition-colors"
+                          >
+                            Balance: {formatBalance(balance1, token1Data.decimals)} (Max)
+                          </button>
+                        )}
+                      </div>
+                      <input
+                        type="number"
+                        value={amount1}
+                        onChange={(e) => { setActiveInput('amount1'); setAmount1(e.target.value); }}
+                        placeholder="0.00"
+                        step="0.01"
+                        className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl focus:outline-none focus:border-brand-medium transition-colors text-text-primary"
+                      />
+                      {balance1 !== undefined && token1Data && amount1 && parseUnits(amount1, token1Data.decimals) > BigInt(balance1.toString()) && (
+                        <div className="flex items-center gap-1 mt-1 text-status-error text-xs">
+                          <AlertCircle size={12} />
+                          <span>Insufficient balance</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {isLoadingSlot0 && (
+                  <div className="flex items-center gap-2 text-xs text-text-muted mb-4">
+                    <Loader2 className="animate-spin" size={12} />
+                    <span>Loading pool data...</span>
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <button onClick={() => setStep(2)} className="flex-1 py-3 border-2 border-brand-medium text-brand-medium hover:bg-brand-medium/10 rounded-xl font-medium transition-colors">
+                    Back
+                  </button>
+
+                  {depositMode === 'single' ? (
+                    (() => {
+                      if (!singleTokenAmount || !singleTokenAddress || !singleTokenData || parseFloat(singleTokenAmount) <= 0) {
+                        return (
+                          <button disabled className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard rounded-xl font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed">
+                            <Zap size={16} />
+                            Create Position
+                          </button>
+                        );
+                      }
+                      const amountWei = parseUnits(singleTokenAmount, singleTokenData.decimals);
+                      const approvalAmount = amountWei * 3n;
+                      const isSingleToken0 = singleTokenAddress.toLowerCase() === token0?.toLowerCase();
+                      const isNativeToken = singleTokenAddress.toLowerCase() === ZERO_ADDRESS;
+                      const alreadyApproved = isNativeToken || (isSingleToken0 ? isToken0Approved(approvalAmount) : isToken1Approved(approvalAmount));
+                      const isApproving = isPendingApproval0 || isPendingApproval1 || isConfirmingApproval0 || isConfirmingApproval1;
+
+                      if (!alreadyApproved) {
+                        return (
+                          <button
+                            onClick={async () => {
+                              try {
+                                if (isSingleToken0) { await approveToken0(approvalAmount); refetchApproval0(); }
+                                else { await approveToken1(approvalAmount); refetchApproval1(); }
+                                showToast({ type: 'success', message: `${singleTokenData.symbol} approved!` });
+                              } catch (error: any) {
+                                showToast({ type: 'error', message: error.message || 'Approval failed' });
+                              }
+                            }}
+                            disabled={isApproving}
+                            className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard hover:opacity-90 rounded-xl font-medium text-white disabled:opacity-50 transition-all"
+                          >
+                            {isApproving && <Loader2 className="animate-spin" size={18} />}
+                            {isApproving ? 'Approving...' : `Approve ${singleTokenData.symbol}`}
+                          </button>
+                        );
+                      }
+
+                      return (
+                        <button
+                          onClick={handleZap}
+                          disabled={zapIsPending || zapIsConfirming}
+                          className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard hover:opacity-90 rounded-xl font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                        >
+                          {(zapIsPending || zapIsConfirming) && <Loader2 className="animate-spin" size={18} />}
+                          {zapIsPending ? 'Confirm in Wallet...' : zapIsConfirming ? 'Creating...' : (<><Zap size={16} />Create Position</>)}
+                        </button>
+                      );
+                    })()
+                  ) : (
+                    (() => {
+                      if (!amount0 || !amount1 || !token0Data || !token1Data || parseFloat(amount0) <= 0 || parseFloat(amount1) <= 0) {
+                        return (
+                          <button disabled className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard rounded-xl font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed">
+                            Create Position
+                          </button>
+                        );
+                      }
+                      const amount0Wei = parseUnits(amount0, token0Data.decimals);
+                      const amount1Wei = parseUnits(amount1, token1Data.decimals);
+                      const token0NeedsApproval = !token0IsNative && !isToken0Approved(amount0Wei);
+                      const token1NeedsApproval = !token1IsNative && !isToken1Approved(amount1Wei);
+                      const needsApproval = token0NeedsApproval || token1NeedsApproval;
+                      const isApproving = isPendingApproval0 || isPendingApproval1 || isConfirmingApproval0 || isConfirmingApproval1;
+
+                      if (needsApproval) {
+                        const tokenToApprove = token0NeedsApproval ? token0Data.symbol : token1Data.symbol;
+                        return (
+                          <button
+                            onClick={async () => {
+                              try {
+                                if (token0NeedsApproval) { await approveToken0(amount0Wei); refetchApproval0(); showToast({ type: 'success', message: `${token0Data.symbol} approved!` }); }
+                                if (token1NeedsApproval) { await approveToken1(amount1Wei); refetchApproval1(); showToast({ type: 'success', message: `${token1Data.symbol} approved!` }); }
+                              } catch (error: any) {
+                                showToast({ type: 'error', message: error.message || 'Approval failed' });
+                              }
+                            }}
+                            disabled={isApproving}
+                            className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard hover:opacity-90 rounded-xl font-medium text-white disabled:opacity-50 transition-all"
+                          >
+                            {isApproving && <Loader2 className="animate-spin" size={18} />}
+                            {isApproving ? 'Approving...' : `Approve ${tokenToApprove}`}
+                          </button>
+                        );
+                      }
+
+                      return (
+                        <button
+                          onClick={handleMintPosition}
+                          disabled={isPending || isConfirming || !poolPriceInfo.isRealistic}
+                          className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard hover:opacity-90 rounded-xl font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                        >
+                          {(isPending || isConfirming) && <Loader2 className="animate-spin" size={18} />}
+                          {isPending ? 'Confirm in Wallet...' : isConfirming ? 'Creating...' : !poolPriceInfo.isRealistic ? 'Pool Price Invalid' : 'Create Position'}
+                        </button>
+                      );
+                    })()
+                  )}
+                </div>
               </div>
             )}
           </div>
-
-          {/* Info about selected range */}
-          <div className="bg-brand-medium/10 border border-brand-medium/20 rounded-xl p-3 flex items-start gap-2">
-            <Info className="text-brand-medium mt-0.5 flex-shrink-0" size={16} />
-            <div className="text-xs text-brand-soft">
-              <p className="font-medium mb-1">
-                {minPrice === 'full' && 'Full Range Position'}
-                {minPrice === 'wide' && 'Wide Range Position'}
-                {minPrice === 'concentrated' && 'Concentrated Position'}
-              </p>
-              <p>
-                {minPrice === 'full' && 'Liquidity across all possible prices. Lowest fees but safest for volatile pairs.'}
-                {minPrice === 'wide' && 'Liquidity across ±50% of current price. Balanced fee earnings and risk.'}
-                {minPrice === 'concentrated' && 'Concentrated near current price (±10%). Higher fees but requires monitoring.'}
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            {/* Buttons */}
-            <div className="flex gap-3">
-              <button
-                onClick={() => setStep(2)}
-                className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 rounded-xl font-medium transition-colors text-text-primary border border-gray-700"
-              >
-                Back
-              </button>
-
-              {/* Single Token Mode - Approve OR Create */}
-              {depositMode === 'single' && (() => {
-                if (!singleTokenAmount || !singleTokenAddress || !singleTokenData || parseFloat(singleTokenAmount) <= 0) {
-                  // No amount entered - show disabled Create Position
-                  return (
-                    <button
-                      disabled
-                      className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard rounded-xl font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Zap size={16} />
-                      Create Position
-                    </button>
-                  );
-                }
-
-                const amountWei = parseUnits(singleTokenAmount, singleTokenData.decimals);
-                const approvalAmount = amountWei * 3n; // 3x for slippage buffer
-                const isSingleToken0 = singleTokenAddress.toLowerCase() === token0?.toLowerCase();
-                const isNativeToken = singleTokenAddress.toLowerCase() === ZERO_ADDRESS;
-                const alreadyApproved = isNativeToken || (isSingleToken0 ? isToken0Approved(approvalAmount) : isToken1Approved(approvalAmount));
-                const isApproving = isPendingApproval0 || isPendingApproval1 || isConfirmingApproval0 || isConfirmingApproval1;
-
-                // Show Approve button if not approved yet
-                if (!alreadyApproved) {
-                  return (
-                    <button
-                      onClick={async () => {
-                        try {
-                          if (isSingleToken0) {
-                            await approveToken0(approvalAmount);
-                            refetchApproval0();
-                          } else {
-                            await approveToken1(approvalAmount);
-                            refetchApproval1();
-                          }
-                          showToast({ type: 'success', message: `${singleTokenData.symbol} approved!` });
-                        } catch (error: any) {
-                          showToast({ type: 'error', message: error.message || 'Approval failed' });
-                        }
-                      }}
-                      disabled={isApproving}
-                      className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard hover:opacity-90 rounded-xl font-medium text-white disabled:opacity-50 transition-all"
-                    >
-                      {isApproving && <Loader2 className="animate-spin" size={18} />}
-                      {isApproving ? 'Approving...' : `Approve ${singleTokenData.symbol}`}
-                    </button>
-                  );
-                }
-
-                // Show Create Position button (approved)
-                return (
-                  <button
-                    onClick={handleZap}
-                    disabled={zapIsPending || zapIsConfirming}
-                    className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard hover:opacity-90 rounded-xl font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                  >
-                    {(zapIsPending || zapIsConfirming) && <Loader2 className="animate-spin" size={18} />}
-                    {zapIsPending ? 'Confirm in Wallet...' : zapIsConfirming ? 'Creating...' : (
-                      <>
-                        <Zap size={16} />
-                        Create Position
-                      </>
-                    )}
-                  </button>
-                );
-              })()}
-
-              {/* Both Tokens Mode - Approve OR Create */}
-              {depositMode === 'both' && (() => {
-                if (!amount0 || !amount1 || !token0Data || !token1Data || parseFloat(amount0) <= 0 || parseFloat(amount1) <= 0) {
-                  // No amounts entered - show disabled Create Position
-                  return (
-                    <button
-                      disabled
-                      className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard rounded-xl font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Create Position
-                    </button>
-                  );
-                }
-
-                const amount0Wei = parseUnits(amount0, token0Data.decimals);
-                const amount1Wei = parseUnits(amount1, token1Data.decimals);
-                const token0NeedsApproval = !token0IsNative && !isToken0Approved(amount0Wei);
-                const token1NeedsApproval = !token1IsNative && !isToken1Approved(amount1Wei);
-                const needsApproval = token0NeedsApproval || token1NeedsApproval;
-                const isApproving = isPendingApproval0 || isPendingApproval1 || isConfirmingApproval0 || isConfirmingApproval1;
-
-                // Show Approve button if any token needs approval
-                if (needsApproval) {
-                  const tokenToApprove = token0NeedsApproval ? token0Data.symbol : token1Data.symbol;
-                  return (
-                    <button
-                      onClick={async () => {
-                        try {
-                          if (token0NeedsApproval) {
-                            await approveToken0(amount0Wei);
-                            refetchApproval0();
-                            showToast({ type: 'success', message: `${token0Data.symbol} approved!` });
-                          }
-                          if (token1NeedsApproval) {
-                            await approveToken1(amount1Wei);
-                            refetchApproval1();
-                            showToast({ type: 'success', message: `${token1Data.symbol} approved!` });
-                          }
-                        } catch (error: any) {
-                          showToast({ type: 'error', message: error.message || 'Approval failed' });
-                        }
-                      }}
-                      disabled={isApproving}
-                      className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard hover:opacity-90 rounded-xl font-medium text-white disabled:opacity-50 transition-all"
-                    >
-                      {isApproving && <Loader2 className="animate-spin" size={18} />}
-                      {isApproving ? 'Approving...' : `Approve ${tokenToApprove}`}
-                    </button>
-                  );
-                }
-
-                // Show Create Position button (all approved)
-                return (
-                  <button
-                    onClick={handleMintPosition}
-                    disabled={isPending || isConfirming || !poolPriceInfo.isRealistic}
-                    className="flex-1 py-3 flex items-center justify-center gap-2 bg-gradient-hard hover:opacity-90 rounded-xl font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                  >
-                    {(isPending || isConfirming) && <Loader2 className="animate-spin" size={18} />}
-                    {isPending ? 'Confirm in Wallet...' : isConfirming ? 'Creating...' : !poolPriceInfo.isRealistic ? 'Pool Price Invalid' : 'Create Position'}
-                  </button>
-                );
-              })()}
-            </div>
-          </div>
         </div>
-      )}
-
-      {/* Help Section - Chain-specific info */}
-      {chainId === CHAIN_IDS.SEPOLIA && (
-        <div className="rounded-2xl bg-surface-card border border-brand-medium/20 p-6 mt-8">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="text-brand-medium mt-1" size={20} />
-            <div>
-              <h3 className="font-semibold text-brand-medium mb-2">Need Test Tokens?</h3>
-              <p className="text-sm text-text-secondary mb-3">
-                You need Sepolia testnet tokens to create positions. Here&apos;s how to get them:
-              </p>
-              <div className="space-y-2 text-sm">
-                <div>
-                  <span className="font-medium text-text-primary">1. Get Sepolia ETH:</span>
-                  <ul className="ml-4 mt-1 space-y-1 text-text-muted">
-                    <li>• Visit <a href="https://sepoliafaucet.com" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">sepoliafaucet.com</a></li>
-                    <li>• Or <a href="https://www.alchemy.com/faucets/ethereum-sepolia" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">Alchemy Sepolia Faucet</a></li>
-                  </ul>
-                </div>
-                <div>
-                  <span className="font-medium text-text-primary">2. Get WETH (Wrapped ETH):</span>
-                  <ul className="ml-4 mt-1 space-y-1 text-text-muted">
-                    <li>• Go to <a href="https://sepolia.etherscan.io/address/0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9#writeContract" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">WETH Contract on Etherscan</a></li>
-                    <li>• Connect wallet and use &quot;deposit&quot; function to wrap your ETH</li>
-                  </ul>
-                </div>
-                <div>
-                  <span className="font-medium text-text-primary">3. Get USDC/DAI:</span>
-                  <ul className="ml-4 mt-1 space-y-1 text-text-muted">
-                    <li>• USDC: <a href="https://sepolia.etherscan.io/address/0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">0x1c7D...7238</a></li>
-                    <li>• DAI: <a href="https://sepolia.etherscan.io/address/0x68194a729C2450ad26072b3D33ADaCbcef39D574" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">0x6819...D574</a></li>
-                    <li>• Use a Sepolia faucet or testnet swap to get these tokens</li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {chainId === CHAIN_IDS.BASE && (
-        <div className="rounded-2xl bg-surface-card border border-brand-medium/20 p-6 mt-8">
-          <div className="flex items-start gap-3">
-            <Info className="text-brand-medium mt-1" size={20} />
-            <div>
-              <h3 className="font-semibold text-brand-medium mb-2">Getting Started on Base</h3>
-              <p className="text-sm text-text-secondary mb-3">
-                You need tokens on Base mainnet to create positions.
-              </p>
-              <div className="space-y-2 text-sm">
-                <div>
-                  <span className="font-medium text-text-primary">Get tokens on Base:</span>
-                  <ul className="ml-4 mt-1 space-y-1 text-text-muted">
-                    <li>• Bridge from Ethereum via <a href="https://bridge.base.org" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">Base Bridge</a></li>
-                    <li>• Buy directly on <a href="https://www.coinbase.com" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">Coinbase</a> and withdraw to Base</li>
-                    <li>• Swap on <a href="https://app.uniswap.org" target="_blank" rel="noopener noreferrer" className="text-brand-medium hover:underline">Uniswap</a></li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      </section>
     </div>
   );
 }
