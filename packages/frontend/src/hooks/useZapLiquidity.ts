@@ -46,6 +46,7 @@ export interface ZapParams {
   fee: number;
   rangeStrategy: 'full' | 'wide' | 'concentrated';
   recipient: `0x${string}`;
+  slippageBps?: number; // Slippage tolerance in basis points (default: 300 = 3%)
 }
 
 export interface ZapQuote {
@@ -385,7 +386,7 @@ export function useZapLiquidity() {
         }
       }
 
-      const { inputToken, inputAmount, targetToken0, targetToken1, fee, rangeStrategy, recipient } = params;
+      const { inputToken, inputAmount, targetToken0, targetToken1, fee, rangeStrategy, recipient, slippageBps = 300 } = params; // Default 3% slippage
 
       // Parse input amount
       const inputAmountWei = parseUnits(inputAmount, inputToken.decimals);
@@ -565,6 +566,9 @@ export function useZapLiquidity() {
         hooks: '0x0000000000000000000000000000000000000000' as `0x${string}`,
       };
 
+      // Calculate slippage multiplier (e.g., 300 bps = 3% = 103%)
+      const slippageMultiplier = 10000n + BigInt(slippageBps);
+
       // SwapAndMintParams struct
       const swapAndMintParams = {
         poolKey,
@@ -572,14 +576,14 @@ export function useZapLiquidity() {
         tickUpper,
         amount0Desired,
         amount1Desired,
-        amount0Max: inputMatchesToken0 ? inputAmountWei : (inputAmountWei * 110n) / 100n,
-        amount1Max: inputMatchesToken0 ? (inputAmountWei * 110n) / 100n : inputAmountWei,
+        amount0Max: inputMatchesToken0 ? inputAmountWei : (inputAmountWei * slippageMultiplier) / 10000n,
+        amount1Max: inputMatchesToken0 ? (inputAmountWei * slippageMultiplier) / 10000n : inputAmountWei,
         recipient,
         deadline: BigInt(Math.floor(Date.now() / 1000) + 3600), // 1 hour
         swapSourceCurrency,
         swapSourceAmount: swapAmount,
         swapData,
-        maxSwapSlippage: 100n, // 1% slippage
+        maxSwapSlippage: BigInt(slippageBps), // Use configurable slippage (default 3%)
       };
 
       // Calculate ETH value to send
