@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { useAccount, useChainId } from 'wagmi';
 import { parseUnits, formatUnits } from 'viem';
@@ -38,6 +38,56 @@ import { OneClickActions } from '@/components/position/one-click-actions';
 
 type ActionTab = 'increase' | 'decrease' | 'collect' | 'compound' | 'range' | 'quick' | 'strategy';
 
+// Parse error messages to show user-friendly text
+function getUserFriendlyError(error: Error | null): string {
+  if (!error) return '';
+
+  const message = error.message.toLowerCase();
+
+  // User rejected transaction
+  if (message.includes('user rejected') || message.includes('user denied') || message.includes('rejected by user')) {
+    return 'Transaction cancelled by user';
+  }
+
+  // Insufficient funds
+  if (message.includes('insufficient funds') || message.includes('insufficient balance')) {
+    return 'Insufficient funds for transaction';
+  }
+
+  // Slippage errors
+  if (message.includes('slippage') || message.includes('price moved') || message.includes('too little received')) {
+    return 'Price changed too much. Try increasing slippage tolerance.';
+  }
+
+  // Gas estimation errors
+  if (message.includes('gas') && (message.includes('estimate') || message.includes('limit'))) {
+    return 'Transaction may fail. Check your inputs and try again.';
+  }
+
+  // Approval errors
+  if (message.includes('allowance') || message.includes('not approved')) {
+    return 'Token approval required. Please approve first.';
+  }
+
+  // Network errors
+  if (message.includes('network') || message.includes('rpc') || message.includes('timeout')) {
+    return 'Network error. Please check your connection and try again.';
+  }
+
+  // Contract revert with no reason
+  if (message.includes('execution reverted') && message.length < 100) {
+    return 'Transaction failed. Please try again with different parameters.';
+  }
+
+  // If message is very long, truncate it
+  const originalMessage = error.message;
+  if (originalMessage.length > 100) {
+    return originalMessage.slice(0, 100) + '...';
+  }
+
+  return originalMessage;
+}
+
 export default function PositionDetailContent() {
   const params = useParams();
   const { address } = useAccount();
@@ -47,6 +97,15 @@ export default function PositionDetailContent() {
 
   const [activeTab, setActiveTab] = useState<ActionTab>('quick');
   const [slippage, setSlippage] = useState<number>(SLIPPAGE_PRESETS.MEDIUM);
+  const [showNotification, setShowNotification] = useState(true);
+
+  // Clear notification when switching tabs
+  const handleTabChange = (tab: ActionTab) => {
+    setShowNotification(false);
+    setActiveTab(tab);
+    // Reset notification visibility after a brief delay to allow for new transactions
+    setTimeout(() => setShowNotification(true), 100);
+  };
 
   // Get position data
   const { data: positions, isLoading: positionsLoading, refetch: refetchPositions } = usePositions();
@@ -228,31 +287,37 @@ export default function PositionDetailContent() {
   }, [position]);
 
   // Auto-calculate paired token amount when user types
-  const isAutoCalculating = useMemo(() => ({ current: false }), []);
+  const isAutoCalculating = useRef(false);
 
   useEffect(() => {
     if (!calculatePairedAmount || !activeInput || isAutoCalculating.current) return;
 
     isAutoCalculating.current = true;
 
-    if (activeInput === 'amount0' && amount0) {
-      const calculatedAmount1 = calculatePairedAmount.fromAmount0ToAmount1(amount0);
-      if (calculatedAmount1 !== '' && calculatedAmount1 !== amount1) {
-        const trimmed = parseFloat(calculatedAmount1).toString();
-        setAmount1(trimmed);
+    try {
+      if (activeInput === 'amount0' && amount0) {
+        const calculatedAmount1 = calculatePairedAmount.fromAmount0ToAmount1(amount0);
+        if (calculatedAmount1 !== '' && calculatedAmount1 !== amount1) {
+          const parsed = parseFloat(calculatedAmount1);
+          if (!isNaN(parsed) && isFinite(parsed)) {
+            setAmount1(parsed.toString());
+          }
+        }
+      } else if (activeInput === 'amount1' && amount1) {
+        const calculatedAmount0 = calculatePairedAmount.fromAmount1ToAmount0(amount1);
+        if (calculatedAmount0 !== '' && calculatedAmount0 !== amount0) {
+          const parsed = parseFloat(calculatedAmount0);
+          if (!isNaN(parsed) && isFinite(parsed)) {
+            setAmount0(parsed.toString());
+          }
+        }
       }
-    } else if (activeInput === 'amount1' && amount1) {
-      const calculatedAmount0 = calculatePairedAmount.fromAmount1ToAmount0(amount1);
-      if (calculatedAmount0 !== '' && calculatedAmount0 !== amount0) {
-        const trimmed = parseFloat(calculatedAmount0).toString();
-        setAmount0(trimmed);
-      }
+    } finally {
+      setTimeout(() => {
+        isAutoCalculating.current = false;
+      }, 100);
     }
-
-    setTimeout(() => {
-      isAutoCalculating.current = false;
-    }, 100);
-  }, [amount0, amount1, activeInput, calculatePairedAmount, isAutoCalculating]);
+  }, [amount0, amount1, activeInput, calculatePairedAmount]);
 
   // Compound config form
   const [minCompoundInterval, setMinCompoundInterval] = useState(3600);
@@ -367,7 +432,10 @@ export default function PositionDetailContent() {
   const handleDecreaseLiquidity = async () => {
     if (!tokenId || !position.liquidity) return;
 
-    const liquidityToRemove = (BigInt(position.liquidity) * BigInt(decreasePercent)) / BigInt(100);
+    // For 100% removal, use exact liquidity to avoid rounding issues
+    const liquidityToRemove = decreasePercent === 100
+      ? BigInt(position.liquidity)
+      : (BigInt(position.liquidity) * BigInt(decreasePercent)) / BigInt(100);
 
     // Use the new decreaseLiquidity function that returns BOTH tokens
     await decreaseLiquidity({
@@ -542,8 +610,8 @@ export default function PositionDetailContent() {
                 t1Price
               );
 
-              const fmt0 = amount0 > 0.001 ? amount0.toFixed(4) : amount0.toExponential(2);
-              const fmt1 = amount1 > 0.001 ? amount1.toFixed(2) : amount1.toExponential(2);
+              const fmt0 = amount0 > 0.001 ? amount0.toFixed(4) : amount0.toFixed(8);
+              const fmt1 = amount1 > 0.001 ? amount1.toFixed(2) : amount1.toFixed(8);
               return `${fmt0} ${position.pool.token0.symbol} / ${fmt1} ${position.pool.token1.symbol}`;
             })()}
           </p>
@@ -633,7 +701,7 @@ export default function PositionDetailContent() {
           ].map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => handleTabChange(tab.id)}
               className={`flex items-center gap-2 px-4 py-3 border-b-2 transition-colors whitespace-nowrap ${
                 activeTab === tab.id
                   ? 'border-primary-500 text-primary-400'
@@ -647,7 +715,7 @@ export default function PositionDetailContent() {
         </div>
 
         {/* Transaction Status */}
-        {(isPending || isConfirming || isSuccess || error) && (
+        {showNotification && (isPending || isConfirming || isSuccess || error) && (
           <div className={`mb-6 p-4 rounded-lg ${
             error ? 'bg-red-500/10 border border-red-500/20' :
             isSuccess ? 'bg-green-500/10 border border-green-500/20' :
@@ -662,7 +730,7 @@ export default function PositionDetailContent() {
                 {isPending && 'Waiting for wallet confirmation...'}
                 {isConfirming && 'Transaction confirming...'}
                 {isSuccess && 'Transaction successful!'}
-                {error && `Error: ${error.message}`}
+                {error && getUserFriendlyError(error)}
               </span>
             </div>
           </div>

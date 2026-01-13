@@ -180,7 +180,7 @@ export function formatTickPrice(tick: number, token0Decimals: number = 18, token
   if (price >= 1) return price.toFixed(4);
   if (price >= 0.0001) return price.toFixed(6);
   if (price >= 0.0000001) return price.toFixed(10);
-  return price.toExponential(4);
+  return price.toFixed(12);
 }
 
 /**
