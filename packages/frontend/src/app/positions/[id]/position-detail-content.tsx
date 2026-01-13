@@ -426,7 +426,7 @@ export default function PositionDetailContent() {
       fee: position.pool.fee,
       rangeStrategy: 'wide', // Use existing position's range logic
       recipient: address,
-      slippageBps: 300, // 3% slippage for better success rate with volatile pairs
+      slippageBps: 500, // 5% slippage for better success rate with volatile pairs
     });
   };
 

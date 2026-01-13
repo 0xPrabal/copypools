@@ -503,8 +503,8 @@ export default function InitiatorPage() {
       const targetToken0: ZapToken = { symbol: token0Data.symbol, address: token0Data.address, decimals: token0Data.decimals, isNative: token0Data.isNative };
       const targetToken1: ZapToken = { symbol: token1Data.symbol, address: token1Data.address, decimals: token1Data.decimals, isNative: token1Data.isNative };
       const zapRangeStrategy = rangeStrategy === 'custom' ? 'wide' : rangeStrategy;
-      // Use 3% slippage (300 bps) for better success rate with volatile pairs
-      await executeZap({ inputToken, inputAmount: singleTokenAmount, targetToken0, targetToken1, fee, rangeStrategy: zapRangeStrategy, recipient: address, slippageBps: 300 });
+      // Use 5% slippage (500 bps) for better success rate with volatile pairs
+      await executeZap({ inputToken, inputAmount: singleTokenAmount, targetToken0, targetToken1, fee, rangeStrategy: zapRangeStrategy, recipient: address, slippageBps: 500 });
     } catch (error: any) {
       showToast({ type: 'error', message: error.message || 'Transaction failed' });
     }

@@ -386,7 +386,7 @@ export function useZapLiquidity() {
         }
       }
 
-      const { inputToken, inputAmount, targetToken0, targetToken1, fee, rangeStrategy, recipient, slippageBps = 300 } = params; // Default 3% slippage
+      const { inputToken, inputAmount, targetToken0, targetToken1, fee, rangeStrategy, recipient, slippageBps = 500 } = params; // Default 5% slippage
 
       // Parse input amount
       const inputAmountWei = parseUnits(inputAmount, inputToken.decimals);
@@ -514,6 +514,7 @@ export function useZapLiquidity() {
 
       // Get swap data from 0x API
       let swapData: `0x${string}` = '0x';
+      let expectedSwapOutput = 0n; // Track expected output for amount max calculations
 
       if (swapAmount > 0n) {
         const swapFromAddress = inputMatchesToken0 ? sortedToken0.address : sortedToken1.address;
@@ -535,6 +536,9 @@ export function useZapLiquidity() {
             );
           }
 
+          // Store expected swap output for max amount calculations
+          expectedSwapOutput = quote.expectedOutput;
+
           // Encode router and data for V4Utils contract
           swapData = encodeAbiParameters(
             [{ type: 'address' }, { type: 'bytes' }],
@@ -545,16 +549,22 @@ export function useZapLiquidity() {
         }
       }
 
-      // Calculate expected amounts (with 10% buffer for slippage)
+      // Calculate expected amounts after swap
       let amount0Desired: bigint;
       let amount1Desired: bigint;
+      let expectedAmount0: bigint;
+      let expectedAmount1: bigint;
 
       if (inputMatchesToken0) {
         amount0Desired = inputAmountWei - swapAmount;
         amount1Desired = 0n; // Will be filled by swap
+        expectedAmount0 = inputAmountWei - swapAmount; // Keep portion of token0
+        expectedAmount1 = expectedSwapOutput; // What we expect to get from swap
       } else {
         amount0Desired = 0n; // Will be filled by swap
         amount1Desired = inputAmountWei - swapAmount;
+        expectedAmount0 = expectedSwapOutput; // What we expect to get from swap
+        expectedAmount1 = inputAmountWei - swapAmount; // Keep portion of token1
       }
 
       // PoolKey struct
@@ -566,8 +576,24 @@ export function useZapLiquidity() {
         hooks: '0x0000000000000000000000000000000000000000' as `0x${string}`,
       };
 
-      // Calculate slippage multiplier (e.g., 300 bps = 3% = 103%)
+      // Calculate slippage multiplier (e.g., 300 bps = 3% = 103%, or 500 bps = 5% = 105%)
       const slippageMultiplier = 10000n + BigInt(slippageBps);
+
+      // Calculate max amounts based on expected amounts AFTER swap + slippage buffer
+      // This is critical for zap operations where the swap output determines one of the token amounts
+      // Add slippage buffer to expected amounts to account for price movements
+      const amount0MaxCalculated = (expectedAmount0 * slippageMultiplier) / 10000n;
+      const amount1MaxCalculated = (expectedAmount1 * slippageMultiplier) / 10000n;
+
+      // Ensure max is at least the desired amount, and at least 1 for non-zero expectations
+      const amount0Max = amount0MaxCalculated > amount0Desired ? amount0MaxCalculated : (expectedAmount0 > 0n ? expectedAmount0 : amount0Desired);
+      const amount1Max = amount1MaxCalculated > amount1Desired ? amount1MaxCalculated : (expectedAmount1 > 0n ? expectedAmount1 : amount1Desired);
+
+      console.log('=== Max Amount Calculation ===');
+      console.log('expectedAmount0:', expectedAmount0.toString());
+      console.log('expectedAmount1:', expectedAmount1.toString());
+      console.log('amount0Max:', amount0Max.toString());
+      console.log('amount1Max:', amount1Max.toString());
 
       // SwapAndMintParams struct
       const swapAndMintParams = {
@@ -576,8 +602,8 @@ export function useZapLiquidity() {
         tickUpper,
         amount0Desired,
         amount1Desired,
-        amount0Max: inputMatchesToken0 ? inputAmountWei : (inputAmountWei * slippageMultiplier) / 10000n,
-        amount1Max: inputMatchesToken0 ? (inputAmountWei * slippageMultiplier) / 10000n : inputAmountWei,
+        amount0Max,
+        amount1Max,
         recipient,
         deadline: BigInt(Math.floor(Date.now() / 1000) + 3600), // 1 hour
         swapSourceCurrency,
