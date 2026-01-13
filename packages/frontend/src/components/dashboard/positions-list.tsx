@@ -2,7 +2,7 @@
 
 import { useAccount } from 'wagmi';
 import Link from 'next/link';
-import { ExternalLink, MoreVertical, TrendingUp, RefreshCw, Shield, Layers, Loader2 } from 'lucide-react';
+import { ExternalLink, TrendingUp, RefreshCw, Shield, Layers, Loader2 } from 'lucide-react';
 import { usePositions, Position } from '@/hooks/usePonderData';
 import { getPositionValueUsd } from '@/utils/tickMath';
 import { cn } from '@/lib/utils';
@@ -110,12 +110,10 @@ function PositionRow({ position }: { position: Position }) {
           <Link
             href={`/positions/${position.tokenId}`}
             className="p-2 text-text-secondary hover:text-brand-medium transition-colors rounded-lg hover:bg-gray-800/50"
+            title="View position details"
           >
             <ExternalLink size={16} />
           </Link>
-          <button className="p-2 text-text-secondary hover:text-text-primary transition-colors rounded-lg hover:bg-gray-800/50">
-            <MoreVertical size={16} />
-          </button>
         </div>
       </div>
     </div>

@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { usePositions } from '@/hooks/usePonderData';
 import { useWalletConnection } from '@/hooks/useWalletConnection';
@@ -82,9 +82,17 @@ const NAV_ITEMS = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { data: positions, isLoading: positionsLoading } = usePositions();
   const { isFullyConnected, address } = useWalletConnection();
   const { activities, isLoading: activitiesLoading, hasActivities } = useNotifications({ limit: 4 });
+
+  // Handle activity item click - navigate to position if available
+  const handleActivityClick = (activity: { positionId?: string }) => {
+    if (activity.positionId) {
+      router.push(`/positions/${activity.positionId}`);
+    }
+  };
 
   // Calculate total TVL from all positions
   const totalTVL = useMemo(() => {
@@ -228,13 +236,18 @@ export function Sidebar() {
             {activities.map((activity) => (
               <li
                 key={activity.id}
-                className="flex items-center justify-between text-xs cursor-pointer hover:bg-gray-800/30 px-2 py-1.5 rounded-lg transition-colors"
+                onClick={() => handleActivityClick(activity)}
+                className={`flex items-center justify-between text-xs px-2 py-1.5 rounded-lg transition-colors ${
+                  activity.positionId
+                    ? 'cursor-pointer hover:bg-gray-800/30'
+                    : 'cursor-default'
+                }`}
               >
                 <div className="flex flex-col gap-0.5 flex-1 min-w-0">
                   <span className="text-text-primary font-medium truncate">{activity.label}</span>
                   <span className="text-text-secondary truncate text-[10px]">{getTimeAgo(activity.timestamp)}</span>
                 </div>
-                <ArrowRightIcon className="h-4 w-4 flex-shrink-0" />
+                {activity.positionId && <ArrowRightIcon className="h-4 w-4 flex-shrink-0" />}
               </li>
             ))}
           </ul>
