@@ -23,9 +23,11 @@ import {
 import { useV4Utils } from '@/hooks/useV4Utils';
 import { useV4Compoundor, usePendingFees } from '@/hooks/useV4Compoundor';
 import { useV4AutoRange, useCheckRebalance } from '@/hooks/useV4AutoRange';
+import { useZapLiquidity, ZapToken } from '@/hooks/useZapLiquidity';
 import { useTokenApproval } from '@/hooks/useTokenApproval';
 import { useNFTApproval } from '@/hooks/useNFTApproval';
 import { usePositions } from '@/hooks/usePonderData';
+import { useTokenPrices } from '@/hooks/useTokenPrices';
 import { SLIPPAGE_PRESETS } from '@/lib/slippage';
 import { getContracts } from '@/config/contracts';
 import { tickToPrice, tickToPercentage, formatPercentage, formatTickPrice, getPositionValueUsd, isFullRangePosition } from '@/utils/tickMath';
@@ -47,7 +49,7 @@ export default function PositionDetailContent() {
   const [slippage, setSlippage] = useState<number>(SLIPPAGE_PRESETS.MEDIUM);
 
   // Get position data
-  const { data: positions, isLoading: positionsLoading } = usePositions();
+  const { data: positions, isLoading: positionsLoading, refetch: refetchPositions } = usePositions();
   const position = positions?.find(p => p.tokenId === params.id);
 
   // Contract hooks
@@ -82,6 +84,14 @@ export default function PositionDetailContent() {
     error: rangeError,
   } = useV4AutoRange();
 
+  // Zap liquidity hook for single token deposits
+  const {
+    executeZap,
+    isPending: zapPending,
+    isConfirming: zapConfirming,
+    isSuccess: zapSuccess,
+  } = useZapLiquidity();
+
   // Read contract data - get pending fees from V4Compoundor (now fixed!)
   const { data: pendingFeesData } = usePendingFees(tokenId);
   const pendingFees = pendingFeesData as [bigint, bigint] | undefined;
@@ -93,6 +103,9 @@ export default function PositionDetailContent() {
   // Token approval hooks - need to approve V4_UTILS to spend tokens
   const token0Address = position?.pool.token0.address as `0x${string}` | undefined;
   const token1Address = position?.pool.token1.address as `0x${string}` | undefined;
+
+  // Get real token prices for accurate position value calculation
+  const { token0Price, token1Price, isLoading: pricesLoading } = useTokenPrices(token0Address, token1Address, chainId);
 
   const {
     approve: approveToken0,
@@ -141,6 +154,11 @@ export default function PositionDetailContent() {
   const [amount1, setAmount1] = useState('');
   const [activeInput, setActiveInput] = useState<'amount0' | 'amount1' | null>(null);
   const [decreasePercent, setDecreasePercent] = useState(50);
+
+  // Single token deposit mode for increase liquidity
+  const [increaseDepositMode, setIncreaseDepositMode] = useState<'single' | 'both'>('both');
+  const [singleTokenAddress, setSingleTokenAddress] = useState<string>('');
+  const [singleTokenAmount, setSingleTokenAmount] = useState('');
 
   // Calculate paired amount based on pool ratio (for increase liquidity)
   const calculatePairedAmount = useMemo(() => {
@@ -245,10 +263,21 @@ export default function PositionDetailContent() {
   const [upperDelta, setUpperDelta] = useState(600);
   const [rebalanceThreshold, setRebalanceThreshold] = useState(100);
 
-  const isPending = utilsPending || compoundPending || rangePending || approval0Pending || approval1Pending || nftApprovalPending;
-  const isConfirming = utilsConfirming || compoundConfirming || rangeConfirming || approval0Confirming || approval1Confirming || nftApprovalConfirming;
-  const isSuccess = utilsSuccess || compoundSuccess || rangeSuccess;
+  const isPending = utilsPending || compoundPending || rangePending || zapPending || approval0Pending || approval1Pending || nftApprovalPending;
+  const isConfirming = utilsConfirming || compoundConfirming || rangeConfirming || zapConfirming || approval0Confirming || approval1Confirming || nftApprovalConfirming;
+  const isSuccess = utilsSuccess || compoundSuccess || rangeSuccess || zapSuccess;
   const error = utilsError || compoundError || rangeError;
+
+  // Refetch position data after successful transaction (Bug fix: position value not updating)
+  useEffect(() => {
+    if (isSuccess) {
+      // Delay refetch slightly to allow blockchain state to update
+      const timer = setTimeout(() => {
+        refetchPositions();
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [isSuccess, refetchPositions]);
 
   if (positionsLoading) {
     return (
@@ -293,6 +322,45 @@ export default function PositionDetailContent() {
       // Pass currency addresses to detect if native ETH is involved
       currency0: position.pool.token0.address as `0x${string}`,
       currency1: position.pool.token1.address as `0x${string}`,
+    });
+  };
+
+  // Handle single token increase using zap
+  const handleSingleTokenIncrease = async () => {
+    if (!address || !singleTokenAddress || !singleTokenAmount || !position) return;
+
+    const isToken0 = singleTokenAddress.toLowerCase() === position.pool.token0.address.toLowerCase();
+    const inputTokenData = isToken0 ? position.pool.token0 : position.pool.token1;
+
+    const inputToken: ZapToken = {
+      symbol: inputTokenData.symbol,
+      address: inputTokenData.address as `0x${string}`,
+      decimals: inputTokenData.decimals,
+      isNative: inputTokenData.address === '0x0000000000000000000000000000000000000000',
+    };
+
+    const targetToken0: ZapToken = {
+      symbol: position.pool.token0.symbol,
+      address: position.pool.token0.address as `0x${string}`,
+      decimals: position.pool.token0.decimals,
+      isNative: position.pool.token0.address === '0x0000000000000000000000000000000000000000',
+    };
+
+    const targetToken1: ZapToken = {
+      symbol: position.pool.token1.symbol,
+      address: position.pool.token1.address as `0x${string}`,
+      decimals: position.pool.token1.decimals,
+      isNative: position.pool.token1.address === '0x0000000000000000000000000000000000000000',
+    };
+
+    await executeZap({
+      inputToken,
+      inputAmount: singleTokenAmount,
+      targetToken0,
+      targetToken1,
+      fee: position.pool.fee,
+      rangeStrategy: 'wide', // Use existing position's range logic
+      recipient: address,
     });
   };
 
@@ -425,16 +493,13 @@ export default function PositionDetailContent() {
               const liquidityBigInt = BigInt(position.liquidity || '0');
               const sqrtPriceX96 = BigInt(position.sqrtPriceX96 || '0');
 
-              // Use pool price for ETH/USDC pools (pass 0 to derive from sqrtPriceX96)
-              // For stablecoin pairs, use $1
-              const isToken0Eth = position.pool.token0.symbol === 'ETH' || position.pool.token0.symbol === 'WETH';
-              const isToken1Stable = position.pool.token1.symbol === 'USDC' || position.pool.token1.symbol === 'USDT';
-              const token0PriceUsd = isToken0Eth && isToken1Stable ? 0 : 1; // 0 = derive from pool
-              const token1PriceUsd = isToken1Stable ? 1 : 0;
-
               if (sqrtPriceX96 === 0n || liquidityBigInt === 0n) {
                 return '0.00';
               }
+
+              // Use real token prices from API, fallback to 0 to derive from pool price
+              const t0Price = token0Price ?? 0;
+              const t1Price = token1Price ?? 0;
 
               const { valueUsd } = getPositionValueUsd(
                 liquidityBigInt,
@@ -443,8 +508,8 @@ export default function PositionDetailContent() {
                 position.tickUpper,
                 position.pool.token0.decimals,
                 position.pool.token1.decimals,
-                token0PriceUsd,
-                token1PriceUsd
+                t0Price,
+                t1Price
               );
 
               return valueUsd > 1000 ? valueUsd.toLocaleString('en-US', { maximumFractionDigits: 0 })
@@ -457,14 +522,14 @@ export default function PositionDetailContent() {
             {(() => {
               const liquidityBigInt = BigInt(position.liquidity || '0');
               const sqrtPriceX96 = BigInt(position.sqrtPriceX96 || '0');
-              const isToken0Eth = position.pool.token0.symbol === 'ETH' || position.pool.token0.symbol === 'WETH';
-              const isToken1Stable = position.pool.token1.symbol === 'USDC' || position.pool.token1.symbol === 'USDT';
-              const token0PriceUsd = isToken0Eth && isToken1Stable ? 0 : 1;
-              const token1PriceUsd = isToken1Stable ? 1 : 0;
 
               if (sqrtPriceX96 === 0n || liquidityBigInt === 0n) {
                 return '0 / 0';
               }
+
+              // Use real token prices from API
+              const t0Price = token0Price ?? 0;
+              const t1Price = token1Price ?? 0;
 
               const { amount0, amount1 } = getPositionValueUsd(
                 liquidityBigInt,
@@ -473,8 +538,8 @@ export default function PositionDetailContent() {
                 position.tickUpper,
                 position.pool.token0.decimals,
                 position.pool.token1.decimals,
-                token0PriceUsd,
-                token1PriceUsd
+                t0Price,
+                t1Price
               );
 
               const fmt0 = amount0 > 0.001 ? amount0.toFixed(4) : amount0.toExponential(2);
@@ -654,15 +719,106 @@ export default function PositionDetailContent() {
           <div className="space-y-4">
             <h3 className="text-lg font-semibold">Add Liquidity</h3>
 
-            {/* Ratio info banner */}
-            {calculatePairedAmount && (
-              <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 text-sm">
-                <div className="flex items-center gap-2 text-blue-400">
-                  <Info size={14} />
-                  <span>Amounts are locked to pool ratio. Enter one amount to auto-calculate the other.</span>
+            {/* Deposit Mode Toggle */}
+            <div className="flex items-center gap-2 p-1 bg-gray-800/50 rounded-xl w-fit">
+              <button
+                onClick={() => setIncreaseDepositMode('single')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  increaseDepositMode === 'single'
+                    ? 'bg-primary-500 text-white'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                <Zap size={16} />
+                Single Token
+              </button>
+              <button
+                onClick={() => setIncreaseDepositMode('both')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  increaseDepositMode === 'both'
+                    ? 'bg-primary-500 text-white'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Both Tokens
+              </button>
+            </div>
+
+            {/* Single Token Mode */}
+            {increaseDepositMode === 'single' && (
+              <div className="space-y-4">
+                <div className="bg-primary-500/10 border border-primary-500/30 rounded-lg p-3 text-sm">
+                  <div className="flex items-center gap-2 text-primary-400">
+                    <Zap size={14} />
+                    <span>Deposit a single token and we&apos;ll automatically swap a portion to add liquidity.</span>
+                  </div>
                 </div>
+
+                <div>
+                  <label className="block text-sm text-gray-400 mb-2">Select Token</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => setSingleTokenAddress(position.pool.token0.address)}
+                      className={`p-3 rounded-xl border transition-all ${
+                        singleTokenAddress === position.pool.token0.address
+                          ? 'bg-primary-500/20 border-primary-500 text-white'
+                          : 'bg-gray-800/50 border-gray-700 text-gray-300 hover:border-gray-500'
+                      }`}
+                    >
+                      {position.pool.token0.symbol}
+                    </button>
+                    <button
+                      onClick={() => setSingleTokenAddress(position.pool.token1.address)}
+                      className={`p-3 rounded-xl border transition-all ${
+                        singleTokenAddress === position.pool.token1.address
+                          ? 'bg-primary-500/20 border-primary-500 text-white'
+                          : 'bg-gray-800/50 border-gray-700 text-gray-300 hover:border-gray-500'
+                      }`}
+                    >
+                      {position.pool.token1.symbol}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm text-gray-400 mb-2">Amount</label>
+                  <input
+                    type="number"
+                    value={singleTokenAmount}
+                    onChange={(e) => setSingleTokenAmount(e.target.value)}
+                    placeholder="0.0"
+                    className="input w-full"
+                  />
+                </div>
+
+                <button
+                  onClick={handleSingleTokenIncrease}
+                  disabled={isPending || isConfirming || !singleTokenAddress || !singleTokenAmount}
+                  className="w-full btn-primary flex items-center justify-center gap-2"
+                >
+                  {(isPending || isConfirming) && <Loader2 className="animate-spin" size={16} />}
+                  {isPending ? 'Confirm in Wallet...' : isConfirming ? 'Adding...' : (
+                    <>
+                      <Zap size={16} />
+                      Add Liquidity
+                    </>
+                  )}
+                </button>
               </div>
             )}
+
+            {/* Both Tokens Mode */}
+            {increaseDepositMode === 'both' && (
+              <>
+                {/* Ratio info banner */}
+                {calculatePairedAmount && (
+                  <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 text-sm">
+                    <div className="flex items-center gap-2 text-blue-400">
+                      <Info size={14} />
+                      <span>Amounts are locked to pool ratio. Enter one amount to auto-calculate the other.</span>
+                    </div>
+                  </div>
+                )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -819,6 +975,8 @@ export default function PositionDetailContent() {
             >
               {isPending || isConfirming ? 'Processing...' : !isNFTApproved ? 'Approve NFT First' : 'Add Liquidity'}
             </button>
+              </>
+            )}
           </div>
         )}
 

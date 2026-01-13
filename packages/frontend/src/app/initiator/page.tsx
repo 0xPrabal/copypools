@@ -61,10 +61,9 @@ export default function InitiatorPage() {
   const [singleTokenAmount, setSingleTokenAmount] = useState('');
   const [zapQuote, setZapQuote] = useState<ZapQuote | null>(null);
 
-  // Price range state for slider
-  const [priceRange, setPriceRange] = useState([2000, 5000]);
-  const absoluteMin = 1000;
-  const absoluteMax = 10000;
+  // Price range state for slider - will be updated dynamically based on pool price
+  const [priceRange, setPriceRange] = useState<number[]>([0, 0]);
+  const [sliderBoundsInitialized, setSliderBoundsInitialized] = useState(false);
 
   // Reset tokens when chain changes
   useEffect(() => {
@@ -269,23 +268,58 @@ export default function InitiatorPage() {
     return { price: displayPrice, isRealistic, warning: isRealistic ? '' : 'Pool price appears invalid' };
   }, [currentSqrtPriceX96, sortedToken0, token0, token0Data, token1Data]);
 
-  const currentPrice = poolPriceInfo.price || 3400;
-  const isInRange = priceRange[0] <= currentPrice && currentPrice <= priceRange[1];
+  const currentPrice = poolPriceInfo.price || 0;
+
+  // Dynamic slider bounds based on current pool price
+  const absoluteMin = useMemo(() => {
+    if (currentPrice <= 0) return 1;
+    // Set min to 1% of current price (or at least 0.000001 for very small prices)
+    return Math.max(0.000001, currentPrice * 0.01);
+  }, [currentPrice]);
+
+  const absoluteMax = useMemo(() => {
+    if (currentPrice <= 0) return 10000;
+    // Set max to 100x current price
+    return currentPrice * 100;
+  }, [currentPrice]);
+
+  // Initialize slider bounds when pool price is loaded
+  useEffect(() => {
+    if (currentPrice > 0 && !sliderBoundsInitialized) {
+      // Initialize with full range by default
+      setPriceRange([absoluteMin, absoluteMax]);
+      setSliderBoundsInitialized(true);
+    }
+  }, [currentPrice, absoluteMin, absoluteMax, sliderBoundsInitialized]);
+
+  // Check if position would be in range
+  const isInRange = useMemo(() => {
+    if (priceRange[0] === 0 && priceRange[1] === 0) return true; // Not initialized yet
+    return priceRange[0] <= currentPrice && currentPrice <= priceRange[1];
+  }, [priceRange, currentPrice]);
 
   // Handle range strategy change
   const handleStrategyChange = (strategy: RangeStrategy) => {
+    if (strategy === rangeStrategy) return; // Prevent re-selecting same strategy
     setRangeStrategy(strategy);
+
+    if (currentPrice <= 0) return; // Can't calculate range without price
+
     switch (strategy) {
       case 'full':
         setPriceRange([absoluteMin, absoluteMax]);
         break;
       case 'wide':
-        const wideRange = currentPrice * 0.5;
-        setPriceRange([Math.max(absoluteMin, Math.round(currentPrice - wideRange)), Math.min(absoluteMax, Math.round(currentPrice + wideRange))]);
+        // 50% range around current price
+        const wideMin = currentPrice * 0.5;
+        const wideMax = currentPrice * 1.5;
+        setPriceRange([Math.max(absoluteMin, wideMin), Math.min(absoluteMax, wideMax)]);
         break;
       case 'concentrated':
-        const concentratedRange = currentPrice * 0.1;
-        setPriceRange([Math.max(absoluteMin, Math.round(currentPrice - concentratedRange)), Math.min(absoluteMax, Math.round(currentPrice + concentratedRange))]);
+        // 10% range around current price
+        const concMin = currentPrice * 0.9;
+        const concMax = currentPrice * 1.1;
+        setPriceRange([Math.max(absoluteMin, concMin), Math.min(absoluteMax, concMax)]);
         break;
     }
   };
@@ -670,8 +704,8 @@ export default function InitiatorPage() {
                     <Slider
                       min={absoluteMin}
                       max={absoluteMax}
-                      step={10}
-                      value={priceRange}
+                      step={Math.max(0.000001, (absoluteMax - absoluteMin) / 1000)}
+                      value={priceRange[0] > 0 || priceRange[1] > 0 ? priceRange : [absoluteMin, absoluteMax]}
                       onValueChange={(values) => {
                         setPriceRange(values);
                         setRangeStrategy('custom');
