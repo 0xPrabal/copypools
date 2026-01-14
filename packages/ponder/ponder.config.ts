@@ -63,12 +63,13 @@ export default createConfig({
       pollingInterval: 60_000, // Poll every 1 minute for faster position updates
       maxRequestsPerSecond: 3, // Increased for faster indexing
     },
-    sepolia: {
-      id: 11155111,
-      rpc: SEPOLIA_RPCS.length > 0 ? SEPOLIA_RPCS : "https://ethereum-sepolia-rpc.publicnode.com",
-      pollingInterval: 300_000, // Poll every 5 minutes (testnet)
-      maxRequestsPerSecond: 2,
-    },
+    // Sepolia chain - DISABLED to avoid RPC timeout issues
+    // sepolia: {
+    //   id: 11155111,
+    //   rpc: SEPOLIA_RPCS.length > 0 ? SEPOLIA_RPCS : "https://ethereum-sepolia-rpc.publicnode.com",
+    //   pollingInterval: 300_000, // Poll every 5 minutes (testnet)
+    //   maxRequestsPerSecond: 2,
+    // },
   },
   contracts: {
     // Base Mainnet contracts
@@ -99,24 +100,25 @@ export default createConfig({
       address: BASE_CONTRACTS.POSITION_MANAGER as `0x${string}`,
       startBlock: POSITION_MANAGER_START_BLOCK,
     },
-    // Sepolia contracts
-    V4UtilsSepolia: {
-      chain: "sepolia",
-      abi: V4UtilsAbi,
-      address: SEPOLIA_CONTRACTS.V4_UTILS as `0x${string}`,
-      startBlock: SEPOLIA_START_BLOCK,
-    },
-    V4CompoundorSepolia: {
-      chain: "sepolia",
-      abi: V4CompoundorAbi,
-      address: SEPOLIA_CONTRACTS.V4_COMPOUNDOR as `0x${string}`,
-      startBlock: SEPOLIA_START_BLOCK,
-    },
-    V4AutoRangeSepolia: {
-      chain: "sepolia",
-      abi: V4AutoRangeAbi,
-      address: SEPOLIA_CONTRACTS.V4_AUTO_RANGE as `0x${string}`,
-      startBlock: SEPOLIA_START_BLOCK,
-    },
+    // Sepolia contracts - DISABLED to avoid RPC timeout issues
+    // Uncomment when needed for testnet
+    // V4UtilsSepolia: {
+    //   chain: "sepolia",
+    //   abi: V4UtilsAbi,
+    //   address: SEPOLIA_CONTRACTS.V4_UTILS as `0x${string}`,
+    //   startBlock: SEPOLIA_START_BLOCK,
+    // },
+    // V4CompoundorSepolia: {
+    //   chain: "sepolia",
+    //   abi: V4CompoundorAbi,
+    //   address: SEPOLIA_CONTRACTS.V4_COMPOUNDOR as `0x${string}`,
+    //   startBlock: SEPOLIA_START_BLOCK,
+    // },
+    // V4AutoRangeSepolia: {
+    //   chain: "sepolia",
+    //   abi: V4AutoRangeAbi,
+    //   address: SEPOLIA_CONTRACTS.V4_AUTO_RANGE as `0x${string}`,
+    //   startBlock: SEPOLIA_START_BLOCK,
+    // },
   },
 });
