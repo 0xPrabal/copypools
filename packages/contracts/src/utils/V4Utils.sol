@@ -182,25 +182,73 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
     {
         (PoolKey memory poolKey, int24 tickLower, int24 tickUpper,) = getPositionInfo(params.tokenId);
 
-        // Transfer input tokens
-        uint256 balance0 = _receiveTokens(poolKey.currency0, params.amount0Desired);
-        uint256 balance1 = _receiveTokens(poolKey.currency1, params.amount1Desired);
+        uint256 balance0;
+        uint256 balance1;
 
-        // If swap source is provided, execute swap
-        if (params.swapSourceAmount > 0) {
-            uint256 swapBalance = _receiveTokens(params.swapSourceCurrency, params.swapSourceAmount);
+        // Handle native ETH specially to avoid double-counting msg.value
+        // When swapSourceCurrency == currency0 == native ETH, msg.value covers both
+        bool swapSourceIsNative = params.swapSourceCurrency.isAddressZero();
+        bool currency0IsNative = poolKey.currency0.isAddressZero();
+        bool currency1IsNative = poolKey.currency1.isAddressZero();
+
+        if (params.swapSourceAmount > 0 && swapSourceIsNative && currency0IsNative) {
+            // Native ETH case: msg.value = amount0Desired + swapSourceAmount
+            // Don't receive separately - just track that we have msg.value total
+            balance0 = msg.value; // Will be updated after swap
+            balance1 = _receiveTokens(poolKey.currency1, params.amount1Desired);
+
+            // Execute swap with the swap portion
             _executeOptimalSwap(
                 params.swapSourceCurrency,
                 poolKey,
                 tickLower,
                 tickUpper,
-                swapBalance,
+                params.swapSourceAmount, // Use exact swap amount, not full msg.value
+                params.swapData,
+                params.maxSwapSlippage
+            );
+
+            // Update balances after swap
+            balance0 = _getBalance(poolKey.currency0);
+            balance1 = _getBalance(poolKey.currency1);
+        } else if (params.swapSourceAmount > 0 && swapSourceIsNative && currency1IsNative) {
+            // Native ETH is token1 and swap source
+            balance0 = _receiveTokens(poolKey.currency0, params.amount0Desired);
+            balance1 = msg.value; // Will be updated after swap
+
+            _executeOptimalSwap(
+                params.swapSourceCurrency,
+                poolKey,
+                tickLower,
+                tickUpper,
+                params.swapSourceAmount,
                 params.swapData,
                 params.maxSwapSlippage
             );
 
             balance0 = _getBalance(poolKey.currency0);
             balance1 = _getBalance(poolKey.currency1);
+        } else {
+            // Standard case: transfer input tokens separately
+            balance0 = _receiveTokens(poolKey.currency0, params.amount0Desired);
+            balance1 = _receiveTokens(poolKey.currency1, params.amount1Desired);
+
+            // If swap source is provided, execute swap
+            if (params.swapSourceAmount > 0) {
+                uint256 swapBalance = _receiveTokens(params.swapSourceCurrency, params.swapSourceAmount);
+                _executeOptimalSwap(
+                    params.swapSourceCurrency,
+                    poolKey,
+                    tickLower,
+                    tickUpper,
+                    swapBalance,
+                    params.swapData,
+                    params.maxSwapSlippage
+                );
+
+                balance0 = _getBalance(poolKey.currency0);
+                balance1 = _getBalance(poolKey.currency1);
+            }
         }
 
         // Calculate liquidity

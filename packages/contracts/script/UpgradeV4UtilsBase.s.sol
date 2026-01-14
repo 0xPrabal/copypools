@@ -5,7 +5,7 @@ import { Script, console } from "forge-std/Script.sol";
 import { V4Utils } from "../src/utils/V4Utils.sol";
 
 /// @title UpgradeV4UtilsBase
-/// @notice Upgrade V4Utils proxy on Base Mainnet with new collectFees function
+/// @notice Upgrade V4Utils proxy on Base Mainnet - fixes native ETH handling in swapAndIncreaseLiquidity
 contract UpgradeV4UtilsBase is Script {
     // Official Uniswap V4 Base Mainnet Addresses
     address constant POOL_MANAGER = 0x498581fF718922c3f8e6A244956aF099B2652b2b;
@@ -23,7 +23,7 @@ contract UpgradeV4UtilsBase is Script {
 
         console.log("==============================================");
         console.log("  Upgrading V4Utils on Base Mainnet");
-        console.log("  Adding collectFees function");
+        console.log("  Fix: Native ETH handling in swapAndIncreaseLiquidity");
         console.log("==============================================");
         console.log("Deployer:", deployer);
         console.log("Balance:", deployer.balance);
@@ -48,8 +48,8 @@ contract UpgradeV4UtilsBase is Script {
         console.log("==============================================");
         console.log("\nProxy Address (unchanged):", V4_UTILS_PROXY);
         console.log("New Implementation:", address(newV4UtilsImpl));
-        console.log("\nNew Functions Available:");
-        console.log("- collectFees(params) - Collect fees, get BOTH tokens (no swap)");
+        console.log("\nFix Applied:");
+        console.log("- swapAndIncreaseLiquidity now properly handles native ETH");
 
         vm.stopBroadcast();
     }
