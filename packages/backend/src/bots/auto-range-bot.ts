@@ -284,6 +284,7 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     }
 
     // Check if already rebalanced to newer position
+    recordStatus(tokenId, 'Checking rebalancedTo...');
     const rebalancedTo = await getRebalancedTo(tokenIdBigInt);
     if (rebalancedTo > 0n) {
       recordStatus(tokenId, `Skipped: Already rebalanced to ${rebalancedTo}`);
@@ -292,27 +293,32 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     }
 
     // Get position status
-    const positionStatus = await blockchain.getPositionStatus(tokenIdBigInt);
+    recordStatus(tokenId, 'Getting position status...');
+    const posStatus = await blockchain.getPositionStatus(tokenIdBigInt);
+    recordStatus(tokenId, 'Getting position info...');
     const positionInfo = await blockchain.getAutoRangePositionInfo(tokenIdBigInt);
 
     // Skip empty positions
     if (positionInfo.liquidity === 0n) {
+      recordStatus(tokenId, 'Skipped: 0 liquidity');
       botLogger.debug({ tokenId }, 'Position has 0 liquidity');
       return { rebalanced: false, decision: null };
     }
 
+    recordStatus(tokenId, `Analyzing: tick=${posStatus.currentTick}, range=[${posStatus.tickLower},${posStatus.tickUpper}]`);
+
     // Record price sample for volatility tracking
     const poolId = `${positionInfo.poolKey.currency0}-${positionInfo.poolKey.currency1}-${positionInfo.poolKey.fee}`;
-    recordPriceSample(poolId, positionStatus.currentTick);
+    recordPriceSample(poolId, posStatus.currentTick);
 
     // ============ SMART ANALYSIS ============
 
     // Analyze position
     const analysis = analyzePosition(
       tokenId,
-      positionStatus.currentTick,
-      positionStatus.tickLower,
-      positionStatus.tickUpper
+      posStatus.currentTick,
+      posStatus.tickLower,
+      posStatus.tickUpper
     );
 
     // Calculate volatility from history
@@ -374,7 +380,7 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
 
     // Estimate token amounts
     const { amount0, amount1 } = estimatePositionAmounts(
-      positionStatus.currentTick,
+      posStatus.currentTick,
       positionInfo.tickLower,
       positionInfo.tickUpper,
       positionInfo.liquidity
@@ -382,7 +388,7 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
 
     botLogger.info({
       tokenId,
-      currentTick: positionStatus.currentTick,
+      currentTick: posStatus.currentTick,
       oldRange: `[${positionInfo.tickLower}, ${positionInfo.tickUpper}]`,
       newRange: `[${newRange.tickLower}, ${newRange.tickUpper}]`,
       centerDrift: `${Math.round(analysis.centerDrift * 100)}%`,
@@ -391,7 +397,7 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
 
     // Calculate swap requirements
     const swapParams = calculateRebalanceSwap(
-      positionStatus.currentTick,
+      posStatus.currentTick,
       newRange.tickLower,
       newRange.tickUpper,
       positionInfo.poolKey.currency0,
@@ -404,7 +410,7 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     let swapData = '0x' as `0x${string}`;
     if (swapParams.needsSwap) {
       swapData = await getRebalanceSwapData(
-        positionStatus.currentTick,
+        posStatus.currentTick,
         newRange.tickLower,
         newRange.tickUpper,
         positionInfo.poolKey.currency0,
