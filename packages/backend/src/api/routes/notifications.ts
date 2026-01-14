@@ -182,9 +182,69 @@ router.get('/types/available', async (_req: Request, res: Response) => {
       { type: 'position_liquidatable', description: 'When a loan becomes liquidatable' },
       { type: 'compound_executed', description: 'When an auto-compound is executed' },
       { type: 'rebalance_executed', description: 'When an auto-rebalance is executed' },
+      { type: 'position_created', description: 'When a new position is created' },
+      { type: 'liquidity_increased', description: 'When liquidity is added to a position' },
+      { type: 'liquidity_decreased', description: 'When liquidity is removed from a position' },
+      { type: 'fees_collected', description: 'When fees are collected from a position' },
+      { type: 'position_closed', description: 'When a position is fully closed' },
+      { type: 'auto_compound_enabled', description: 'When auto-compound is enabled' },
+      { type: 'auto_compound_disabled', description: 'When auto-compound is disabled' },
+      { type: 'auto_range_enabled', description: 'When auto-range is enabled' },
+      { type: 'auto_range_disabled', description: 'When auto-range is disabled' },
     ],
     severities: ['info', 'warning', 'critical'],
   });
+});
+
+// Create a user action notification
+router.post('/:address/activity', async (req: Request, res: Response) => {
+  try {
+    const { address } = req.params;
+    const { type, title, message, positionId, txHash, data } = req.body;
+
+    // Validate required fields
+    if (!type || !title || !message) {
+      return res.status(400).json({ error: 'type, title, and message are required' });
+    }
+
+    // Validate notification type
+    const validUserTypes = [
+      'position_created',
+      'liquidity_increased',
+      'liquidity_decreased',
+      'fees_collected',
+      'position_closed',
+      'auto_compound_enabled',
+      'auto_compound_disabled',
+      'auto_range_enabled',
+      'auto_range_disabled',
+      'compound_executed',
+      'rebalance_executed',
+    ];
+
+    if (!validUserTypes.includes(type)) {
+      return res.status(400).json({
+        error: `Invalid notification type for user activity: ${type}`,
+        validTypes: validUserTypes,
+      });
+    }
+
+    const notification = await notifications.createNotification({
+      type,
+      severity: 'info',
+      title,
+      message,
+      owner: address,
+      positionId,
+      data: { ...data, txHash },
+    });
+
+    routeLogger.info({ address, type, positionId }, 'User activity notification created');
+    res.status(201).json(notification);
+  } catch (error) {
+    routeLogger.error({ error }, 'Failed to create activity notification');
+    res.status(500).json({ error: 'Failed to create notification' });
+  }
 });
 
 export { router as notificationsRouter };

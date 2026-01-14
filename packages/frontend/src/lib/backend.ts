@@ -421,6 +421,7 @@ export async function fetchV4Pools(options: {
 // ============ Notification Types ============
 
 export type NotificationType =
+  // Automated notifications
   | 'compound_profitable'
   | 'rebalance_needed'
   | 'position_out_of_range'
@@ -428,7 +429,17 @@ export type NotificationType =
   | 'gas_price_low'
   | 'position_liquidatable'
   | 'compound_executed'
-  | 'rebalance_executed';
+  | 'rebalance_executed'
+  // User action notifications
+  | 'position_created'
+  | 'liquidity_increased'
+  | 'liquidity_decreased'
+  | 'fees_collected'
+  | 'position_closed'
+  | 'auto_compound_enabled'
+  | 'auto_compound_disabled'
+  | 'auto_range_enabled'
+  | 'auto_range_disabled';
 
 export interface Notification {
   id: string;
@@ -467,5 +478,41 @@ export async function fetchNotifications(
   } catch (error) {
     console.error('Notifications fetch error:', error);
     return { notifications: [], unreadCount: 0 };
+  }
+}
+
+// Create an activity notification for user actions
+export async function createActivityNotification(
+  address: string,
+  params: {
+    type: NotificationType;
+    title: string;
+    message: string;
+    positionId?: string;
+    txHash?: string;
+    data?: Record<string, unknown>;
+  }
+): Promise<Notification | null> {
+  try {
+    const response = await fetch(
+      `${BACKEND_URL}/api/notifications/${address}/activity`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(params),
+      }
+    );
+
+    if (!response.ok) {
+      console.error('Failed to create activity notification');
+      return null;
+    }
+
+    return response.json();
+  } catch (error) {
+    console.error('Activity notification creation error:', error);
+    return null;
   }
 }

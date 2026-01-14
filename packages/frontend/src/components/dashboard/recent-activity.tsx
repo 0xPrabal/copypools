@@ -1,10 +1,11 @@
 'use client';
 
-import { RefreshCw, TrendingUp, Shield, AlertTriangle, Zap, DollarSign, Fuel, LucideIcon } from 'lucide-react';
+import { RefreshCw, TrendingUp, Shield, AlertTriangle, Zap, DollarSign, Fuel, Plus, Minus, X, Settings, LucideIcon } from 'lucide-react';
 import { useNotifications, getTimeAgo, ActivityItem as Activity } from '@/hooks/useNotifications';
 import { NotificationType } from '@/lib/backend';
 
 const activityIcons: Record<NotificationType, LucideIcon> = {
+  // Automated notifications
   compound_executed: RefreshCw,
   compound_profitable: Zap,
   rebalance_executed: TrendingUp,
@@ -13,9 +14,20 @@ const activityIcons: Record<NotificationType, LucideIcon> = {
   high_fees_accumulated: DollarSign,
   gas_price_low: Fuel,
   position_liquidatable: Shield,
+  // User action notifications
+  position_created: Plus,
+  liquidity_increased: Plus,
+  liquidity_decreased: Minus,
+  fees_collected: DollarSign,
+  position_closed: X,
+  auto_compound_enabled: Settings,
+  auto_compound_disabled: Settings,
+  auto_range_enabled: TrendingUp,
+  auto_range_disabled: TrendingUp,
 };
 
 const activityColors: Record<NotificationType, string> = {
+  // Automated notifications
   compound_executed: 'text-status-success bg-status-success/10',
   compound_profitable: 'text-status-success bg-status-success/10',
   rebalance_executed: 'text-brand-medium bg-brand-medium/10',
@@ -24,6 +36,16 @@ const activityColors: Record<NotificationType, string> = {
   high_fees_accumulated: 'text-status-success bg-status-success/10',
   gas_price_low: 'text-blue-400 bg-blue-500/10',
   position_liquidatable: 'text-status-error bg-status-error/10',
+  // User action notifications
+  position_created: 'text-status-success bg-status-success/10',
+  liquidity_increased: 'text-status-success bg-status-success/10',
+  liquidity_decreased: 'text-status-warning bg-status-warning/10',
+  fees_collected: 'text-status-success bg-status-success/10',
+  position_closed: 'text-gray-400 bg-gray-500/10',
+  auto_compound_enabled: 'text-brand-medium bg-brand-medium/10',
+  auto_compound_disabled: 'text-gray-400 bg-gray-500/10',
+  auto_range_enabled: 'text-brand-medium bg-brand-medium/10',
+  auto_range_disabled: 'text-gray-400 bg-gray-500/10',
 };
 
 function ActivityItemComponent({ activity }: { activity: Activity }) {

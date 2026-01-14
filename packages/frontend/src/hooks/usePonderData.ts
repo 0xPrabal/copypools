@@ -382,8 +382,8 @@ export function usePositions() {
       }
     },
     enabled: !!address,
-    staleTime: 2 * 60 * 1000, // Data fresh for 2 minutes
-    refetchInterval: 5 * 60 * 1000, // Refetch every 5 minutes
+    staleTime: 30 * 1000, // Data fresh for 30 seconds
+    refetchInterval: 30 * 1000, // Refetch every 30 seconds for real-time updates
   });
 }
 

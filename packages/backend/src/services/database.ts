@@ -973,6 +973,7 @@ export async function getPoolsLastSyncTime(chainId: number = 8453): Promise<Date
 // ============ Notifications Functions ============
 
 export type NotificationType =
+  // Automated notifications
   | 'compound_profitable'
   | 'rebalance_needed'
   | 'position_out_of_range'
@@ -980,7 +981,17 @@ export type NotificationType =
   | 'gas_price_low'
   | 'position_liquidatable'
   | 'compound_executed'
-  | 'rebalance_executed';
+  | 'rebalance_executed'
+  // User action notifications
+  | 'position_created'
+  | 'liquidity_increased'
+  | 'liquidity_decreased'
+  | 'fees_collected'
+  | 'position_closed'
+  | 'auto_compound_enabled'
+  | 'auto_compound_disabled'
+  | 'auto_range_enabled'
+  | 'auto_range_disabled';
 
 export interface DbNotification {
   id: string;

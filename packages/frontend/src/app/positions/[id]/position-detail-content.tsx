@@ -28,8 +28,10 @@ import { useTokenApproval } from '@/hooks/useTokenApproval';
 import { useNFTApproval } from '@/hooks/useNFTApproval';
 import { usePositions } from '@/hooks/usePonderData';
 import { useTokenPrices } from '@/hooks/useTokenPrices';
+import { useNotifications } from '@/hooks/useNotifications';
 import { SLIPPAGE_PRESETS } from '@/lib/slippage';
 import { getContracts } from '@/config/contracts';
+import { createActivityNotification } from '@/lib/backend';
 import { tickToPrice, tickToPercentage, formatPercentage, formatTickPrice, getPositionValueUsd, isFullRangePosition } from '@/utils/tickMath';
 import { ProfitabilityCalculator } from '@/components/position/profitability-calculator';
 import { FeeHarvester } from '@/components/position/fee-harvester';
@@ -219,6 +221,10 @@ export default function PositionDetailContent() {
   const [singleTokenAddress, setSingleTokenAddress] = useState<string>('');
   const [singleTokenAmount, setSingleTokenAmount] = useState('');
 
+  // Track last action for activity notifications
+  const [lastAction, setLastAction] = useState<{ type: string; message: string } | null>(null);
+  const { refetch: refetchNotifications } = useNotifications({ limit: 10 });
+
   // Calculate paired amount based on pool ratio (for increase liquidity)
   const calculatePairedAmount = useMemo(() => {
     if (!position) return null;
@@ -333,16 +339,58 @@ export default function PositionDetailContent() {
   const isSuccess = utilsSuccess || compoundSuccess || rangeSuccess || zapSuccess;
   const error = utilsError || compoundError || rangeError;
 
+  // Track previous success state to detect new successful transactions
+  const prevSuccessRef = useRef(false);
+
   // Refetch position data after successful transaction (Bug fix: position value not updating)
   useEffect(() => {
-    if (isSuccess) {
-      // Delay refetch slightly to allow blockchain state to update
-      const timer = setTimeout(() => {
-        refetchPositions();
-      }, 2000);
-      return () => clearTimeout(timer);
+    // Only trigger when isSuccess changes from false to true (new transaction completed)
+    if (isSuccess && !prevSuccessRef.current && address) {
+      console.log('[Position] Transaction successful, scheduling refetches...');
+
+      // Create activity notification if we have an action tracked
+      if (lastAction && position) {
+        createActivityNotification(address, {
+          type: lastAction.type as any,
+          title: lastAction.type.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+          message: lastAction.message,
+          positionId: position.tokenId,
+        }).then(() => {
+          console.log('[Position] Activity notification created');
+          refetchNotifications();
+        }).catch(err => {
+          console.error('[Position] Failed to create activity notification:', err);
+        });
+        setLastAction(null);
+      }
+
+      // Multiple refetches at different intervals to ensure data is updated
+      const timers = [
+        setTimeout(() => {
+          console.log('[Position] Refetch 1 (1s)');
+          refetchPositions();
+          refetchNotifications();
+        }, 1000),
+        setTimeout(() => {
+          console.log('[Position] Refetch 2 (3s)');
+          refetchPositions();
+        }, 3000),
+        setTimeout(() => {
+          console.log('[Position] Refetch 3 (6s)');
+          refetchPositions();
+        }, 6000),
+      ];
+
+      prevSuccessRef.current = true;
+
+      return () => timers.forEach(t => clearTimeout(t));
     }
-  }, [isSuccess, refetchPositions]);
+
+    // Reset the ref when isSuccess goes back to false (hook reset)
+    if (!isSuccess) {
+      prevSuccessRef.current = false;
+    }
+  }, [isSuccess, refetchPositions, refetchNotifications, address, lastAction, position]);
 
   if (positionsLoading) {
     return (
@@ -371,6 +419,11 @@ export default function PositionDetailContent() {
   const handleIncreaseLiquidity = async () => {
     if (!tokenId || !amount0 || !amount1) return;
 
+    setLastAction({
+      type: 'liquidity_increased',
+      message: `Added ${amount0} ${position.pool.token0.symbol} and ${amount1} ${position.pool.token1.symbol} to position #${position.tokenId}`,
+    });
+
     const amount0Desired = parseUnits(amount0, position.pool.token0.decimals);
     const amount1Desired = parseUnits(amount1, position.pool.token1.decimals);
     const slippageMultiplier = BigInt(10000 + slippage);
@@ -396,6 +449,11 @@ export default function PositionDetailContent() {
 
     const isToken0 = singleTokenAddress.toLowerCase() === position.pool.token0.address.toLowerCase();
     const inputTokenData = isToken0 ? position.pool.token0 : position.pool.token1;
+
+    setLastAction({
+      type: 'liquidity_increased',
+      message: `Added ${singleTokenAmount} ${inputTokenData.symbol} to position #${position.tokenId}`,
+    });
 
     const inputToken: ZapToken = {
       symbol: inputTokenData.symbol,
@@ -437,6 +495,11 @@ export default function PositionDetailContent() {
   const handleDecreaseLiquidity = async () => {
     if (!tokenId || !position.liquidity) return;
 
+    setLastAction({
+      type: decreasePercent === 100 ? 'position_closed' : 'liquidity_decreased',
+      message: `Removed ${decreasePercent}% liquidity from position #${position.tokenId}`,
+    });
+
     // For 100% removal, use exact liquidity to avoid rounding issues
     const liquidityToRemove = decreasePercent === 100
       ? BigInt(position.liquidity)
@@ -455,6 +518,11 @@ export default function PositionDetailContent() {
   const handleCollectFees = async () => {
     if (!tokenId) return;
 
+    setLastAction({
+      type: 'fees_collected',
+      message: `Collected fees from position #${position.tokenId}`,
+    });
+
     await collectFees({
       tokenId,
       deadline: BigInt(Math.floor(Date.now() / 1000) + 1800),
@@ -469,6 +537,11 @@ export default function PositionDetailContent() {
       await approveNFTForCompoundor();
       return; // User needs to click again after approval
     }
+
+    setLastAction({
+      type: 'auto_compound_enabled',
+      message: `Enabled auto-compound for position #${position.tokenId}`,
+    });
 
     await registerCompound({
       tokenId,
@@ -489,16 +562,32 @@ export default function PositionDetailContent() {
       return; // User needs to click again after approval
     }
 
+    setLastAction({
+      type: 'compound_executed',
+      message: `Compounded fees for position #${position.tokenId}`,
+    });
+
     await selfCompound(tokenId);
   };
 
   const handleDisableCompound = async () => {
     if (!tokenId) return;
+
+    setLastAction({
+      type: 'auto_compound_disabled',
+      message: `Disabled auto-compound for position #${position.tokenId}`,
+    });
+
     await unregisterCompound(tokenId);
   };
 
   const handleEnableAutoRange = async () => {
     if (!tokenId) return;
+
+    setLastAction({
+      type: 'auto_range_enabled',
+      message: `Enabled auto-range for position #${position.tokenId}`,
+    });
 
     await configureRange({
       tokenId,
@@ -516,11 +605,23 @@ export default function PositionDetailContent() {
 
   const handleExecuteRebalance = async () => {
     if (!tokenId) return;
+
+    setLastAction({
+      type: 'rebalance_executed',
+      message: `Rebalanced position #${position.tokenId}`,
+    });
+
     await executeRebalance(tokenId);
   };
 
   const handleDisableAutoRange = async () => {
     if (!tokenId) return;
+
+    setLastAction({
+      type: 'auto_range_disabled',
+      message: `Disabled auto-range for position #${position.tokenId}`,
+    });
+
     await removeRange(tokenId);
   };
 

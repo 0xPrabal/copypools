@@ -6,6 +6,7 @@ import { fetchNotifications, Notification, NotificationType } from '@/lib/backen
 
 // Map notification types to user-friendly display labels
 export const NOTIFICATION_LABELS: Record<NotificationType, string> = {
+  // Automated notifications
   compound_executed: 'Fees Compounded',
   rebalance_executed: 'Position Rebalanced',
   position_out_of_range: 'Out of Range',
@@ -14,6 +15,16 @@ export const NOTIFICATION_LABELS: Record<NotificationType, string> = {
   high_fees_accumulated: 'High Fees',
   gas_price_low: 'Low Gas',
   position_liquidatable: 'Liquidation Risk',
+  // User action notifications
+  position_created: 'Position Created',
+  liquidity_increased: 'Liquidity Added',
+  liquidity_decreased: 'Liquidity Removed',
+  fees_collected: 'Fees Collected',
+  position_closed: 'Position Closed',
+  auto_compound_enabled: 'Auto-Compound Enabled',
+  auto_compound_disabled: 'Auto-Compound Disabled',
+  auto_range_enabled: 'Auto-Range Enabled',
+  auto_range_disabled: 'Auto-Range Disabled',
 };
 
 // Activity item for UI display
