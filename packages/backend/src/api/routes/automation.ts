@@ -269,10 +269,21 @@ router.get('/status', async (req: Request, res: Response) => {
       }
     }
 
+    // Get auto-range bot state
+    let knownPositions: string[] = [];
+    let lastScannedBlock = '0';
+    try {
+      knownPositions = getKnownPositions();
+      lastScannedBlock = getLastScannedBlock();
+    } catch (e) {
+      // Bot might not be initialized yet
+    }
+
     res.json({
       botEnabled: config.BOT_ENABLED,
       walletConfigured,
       walletAddress: walletAddress ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : null,
+      walletAddressFull: walletAddress,
       walletBalance,
       chainId: config.CHAIN_ID,
       intervals: {
@@ -284,6 +295,11 @@ router.get('/status', async (req: Request, res: Response) => {
         v4Compoundor: blockchain.contracts.v4Compoundor ? 'configured' : 'not configured',
         v4AutoRange: blockchain.contracts.v4AutoRange ? 'configured' : 'not configured',
         v4AutoExit: blockchain.contracts.v4AutoExit ? 'configured' : 'not configured',
+      },
+      autoRangeBot: {
+        knownPositionsCount: knownPositions.length,
+        knownPositions: knownPositions,
+        lastScannedBlock: lastScannedBlock,
       },
     });
   } catch (error) {
