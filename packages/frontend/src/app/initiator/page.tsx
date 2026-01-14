@@ -199,6 +199,7 @@ export default function InitiatorPage() {
     isApproved: isToken0Approved,
     isPending: isPendingApproval0,
     isConfirming: isConfirmingApproval0,
+    isSuccess: isSuccessApproval0,
     refetch: refetchApproval0,
   } = useTokenApproval(token0 as `0x${string}`, CONTRACTS.V4_UTILS);
 
@@ -207,8 +208,27 @@ export default function InitiatorPage() {
     isApproved: isToken1Approved,
     isPending: isPendingApproval1,
     isConfirming: isConfirmingApproval1,
+    isSuccess: isSuccessApproval1,
     refetch: refetchApproval1,
   } = useTokenApproval(token1 as `0x${string}`, CONTRACTS.V4_UTILS);
+
+  // Refetch allowance when approval transaction is confirmed
+  useEffect(() => {
+    if (isSuccessApproval0) {
+      // Refetch immediately and again after a short delay to ensure blockchain state is updated
+      refetchApproval0();
+      const timer = setTimeout(() => refetchApproval0(), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [isSuccessApproval0, refetchApproval0]);
+
+  useEffect(() => {
+    if (isSuccessApproval1) {
+      refetchApproval1();
+      const timer = setTimeout(() => refetchApproval1(), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [isSuccessApproval1, refetchApproval1]);
 
   // Pool info
   const sortedToken0 = token0 && token1 && token0.toLowerCase() < token1.toLowerCase() ? token0 : token1;
