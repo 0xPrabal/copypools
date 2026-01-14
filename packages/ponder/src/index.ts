@@ -422,6 +422,141 @@ ponder.on("V4Utils:FeesCollected", async ({ event, context }) => {
   }
 });
 
+// Handle Quick Rebalance (range move) via V4Utils
+// Event: RangeMoved(uint256 indexed oldTokenId, uint256 indexed newTokenId, int24 newTickLower, int24 newTickUpper)
+ponder.on("V4Utils:RangeMoved", async ({ event, context }) => {
+  try {
+    const { oldTokenId, newTokenId, newTickLower, newTickUpper } = event.args;
+    const timestamp = event.block.timestamp.toString();
+    const blockNumber = event.block.number.toString();
+
+    console.log(`V4Utils:RangeMoved - Old: ${oldTokenId}, New: ${newTokenId}, Range: [${newTickLower}, ${newTickUpper}]`);
+
+    // Update old position to show 0 liquidity and mark as closed
+    const oldPosId = oldTokenId.toString();
+    const oldPos = await context.db.find(position, { id: oldPosId });
+    if (oldPos) {
+      await context.db.update(position, { id: oldPosId }).set({
+        liquidity: "0",
+        closedAtTimestamp: timestamp,
+      });
+      console.log(`Updated old position ${oldPosId} liquidity to 0`);
+    }
+
+    // Create or update new position record
+    const newPosId = newTokenId.toString();
+    const existingNewPos = await context.db.find(position, { id: newPosId });
+
+    if (existingNewPos) {
+      // Update existing position with new tick range
+      await context.db.update(position, { id: newPosId }).set({
+        tickLower: Number(newTickLower),
+        tickUpper: Number(newTickUpper),
+      });
+      console.log(`Updated new position ${newPosId} tick range`);
+    } else if (oldPos) {
+      // Create new position record from old position data
+      try {
+        await context.db.insert(position).values({
+          id: newPosId,
+          tokenId: newTokenId.toString(),
+          owner: oldPos.owner,
+          poolId: oldPos.poolId,
+          tickLower: Number(newTickLower),
+          tickUpper: Number(newTickUpper),
+          liquidity: oldPos.liquidity, // Will be updated by Transfer event or on-chain fetch
+          createdAtTimestamp: timestamp,
+          createdAtBlockNumber: blockNumber,
+        });
+        console.log(`Created new position ${newPosId} from old position ${oldPosId}`);
+      } catch (err: any) {
+        if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
+          throw err;
+        }
+      }
+    }
+
+    // Transfer any automation configs from old to new position
+    // Transfer range config if exists
+    const oldRangeConfig = await context.db.find(rangeConfig, { id: `range-${oldPosId}` });
+    if (oldRangeConfig && oldRangeConfig.enabled) {
+      const newConfigId = `range-${newPosId}`;
+      const existingNewConfig = await context.db.find(rangeConfig, { id: newConfigId });
+
+      if (!existingNewConfig) {
+        try {
+          await context.db.insert(rangeConfig).values({
+            id: newConfigId,
+            positionId: newPosId,
+            enabled: true,
+            lowerDelta: oldRangeConfig.lowerDelta,
+            upperDelta: oldRangeConfig.upperDelta,
+            rebalanceThreshold: oldRangeConfig.rebalanceThreshold,
+            minRebalanceInterval: oldRangeConfig.minRebalanceInterval,
+            collectFeesOnRebalance: oldRangeConfig.collectFeesOnRebalance,
+            maxSwapSlippage: oldRangeConfig.maxSwapSlippage,
+            totalRebalances: 0,
+            lastRebalanceTimestamp: timestamp,
+          });
+          console.log(`Transferred range config from ${oldPosId} to ${newPosId}`);
+        } catch (err: any) {
+          if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
+            throw err;
+          }
+        }
+      }
+
+      // Disable old range config
+      await context.db.update(rangeConfig, { id: `range-${oldPosId}` }).set({
+        enabled: false,
+      });
+    }
+
+    // Transfer compound config if exists
+    const oldCompoundConfig = await context.db.find(compoundConfig, { id: `compound-${oldPosId}` });
+    if (oldCompoundConfig && oldCompoundConfig.enabled) {
+      const newCompoundId = `compound-${newPosId}`;
+      const existingNewCompound = await context.db.find(compoundConfig, { id: newCompoundId });
+
+      if (!existingNewCompound) {
+        try {
+          await context.db.insert(compoundConfig).values({
+            id: newCompoundId,
+            positionId: newPosId,
+            enabled: true,
+            minCompoundInterval: oldCompoundConfig.minCompoundInterval,
+            minRewardAmount: oldCompoundConfig.minRewardAmount,
+            totalCompounds: 0,
+            lastCompoundTimestamp: timestamp,
+          });
+          console.log(`Transferred compound config from ${oldPosId} to ${newPosId}`);
+        } catch (err: any) {
+          if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
+            throw err;
+          }
+        }
+      }
+
+      // Disable old compound config
+      await context.db.update(compoundConfig, { id: `compound-${oldPosId}` }).set({
+        enabled: false,
+      });
+    }
+
+    // Update daily stats
+    const daily = await getOrCreateDailyStats(context, event.block.timestamp);
+    if (daily) {
+      await context.db.update(dailyStats, { id: daily.id }).set({
+        rebalancesExecuted: daily.rebalancesExecuted + 1,
+      });
+    }
+
+  } catch (error) {
+    console.error(`Error handling V4Utils:RangeMoved for oldTokenId ${event.args.oldTokenId}:`, error);
+    throw error;
+  }
+});
+
 // ============ V4Compoundor Event Handlers ============
 
 // Handle position registration for compounding

@@ -241,10 +241,10 @@ export async function getRebalanceablePositions(limit = 100) {
        rc.min_rebalance_interval as "minRebalanceInterval",
        rc.last_rebalance_timestamp as "lastRebalanceTimestamp",
        rc.max_swap_slippage as "maxSwapSlippage",
-       p.token_id,
-       p.tick_lower,
-       p.tick_upper,
-       p.pool_id
+       p.token_id as "tokenId",
+       p.tick_lower as "tickLower",
+       p.tick_upper as "tickUpper",
+       p.pool_id as "poolId"
      FROM range_config rc
      JOIN position p ON rc.position_id = p.token_id
      WHERE rc.enabled = true
