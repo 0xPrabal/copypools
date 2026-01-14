@@ -5,7 +5,7 @@ import { Script, console } from "forge-std/Script.sol";
 import { V4Utils } from "../src/utils/V4Utils.sol";
 
 /// @title UpgradeV4UtilsBase
-/// @notice Upgrade V4Utils proxy on Base Mainnet - fixes native ETH handling in swapAndIncreaseLiquidity
+/// @notice Upgrade V4Utils proxy on Base Mainnet - fixes WETH unwrap in SwapLib for single-token zap
 contract UpgradeV4UtilsBase is Script {
     // Official Uniswap V4 Base Mainnet Addresses
     address constant POOL_MANAGER = 0x498581fF718922c3f8e6A244956aF099B2652b2b;
@@ -23,7 +23,7 @@ contract UpgradeV4UtilsBase is Script {
 
         console.log("==============================================");
         console.log("  Upgrading V4Utils on Base Mainnet");
-        console.log("  Fix: Native ETH handling in swapAndIncreaseLiquidity");
+        console.log("  Fix: WETH unwrap in SwapLib for single-token zap");
         console.log("==============================================");
         console.log("Deployer:", deployer);
         console.log("Balance:", deployer.balance);
@@ -49,7 +49,8 @@ contract UpgradeV4UtilsBase is Script {
         console.log("\nProxy Address (unchanged):", V4_UTILS_PROXY);
         console.log("New Implementation:", address(newV4UtilsImpl));
         console.log("\nFix Applied:");
-        console.log("- swapAndIncreaseLiquidity now properly handles native ETH");
+        console.log("- SwapLib now unwraps WETH to native ETH when target is native");
+        console.log("- Fixes single-token zap (USDC -> ETH/USDC position)");
 
         vm.stopBroadcast();
     }

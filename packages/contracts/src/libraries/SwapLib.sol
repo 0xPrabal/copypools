@@ -51,11 +51,18 @@ library SwapLib {
     function executeSwap(SwapParams memory params) internal returns (uint256 amountOut) {
         if (params.amountIn == 0) return 0;
 
+        // When target is native ETH, DEX aggregators return WETH, so we track WETH balance
+        // and unwrap it after the swap
+        bool targetIsNative = params.toCurrency.isAddressZero();
+        address targetToken = targetIsNative ? params.weth9 : Currency.unwrap(params.toCurrency);
+
         uint256 balanceBefore;
-        if (params.toCurrency.isAddressZero()) {
-            balanceBefore = address(this).balance;
+        if (targetIsNative) {
+            // Track WETH balance since swap returns WETH
+            require(params.weth9 != address(0), "WETH9 not set");
+            balanceBefore = IERC20(params.weth9).balanceOf(address(this));
         } else {
-            balanceBefore = IERC20(Currency.unwrap(params.toCurrency)).balanceOf(address(this));
+            balanceBefore = IERC20(targetToken).balanceOf(address(this));
         }
 
         // Handle native ETH -> wrap to WETH for external routers
@@ -78,10 +85,15 @@ library SwapLib {
         if (!success) revert SwapFailed();
 
         // Calculate amount received
-        if (params.toCurrency.isAddressZero()) {
-            amountOut = address(this).balance - balanceBefore;
+        if (targetIsNative) {
+            // Swap returned WETH, calculate how much we received
+            amountOut = IERC20(params.weth9).balanceOf(address(this)) - balanceBefore;
+            // Unwrap WETH to native ETH
+            if (amountOut > 0) {
+                IWETH9(params.weth9).withdraw(amountOut);
+            }
         } else {
-            amountOut = IERC20(Currency.unwrap(params.toCurrency)).balanceOf(address(this)) - balanceBefore;
+            amountOut = IERC20(targetToken).balanceOf(address(this)) - balanceBefore;
         }
 
         if (amountOut < params.minAmountOut) {
