@@ -295,15 +295,30 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     // Get position status
     recordStatus(tokenId, 'Getting position status...');
     const posStatus = await blockchain.getPositionStatus(tokenIdBigInt);
-    recordStatus(tokenId, 'Getting position info...');
-    const positionInfo = await blockchain.getAutoRangePositionInfo(tokenIdBigInt);
+
+    // Get REAL liquidity from PositionManager (not from V4AutoRange which may have stale data)
+    recordStatus(tokenId, 'Getting liquidity from PositionManager...');
+    let realLiquidity: bigint;
+    try {
+      realLiquidity = await blockchain.getPositionLiquidity(tokenIdBigInt);
+    } catch (error) {
+      recordStatus(tokenId, 'Error: Could not get liquidity from PositionManager');
+      botLogger.error({ tokenId, error }, 'Failed to get position liquidity');
+      return { rebalanced: false, decision: null };
+    }
 
     // Skip empty positions
-    if (positionInfo.liquidity === 0n) {
-      recordStatus(tokenId, 'Skipped: 0 liquidity');
+    if (realLiquidity === 0n) {
+      recordStatus(tokenId, 'Skipped: 0 liquidity (verified from PositionManager)');
       botLogger.debug({ tokenId }, 'Position has 0 liquidity');
       return { rebalanced: false, decision: null };
     }
+
+    recordStatus(tokenId, `Liquidity: ${realLiquidity.toString()}`);
+
+    // Get V4AutoRange info for poolKey (needed for swap calculations)
+    recordStatus(tokenId, 'Getting position info from V4AutoRange...');
+    const positionInfo = await blockchain.getAutoRangePositionInfo(tokenIdBigInt);
 
     recordStatus(tokenId, `Analyzing: tick=${posStatus.currentTick}, range=[${posStatus.tickLower},${posStatus.tickUpper}]`);
 
@@ -378,12 +393,12 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     // Get new range
     const newRange = await blockchain.calculateOptimalRange(tokenIdBigInt);
 
-    // Estimate token amounts
+    // Estimate token amounts (use real liquidity from PositionManager)
     const { amount0, amount1 } = estimatePositionAmounts(
       posStatus.currentTick,
       positionInfo.tickLower,
       positionInfo.tickUpper,
-      positionInfo.liquidity
+      realLiquidity
     );
 
     botLogger.info({
