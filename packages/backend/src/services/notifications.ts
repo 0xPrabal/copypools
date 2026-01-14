@@ -2,10 +2,23 @@ import { logger } from '../utils/logger.js';
 import * as subgraph from './subgraph.js';
 import * as blockchain from './blockchain.js';
 import * as analytics from './analytics.js';
+import {
+  createDbNotification,
+  getDbNotifications,
+  markNotificationAsRead,
+  markAllNotificationsAsRead,
+  getUnreadNotificationCount,
+  cleanupOldNotifications,
+  type DbNotification,
+  type NotificationType,
+} from './database.js';
 
 const notificationLogger = logger.child({ module: 'notifications' });
 
-// Types
+// Re-export NotificationType from database
+export { NotificationType };
+
+// Types - compatible with database schema
 export interface Notification {
   id: string;
   type: NotificationType;
@@ -19,18 +32,7 @@ export interface Notification {
   read: boolean;
 }
 
-export type NotificationType =
-  | 'compound_profitable'
-  | 'rebalance_needed'
-  | 'position_out_of_range'
-  | 'high_fees_accumulated'
-  | 'gas_price_low'
-  | 'position_liquidatable'
-  | 'compound_executed'
-  | 'rebalance_executed';
-
-// In-memory notification store (in production, use Redis or database)
-const notificationStore: Map<string, Notification[]> = new Map();
+// Webhook subscriptions still in-memory (can be migrated to DB later if needed)
 const webhookSubscriptions: Map<string, WebhookSubscription[]> = new Map();
 
 export interface WebhookSubscription {
@@ -43,73 +45,75 @@ export interface WebhookSubscription {
   createdAt: number;
 }
 
-// Create notification
-export function createNotification(params: Omit<Notification, 'id' | 'timestamp' | 'read'>): Notification {
+// Create notification - stores in database
+export async function createNotification(params: Omit<Notification, 'id' | 'timestamp' | 'read'>): Promise<Notification> {
+  const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const owner = params.owner || 'global';
+
+  // Store in database
+  const dbNotification = await createDbNotification({
+    id,
+    type: params.type,
+    severity: params.severity,
+    title: params.title,
+    message: params.message,
+    positionId: params.positionId || null,
+    owner: owner.toLowerCase(),
+    data: params.data || null,
+    read: false,
+  });
+
   const notification: Notification = {
     ...params,
-    id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-    timestamp: Date.now(),
+    id,
+    timestamp: dbNotification?.timestamp.getTime() || Date.now(),
     read: false,
   };
-
-  // Store notification
-  const owner = params.owner || 'global';
-  const existing = notificationStore.get(owner) || [];
-  existing.unshift(notification);
-
-  // Keep only last 100 notifications per user
-  if (existing.length > 100) {
-    existing.pop();
-  }
-
-  notificationStore.set(owner, existing);
 
   // Trigger webhooks
   triggerWebhooks(notification);
 
-  notificationLogger.info({ notification }, 'Notification created');
+  notificationLogger.info({ notificationId: id, owner, type: params.type }, 'Notification created');
 
   return notification;
 }
 
-// Get notifications for a user
-export function getNotifications(owner: string, limit = 50): Notification[] {
-  const userNotifications = notificationStore.get(owner) || [];
-  const globalNotifications = notificationStore.get('global') || [];
+// Get notifications for a user from database
+export async function getNotifications(owner: string, limit = 50): Promise<Notification[]> {
+  const dbNotifications = await getDbNotifications(owner, limit);
 
-  return [...userNotifications, ...globalNotifications]
-    .sort((a, b) => b.timestamp - a.timestamp)
-    .slice(0, limit);
+  return dbNotifications.map(dbNotif => ({
+    id: dbNotif.id,
+    type: dbNotif.type,
+    severity: dbNotif.severity,
+    title: dbNotif.title,
+    message: dbNotif.message,
+    positionId: dbNotif.positionId || undefined,
+    owner: dbNotif.owner,
+    data: dbNotif.data || undefined,
+    timestamp: dbNotif.timestamp.getTime(),
+    read: dbNotif.read,
+  }));
 }
 
-// Mark notification as read
-export function markAsRead(owner: string, notificationId: string): boolean {
-  const notifications = notificationStore.get(owner);
-  if (!notifications) return false;
-
-  const notification = notifications.find((n) => n.id === notificationId);
-  if (notification) {
-    notification.read = true;
-    return true;
-  }
-
-  return false;
+// Mark notification as read in database
+export async function markAsRead(owner: string, notificationId: string): Promise<boolean> {
+  return markNotificationAsRead(owner, notificationId);
 }
 
-// Mark all as read
-export function markAllAsRead(owner: string): number {
-  const notifications = notificationStore.get(owner);
-  if (!notifications) return 0;
+// Mark all as read in database
+export async function markAllAsRead(owner: string): Promise<number> {
+  return markAllNotificationsAsRead(owner);
+}
 
-  let count = 0;
-  notifications.forEach((n) => {
-    if (!n.read) {
-      n.read = true;
-      count++;
-    }
-  });
+// Get unread count for a user
+export async function getUnreadCount(owner: string): Promise<number> {
+  return getUnreadNotificationCount(owner);
+}
 
-  return count;
+// Cleanup old notifications (call periodically)
+export async function cleanup(daysOld: number = 30): Promise<number> {
+  return cleanupOldNotifications(daysOld);
 }
 
 // Check for compound opportunities and create notifications
@@ -125,7 +129,7 @@ export async function checkCompoundOpportunities(): Promise<void> {
         const profitability = await analytics.checkCompoundProfitability(config.positionId);
 
         if (profitability.isProfitable) {
-          createNotification({
+          await createNotification({
             type: 'compound_profitable',
             severity: 'info',
             title: 'Compounding Profitable',
@@ -160,7 +164,7 @@ export async function checkRebalanceNeeds(): Promise<void> {
         const rebalanceCheck = await analytics.checkRebalanceNeed(config.positionId);
 
         if (rebalanceCheck.needsRebalance) {
-          createNotification({
+          await createNotification({
             type: 'rebalance_needed',
             severity: 'warning',
             title: 'Rebalance Recommended',
@@ -262,6 +266,7 @@ export async function runNotificationChecks(): Promise<void> {
   await Promise.all([
     checkCompoundOpportunities(),
     checkRebalanceNeeds(),
+    cleanup(30), // Clean up notifications older than 30 days
   ]);
 
   notificationLogger.info('Notification checks completed');

@@ -234,6 +234,9 @@ export async function initializeDatabase(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_v4_pools_chain ON v4_pools(chain_id)
     `);
 
+    // Initialize notifications table
+    await initializeNotificationsTable();
+
     dbLogger.info('Database schema initialized successfully');
   } catch (error) {
     dbLogger.error({ error }, 'Failed to initialize database schema');
@@ -964,6 +967,233 @@ export async function getPoolsLastSyncTime(chainId: number = 8453): Promise<Date
   } catch (error) {
     dbLogger.error({ error }, 'Failed to get pools last sync time');
     return null;
+  }
+}
+
+// ============ Notifications Functions ============
+
+export type NotificationType =
+  | 'compound_profitable'
+  | 'rebalance_needed'
+  | 'position_out_of_range'
+  | 'high_fees_accumulated'
+  | 'gas_price_low'
+  | 'position_liquidatable'
+  | 'compound_executed'
+  | 'rebalance_executed';
+
+export interface DbNotification {
+  id: string;
+  type: NotificationType;
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  message: string;
+  positionId: string | null;
+  owner: string;
+  data: Record<string, unknown> | null;
+  timestamp: Date;
+  read: boolean;
+}
+
+// Initialize notifications table (called from initializeDatabase)
+export async function initializeNotificationsTable(): Promise<void> {
+  if (!pool) {
+    return;
+  }
+
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id VARCHAR(64) PRIMARY KEY,
+        type VARCHAR(32) NOT NULL,
+        severity VARCHAR(16) NOT NULL DEFAULT 'info',
+        title VARCHAR(256) NOT NULL,
+        message TEXT NOT NULL,
+        position_id VARCHAR(78),
+        owner VARCHAR(42) NOT NULL,
+        data JSONB,
+        timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        read BOOLEAN DEFAULT false
+      )
+    `);
+
+    // Create indexes for notifications
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_notifications_owner
+      ON notifications(LOWER(owner))
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_notifications_owner_timestamp
+      ON notifications(LOWER(owner), timestamp DESC)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_notifications_type
+      ON notifications(type)
+    `);
+
+    dbLogger.info('Notifications table initialized');
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to initialize notifications table');
+  }
+}
+
+// Create a notification in the database
+export async function createDbNotification(notification: Omit<DbNotification, 'timestamp'>): Promise<DbNotification | null> {
+  if (!pool) {
+    return null;
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO notifications (id, type, severity, title, message, position_id, owner, data, read, timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6, LOWER($7), $8, $9, NOW())
+       RETURNING id, type, severity, title, message, position_id, owner, data, timestamp, read`,
+      [
+        notification.id,
+        notification.type,
+        notification.severity,
+        notification.title,
+        notification.message,
+        notification.positionId,
+        notification.owner,
+        notification.data ? JSON.stringify(notification.data) : null,
+        notification.read,
+      ]
+    );
+
+    const row = result.rows[0];
+    return {
+      id: row.id,
+      type: row.type,
+      severity: row.severity,
+      title: row.title,
+      message: row.message,
+      positionId: row.position_id,
+      owner: row.owner,
+      data: row.data,
+      timestamp: row.timestamp,
+      read: row.read,
+    };
+  } catch (error) {
+    dbLogger.error({ error, notificationId: notification.id }, 'Failed to create notification');
+    return null;
+  }
+}
+
+// Get notifications for a user from database
+export async function getDbNotifications(owner: string, limit: number = 50): Promise<DbNotification[]> {
+  if (!pool) {
+    return [];
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, type, severity, title, message, position_id, owner, data, timestamp, read
+       FROM notifications
+       WHERE LOWER(owner) = LOWER($1) OR LOWER(owner) = 'global'
+       ORDER BY timestamp DESC
+       LIMIT $2`,
+      [owner, limit]
+    );
+
+    return result.rows.map(row => ({
+      id: row.id,
+      type: row.type,
+      severity: row.severity,
+      title: row.title,
+      message: row.message,
+      positionId: row.position_id,
+      owner: row.owner,
+      data: row.data,
+      timestamp: row.timestamp,
+      read: row.read,
+    }));
+  } catch (error) {
+    dbLogger.error({ error, owner }, 'Failed to get notifications');
+    return [];
+  }
+}
+
+// Mark a notification as read
+export async function markNotificationAsRead(owner: string, notificationId: string): Promise<boolean> {
+  if (!pool) {
+    return false;
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE notifications
+       SET read = true
+       WHERE id = $1 AND LOWER(owner) = LOWER($2)`,
+      [notificationId, owner]
+    );
+    return (result.rowCount ?? 0) > 0;
+  } catch (error) {
+    dbLogger.error({ error, notificationId, owner }, 'Failed to mark notification as read');
+    return false;
+  }
+}
+
+// Mark all notifications as read for a user
+export async function markAllNotificationsAsRead(owner: string): Promise<number> {
+  if (!pool) {
+    return 0;
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE notifications
+       SET read = true
+       WHERE LOWER(owner) = LOWER($1) AND read = false`,
+      [owner]
+    );
+    return result.rowCount ?? 0;
+  } catch (error) {
+    dbLogger.error({ error, owner }, 'Failed to mark all notifications as read');
+    return 0;
+  }
+}
+
+// Delete old notifications (cleanup job)
+export async function cleanupOldNotifications(daysOld: number = 30): Promise<number> {
+  if (!pool) {
+    return 0;
+  }
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM notifications
+       WHERE timestamp < NOW() - make_interval(days => $1)`,
+      [daysOld]
+    );
+    const deleted = result.rowCount ?? 0;
+    if (deleted > 0) {
+      dbLogger.info({ deleted, daysOld }, 'Cleaned up old notifications');
+    }
+    return deleted;
+  } catch (error) {
+    dbLogger.error({ error, daysOld }, 'Failed to cleanup old notifications');
+    return 0;
+  }
+}
+
+// Get unread notification count for a user
+export async function getUnreadNotificationCount(owner: string): Promise<number> {
+  if (!pool) {
+    return 0;
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT COUNT(*) as count
+       FROM notifications
+       WHERE (LOWER(owner) = LOWER($1) OR LOWER(owner) = 'global') AND read = false`,
+      [owner]
+    );
+    return parseInt(result.rows[0].count, 10);
+  } catch (error) {
+    dbLogger.error({ error, owner }, 'Failed to get unread notification count');
+    return 0;
   }
 }
 

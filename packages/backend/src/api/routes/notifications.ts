@@ -11,11 +11,12 @@ router.get('/:address', async (req: Request, res: Response) => {
     const { address } = req.params;
     const { limit = '50' } = req.query;
 
-    const userNotifications = notifications.getNotifications(address, parseInt(limit as string));
+    const userNotifications = await notifications.getNotifications(address, parseInt(limit as string));
+    const unreadCount = await notifications.getUnreadCount(address);
 
     res.json({
       notifications: userNotifications,
-      unreadCount: userNotifications.filter((n) => !n.read).length,
+      unreadCount,
     });
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get notifications');
@@ -27,7 +28,7 @@ router.get('/:address', async (req: Request, res: Response) => {
 router.post('/:address/read/:notificationId', async (req: Request, res: Response) => {
   try {
     const { address, notificationId } = req.params;
-    const success = notifications.markAsRead(address, notificationId);
+    const success = await notifications.markAsRead(address, notificationId);
 
     if (success) {
       res.json({ success: true });
@@ -44,7 +45,7 @@ router.post('/:address/read/:notificationId', async (req: Request, res: Response
 router.post('/:address/read-all', async (req: Request, res: Response) => {
   try {
     const { address } = req.params;
-    const count = notifications.markAllAsRead(address);
+    const count = await notifications.markAllAsRead(address);
 
     res.json({ success: true, markedCount: count });
   } catch (error) {
@@ -153,7 +154,7 @@ router.post('/:address/webhooks/:webhookId/test', async (req: Request, res: Resp
     }
 
     // Create a test notification
-    notifications.createNotification({
+    await notifications.createNotification({
       type: 'compound_profitable',
       severity: 'info',
       title: 'Test Notification',
