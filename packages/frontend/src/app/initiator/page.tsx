@@ -435,7 +435,11 @@ export default function InitiatorPage() {
             log.topics[0] === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
           );
           if (transferLog && transferLog.topics[3]) {
-            router.push(`/positions/${BigInt(transferLog.topics[3]).toString()}`);
+            const newTokenId = BigInt(transferLog.topics[3]).toString();
+            // Wait for subgraph to index the new position before redirecting
+            showToast({ type: 'info', message: 'Waiting for position to be indexed...' });
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            router.push(`/positions/${newTokenId}?new=true`);
             return;
           }
           router.push('/positions');

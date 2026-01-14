@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useMemo, useEffect, useRef } from 'react';
-import { useParams } from 'next/navigation';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useParams, useSearchParams } from 'next/navigation';
 import { useAccount, useChainId } from 'wagmi';
 import { parseUnits, formatUnits } from 'viem';
 import Link from 'next/link';
@@ -92,10 +92,17 @@ function getUserFriendlyError(error: Error | null): string {
 
 export default function PositionDetailContent() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const { address } = useAccount();
   const chainId = useChainId();
   const CONTRACTS = getContracts(chainId);
   const tokenId = params.id ? BigInt(params.id as string) : undefined;
+
+  // Check if this is a newly created position (redirected from initiator)
+  const isNewPosition = searchParams.get('new') === 'true';
+  const [retryCount, setRetryCount] = useState(0);
+  const [isRetrying, setIsRetrying] = useState(isNewPosition);
+  const maxRetries = 10;
 
   const [activeTab, setActiveTab] = useState<ActionTab>('quick');
   const [slippage, setSlippage] = useState<number>(SLIPPAGE_PRESETS.MEDIUM);
@@ -112,6 +119,21 @@ export default function PositionDetailContent() {
   // Get position data
   const { data: positions, isLoading: positionsLoading, refetch: refetchPositions } = usePositions();
   const position = positions?.find(p => p.tokenId === params.id);
+
+  // Retry fetching position data for newly created positions
+  useEffect(() => {
+    if (isNewPosition && !position && !positionsLoading && retryCount < maxRetries) {
+      const timer = setTimeout(() => {
+        console.log(`[Position] Retry ${retryCount + 1}/${maxRetries} - waiting for indexer...`);
+        refetchPositions();
+        setRetryCount(prev => prev + 1);
+      }, 3000); // Retry every 3 seconds
+      return () => clearTimeout(timer);
+    }
+    if (position && isRetrying) {
+      setIsRetrying(false);
+    }
+  }, [isNewPosition, position, positionsLoading, retryCount, refetchPositions, isRetrying]);
 
   // Contract hooks
   const {
@@ -401,6 +423,24 @@ export default function PositionDetailContent() {
   }
 
   if (!position) {
+    // Show loading state for newly created positions that are being indexed
+    if (isNewPosition && retryCount < maxRetries) {
+      return (
+        <div className="space-y-6">
+          <Link href="/positions" className="flex items-center gap-2 text-gray-400 hover:text-white">
+            <ArrowLeft size={20} />
+            Back to Positions
+          </Link>
+          <div className="card text-center py-12">
+            <Loader2 className="mx-auto mb-4 text-primary-500 animate-spin" size={48} />
+            <h2 className="text-xl font-semibold mb-2">Position Being Indexed</h2>
+            <p className="text-gray-400 mb-2">Your position #{params.id} was created successfully!</p>
+            <p className="text-gray-500 text-sm">Waiting for the indexer to process your new position... ({retryCount + 1}/{maxRetries})</p>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="space-y-6">
         <Link href="/positions" className="flex items-center gap-2 text-gray-400 hover:text-white">
@@ -411,6 +451,17 @@ export default function PositionDetailContent() {
           <AlertCircle className="mx-auto mb-4 text-yellow-400" size={48} />
           <h2 className="text-xl font-semibold mb-2">Position Not Found</h2>
           <p className="text-gray-400">Position #{params.id} could not be found.</p>
+          {isNewPosition && (
+            <button
+              onClick={() => {
+                setRetryCount(0);
+                refetchPositions();
+              }}
+              className="mt-4 px-4 py-2 bg-primary-600 hover:bg-primary-700 rounded-lg text-sm"
+            >
+              Retry Loading
+            </button>
+          )}
         </div>
       </div>
     );
