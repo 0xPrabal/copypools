@@ -413,7 +413,23 @@ async function runAutoRangeBot(): Promise<void> {
     // Check gas price
     await blockchain.getGasPrice();
 
-    // Scan for new events
+    // PRIMARY: Load positions from Ponder database (much faster than event scanning)
+    try {
+      const { rangeConfigs } = await subgraph.getRebalanceablePositions(500);
+      if (rangeConfigs && rangeConfigs.length > 0) {
+        // Update known positions from database
+        for (const config of rangeConfigs) {
+          if (config.position?.tokenId) {
+            knownRangePositions.add(config.position.tokenId.toString());
+          }
+        }
+        botLogger.info({ fromDatabase: rangeConfigs.length }, 'Loaded positions from Ponder database');
+      }
+    } catch (dbError) {
+      botLogger.warn({ error: dbError instanceof Error ? dbError.message : String(dbError) }, 'Failed to load from database, falling back to event scanning');
+    }
+
+    // FALLBACK: Scan for new events (catches any not in database yet)
     await scanForRangeConfiguredEvents();
 
     botLogger.info({ positionCount: knownRangePositions.size }, 'Monitoring positions');
