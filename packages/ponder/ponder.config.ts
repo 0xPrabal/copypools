@@ -12,12 +12,12 @@ const BASE_CONTRACTS = {
   // Uniswap V4 PositionManager - indexes ALL position ownership via Transfer events
   POSITION_MANAGER: process.env.POSITION_MANAGER_ADDRESS || "0x7C5f5A4bBd8fD63184577525326123B519429bDc",
 };
-const BASE_START_BLOCK = 39369847;
+// Start from recent block to catch RangeMoved events (~100k blocks = ~10-20 min sync)
+// This catches position 938056→954275 rebalance at block 40753962
+const BASE_START_BLOCK = 40700000;
 
-// PositionManager start block - only index recent blocks (~50k = ~1 day)
-// This avoids indexing 530k+ blocks of ALL V4 positions on Base
-// Old positions can be fetched on-demand via Alchemy NFT API or RPC
-const POSITION_MANAGER_START_BLOCK = 39850000;
+// PositionManager start block - same as BASE_START_BLOCK for consistency
+const POSITION_MANAGER_START_BLOCK = 40700000;
 
 // ============ Sepolia Testnet ============
 const SEPOLIA_CONTRACTS = {
