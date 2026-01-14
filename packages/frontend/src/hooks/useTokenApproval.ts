@@ -28,8 +28,8 @@ export function useTokenApproval(tokenAddress: `0x${string}` | undefined, spende
     args: tokenAddress && userAddress ? [userAddress, spenderAddress] : undefined,
     query: {
       enabled: !isNativeToken && !!tokenAddress && !!userAddress,
-      staleTime: 60_000, // Fresh for 1 minute
-      refetchInterval: false, // No auto-refresh
+      staleTime: 10_000, // Fresh for 10 seconds (reduced from 1 minute for better UX)
+      refetchInterval: 15_000, // Auto-refresh every 15 seconds
     },
   });
 
