@@ -756,6 +756,7 @@ export default function PositionDetailContent() {
               hooks={position.pool.hooks as `0x${string}`}
               pendingFees={pendingFees}
               isNFTApproved={isNFTApproved}
+              rangeConfig={position.rangeConfig}
             />
             <div className="space-y-6">
               <FeeHarvester

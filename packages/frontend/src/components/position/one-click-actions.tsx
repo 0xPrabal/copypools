@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { formatUnits, encodeAbiParameters, keccak256 } from 'viem';
-import { usePublicClient, useChainId, useAccount } from 'wagmi';
+import { formatUnits, encodeAbiParameters, keccak256, parseEventLogs } from 'viem';
+import { usePublicClient, useChainId, useAccount, useWriteContract } from 'wagmi';
 import {
   Loader2,
   CheckCircle,
@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import { useV4Utils, applySlippage, DEFAULT_SLIPPAGE_BPS } from '@/hooks/useV4Utils';
 import { getContracts, CHAIN_IDS } from '@/config/contracts';
+import V4AutoRangeAbi from '@/abis/V4AutoRange.json';
+import V4UtilsAbi from '@/abis/V4Utils.json';
 
 // Backend API URL for swap quotes
 const BACKEND_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001').replace(/\/$/, '');
@@ -76,6 +78,16 @@ async function getSwapQuote(
   }
 }
 
+interface RangeConfigData {
+  enabled?: boolean;
+  lowerDelta?: number;
+  upperDelta?: number;
+  rebalanceThreshold?: number;
+  minRebalanceInterval?: number;
+  collectFeesOnRebalance?: boolean;
+  maxSwapSlippage?: bigint | string | number;
+}
+
 interface OneClickActionsProps {
   tokenId: bigint;
   liquidity: string;
@@ -92,6 +104,7 @@ interface OneClickActionsProps {
   hooks?: `0x${string}`;
   pendingFees?: [bigint, bigint];
   isNFTApproved: boolean;
+  rangeConfig?: RangeConfigData | null;
   onActionComplete?: () => void;
 }
 
@@ -162,11 +175,13 @@ export function OneClickActions({
   hooks = '0x0000000000000000000000000000000000000000',
   pendingFees,
   isNFTApproved,
+  rangeConfig,
   onActionComplete,
 }: OneClickActionsProps) {
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [exitToken, setExitToken] = useState<`0x${string}` | null>(null);
   const [swapLoading, setSwapLoading] = useState(false);
+  const [reregisteringAutoRange, setReregisteringAutoRange] = useState(false);
   const chainId = useChainId();
   const { address: userAddress } = useAccount();
   const CONTRACTS = getContracts(chainId);
@@ -184,10 +199,13 @@ export function OneClickActions({
     error,
   } = useV4Utils();
 
+  // For re-registering with V4AutoRange after Quick Rebalance
+  const { writeContractAsync: writeAutoRange } = useWriteContract();
+
   // Get stablecoins for current chain
   const stablecoins = STABLECOINS_BY_CHAIN[chainId as keyof typeof STABLECOINS_BY_CHAIN] || STABLECOINS_BY_CHAIN[CHAIN_IDS.BASE];
 
-  const isProcessing = isPending || isConfirming || swapLoading;
+  const isProcessing = isPending || isConfirming || swapLoading || reregisteringAutoRange;
   const hasLiquidity = BigInt(liquidity || '0') > 0n;
   const hasFees = (pendingFees?.[0] || 0n) > 0n || (pendingFees?.[1] || 0n) > 0n;
 
@@ -483,6 +501,7 @@ export function OneClickActions({
 
   // One-Click Rebalance: Move to centered range around CURRENT tick
   // Uses a wider range with buffer to ensure position stays in range longer
+  // Automatically re-registers new position with V4AutoRange if enabled
   const handleQuickRebalance = async () => {
     if (!hasLiquidity || !publicClient) return;
     setActiveAction('rebalance');
@@ -538,10 +557,12 @@ export function OneClickActions({
         newRange: `[${newTickLower}, ${newTickUpper}]`,
         currentTick,
         halfWidth,
-        priceRangePercent: `${priceRange.toFixed(1)}%`
+        priceRangePercent: `${priceRange.toFixed(1)}%`,
+        hasAutoRange: rangeConfig?.enabled || false,
       });
 
-      await moveRange({
+      // Execute moveRange and get transaction hash
+      const hash = await moveRange({
         tokenId,
         newTickLower,
         newTickUpper,
@@ -551,9 +572,72 @@ export function OneClickActions({
         deadline: BigInt(Math.floor(Date.now() / 1000) + 1800),
       });
 
+      // If auto-range was enabled, re-register the new position with V4AutoRange
+      if (rangeConfig?.enabled && hash) {
+        console.log('[QuickRebalance] Auto-range was enabled, will re-register new position...');
+        setReregisteringAutoRange(true);
+
+        try {
+          // Wait for the moveRange transaction to confirm
+          const receipt = await publicClient.waitForTransactionReceipt({ hash });
+          console.log('[QuickRebalance] Transaction confirmed, parsing logs...');
+
+          // Parse the RangeMoved event to get the new tokenId
+          // Event: RangeMoved(uint256 indexed oldTokenId, uint256 indexed newTokenId, int24 newTickLower, int24 newTickUpper)
+          const rangeMovedLogs = parseEventLogs({
+            abi: V4UtilsAbi as any,
+            logs: receipt.logs,
+            eventName: 'RangeMoved',
+          }) as any[];
+
+          if (rangeMovedLogs.length > 0) {
+            const newTokenId = rangeMovedLogs[0].args?.newTokenId as bigint;
+            console.log('[QuickRebalance] New position tokenId:', newTokenId.toString());
+
+            // Re-register with V4AutoRange using the same config
+            const maxSlippage = rangeConfig.maxSwapSlippage
+              ? (typeof rangeConfig.maxSwapSlippage === 'bigint'
+                  ? rangeConfig.maxSwapSlippage
+                  : BigInt(rangeConfig.maxSwapSlippage))
+              : 100n;
+
+            const autoRangeConfig = {
+              enabled: true,
+              lowerDelta: rangeConfig.lowerDelta || 600,
+              upperDelta: rangeConfig.upperDelta || 600,
+              rebalanceThreshold: rangeConfig.rebalanceThreshold || 100,
+              minRebalanceInterval: rangeConfig.minRebalanceInterval || 3600,
+              collectFeesOnRebalance: rangeConfig.collectFeesOnRebalance ?? true,
+              maxSwapSlippage: maxSlippage,
+            };
+
+            console.log('[QuickRebalance] Re-registering new position with V4AutoRange...', autoRangeConfig);
+
+            await writeAutoRange({
+              chainId: chainId as 8453 | 11155111,
+              address: CONTRACTS.V4_AUTO_RANGE,
+              abi: V4AutoRangeAbi,
+              functionName: 'configureRange',
+              args: [newTokenId, autoRangeConfig],
+              gas: 500000n,
+            });
+
+            console.log('[QuickRebalance] New position registered with V4AutoRange!');
+          } else {
+            console.warn('[QuickRebalance] RangeMoved event not found in logs');
+          }
+        } catch (reregisterError) {
+          console.error('[QuickRebalance] Failed to re-register with V4AutoRange:', reregisterError);
+          // Don't fail the whole operation - moveRange succeeded
+        } finally {
+          setReregisteringAutoRange(false);
+        }
+      }
+
       onActionComplete?.();
     } catch (e) {
       console.error('Rebalance failed:', e);
+      setReregisteringAutoRange(false);
       setActiveAction(null);
     }
   };
@@ -603,9 +687,10 @@ export function OneClickActions({
             <div>
               <p className="text-sm font-medium text-white">
                 {swapLoading && 'Fetching swap quote...'}
-                {isPending && !swapLoading && 'Waiting for wallet confirmation...'}
-                {isConfirming && 'Transaction in progress...'}
-                {isSuccess && 'Action completed successfully!'}
+                {reregisteringAutoRange && 'Re-registering with Auto-Range...'}
+                {isPending && !swapLoading && !reregisteringAutoRange && 'Waiting for wallet confirmation...'}
+                {isConfirming && !reregisteringAutoRange && 'Transaction in progress...'}
+                {isSuccess && !reregisteringAutoRange && 'Action completed successfully!'}
                 {error && 'Transaction failed'}
               </p>
               {error && <p className="text-xs text-red-400 mt-0.5">{error.message}</p>}
