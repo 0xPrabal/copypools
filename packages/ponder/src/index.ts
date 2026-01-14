@@ -432,8 +432,90 @@ ponder.on("V4Utils:RangeMoved", async ({ event, context }) => {
 
     console.log(`V4Utils:RangeMoved - Old: ${oldTokenId}, New: ${newTokenId}, Range: [${newTickLower}, ${newTickUpper}]`);
 
-    // Update old position to show 0 liquidity and mark as closed
     const oldPosId = oldTokenId.toString();
+    const newPosId = newTokenId.toString();
+
+    // Fetch NEW position info from on-chain (this has the actual liquidity)
+    let newLiquidity = "0";
+    let poolId = "unknown";
+    let owner = event.transaction.from.toLowerCase();
+
+    try {
+      // Read position info from PositionManager
+      const POSITION_MANAGER = "0x7C5f5A4bBd8fD63184577525326123B519429bDc";
+
+      // Get liquidity
+      const liquidityResult = await context.client.readContract({
+        address: POSITION_MANAGER as `0x${string}`,
+        abi: [{
+          name: "getPositionLiquidity",
+          type: "function",
+          stateMutability: "view",
+          inputs: [{ name: "tokenId", type: "uint256" }],
+          outputs: [{ name: "", type: "uint128" }]
+        }] as const,
+        functionName: "getPositionLiquidity",
+        args: [newTokenId],
+      });
+      newLiquidity = String(liquidityResult);
+      console.log(`Fetched on-chain liquidity for ${newPosId}: ${newLiquidity}`);
+
+      // Get owner
+      const ownerResult = await context.client.readContract({
+        address: POSITION_MANAGER as `0x${string}`,
+        abi: [{
+          name: "ownerOf",
+          type: "function",
+          stateMutability: "view",
+          inputs: [{ name: "tokenId", type: "uint256" }],
+          outputs: [{ name: "", type: "address" }]
+        }] as const,
+        functionName: "ownerOf",
+        args: [newTokenId],
+      });
+      owner = String(ownerResult).toLowerCase();
+
+      // Get pool info from V4Utils
+      const V4_UTILS = "0x37A199B0Baea8943AD493f04Cc2da8c4fa7C2cE1";
+      const positionInfo = await context.client.readContract({
+        address: V4_UTILS as `0x${string}`,
+        abi: [{
+          name: "getPositionInfo",
+          type: "function",
+          stateMutability: "view",
+          inputs: [{ name: "tokenId", type: "uint256" }],
+          outputs: [
+            { name: "poolKey", type: "tuple", components: [
+              { name: "currency0", type: "address" },
+              { name: "currency1", type: "address" },
+              { name: "fee", type: "uint24" },
+              { name: "tickSpacing", type: "int24" },
+              { name: "hooks", type: "address" }
+            ]},
+            { name: "tickLower", type: "int24" },
+            { name: "tickUpper", type: "int24" },
+            { name: "liquidity", type: "uint128" }
+          ]
+        }] as const,
+        functionName: "getPositionInfo",
+        args: [newTokenId],
+      });
+
+      const positionData = positionInfo as any;
+      const poolKey = positionData[0];
+      poolId = `${String(poolKey.currency0).toLowerCase()}-${String(poolKey.currency1).toLowerCase()}-${poolKey.fee}`;
+      console.log(`Fetched pool info for ${newPosId}: ${poolId}`);
+    } catch (fetchError) {
+      console.error(`Failed to fetch on-chain data for position ${newPosId}:`, fetchError);
+      // Fall back to old position data if available
+      const oldPos = await context.db.find(position, { id: oldPosId });
+      if (oldPos) {
+        poolId = oldPos.poolId;
+        owner = oldPos.owner;
+      }
+    }
+
+    // Update old position to show 0 liquidity and mark as closed
     const oldPos = await context.db.find(position, { id: oldPosId });
     if (oldPos) {
       await context.db.update(position, { id: oldPosId }).set({
@@ -443,32 +525,33 @@ ponder.on("V4Utils:RangeMoved", async ({ event, context }) => {
       console.log(`Updated old position ${oldPosId} liquidity to 0`);
     }
 
-    // Create or update new position record
-    const newPosId = newTokenId.toString();
+    // Create or update new position record with ON-CHAIN liquidity
     const existingNewPos = await context.db.find(position, { id: newPosId });
 
     if (existingNewPos) {
-      // Update existing position with new tick range
+      // Update existing position with new tick range AND liquidity from on-chain
       await context.db.update(position, { id: newPosId }).set({
         tickLower: Number(newTickLower),
         tickUpper: Number(newTickUpper),
+        liquidity: newLiquidity,
+        poolId: poolId !== "unknown" ? poolId : existingNewPos.poolId,
       });
-      console.log(`Updated new position ${newPosId} tick range`);
-    } else if (oldPos) {
-      // Create new position record from old position data
+      console.log(`Updated new position ${newPosId} with on-chain liquidity: ${newLiquidity}`);
+    } else {
+      // Create new position record with on-chain data
       try {
         await context.db.insert(position).values({
           id: newPosId,
           tokenId: newTokenId.toString(),
-          owner: oldPos.owner,
-          poolId: oldPos.poolId,
+          owner: owner,
+          poolId: poolId,
           tickLower: Number(newTickLower),
           tickUpper: Number(newTickUpper),
-          liquidity: oldPos.liquidity, // Will be updated by Transfer event or on-chain fetch
+          liquidity: newLiquidity,
           createdAtTimestamp: timestamp,
           createdAtBlockNumber: blockNumber,
         });
-        console.log(`Created new position ${newPosId} from old position ${oldPosId}`);
+        console.log(`Created new position ${newPosId} with on-chain liquidity: ${newLiquidity}`);
       } catch (err: any) {
         if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
           throw err;
