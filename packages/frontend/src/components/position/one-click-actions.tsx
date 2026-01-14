@@ -482,6 +482,7 @@ export function OneClickActions({
   };
 
   // One-Click Rebalance: Move to centered range around CURRENT tick
+  // Uses a wider range with buffer to ensure position stays in range longer
   const handleQuickRebalance = async () => {
     if (!hasLiquidity || !publicClient) return;
     setActiveAction('rebalance');
@@ -506,20 +507,39 @@ export function OneClickActions({
       const currentTick = Number(slot0[1]);
       console.log('Current tick:', currentTick);
 
-      // Calculate new range centered around CURRENT tick (not old position)
-      const rangeWidth = tickUpper - tickLower;
-      const halfWidth = Math.floor(rangeWidth / 2);
+      // Calculate range width
+      // Minimum range: ~10% on each side (1000 ticks ≈ 10% price movement)
+      // This ensures the position stays in range longer even with price volatility
+      const MIN_HALF_WIDTH = 1000; // ~10% price movement on each side
+      const BUFFER_TICKS = 100;    // ~1% extra buffer for tx execution time
+
+      const oldRangeWidth = tickUpper - tickLower;
+      const oldHalfWidth = Math.floor(oldRangeWidth / 2);
+
+      // Use the larger of: old range width or minimum width, plus buffer
+      const halfWidth = Math.max(oldHalfWidth, MIN_HALF_WIDTH) + BUFFER_TICKS;
 
       // Align to tick spacing
       let newTickLower = Math.floor((currentTick - halfWidth) / tickSpacing) * tickSpacing;
       let newTickUpper = Math.ceil((currentTick + halfWidth) / tickSpacing) * tickSpacing;
 
-      // Ensure ticks are properly ordered
+      // Ensure ticks are properly ordered and have minimum spacing
       if (newTickLower >= newTickUpper) {
         newTickUpper = newTickLower + tickSpacing;
       }
 
-      console.log('Rebalancing: old range', tickLower, '-', tickUpper, '-> new range', newTickLower, '-', newTickUpper);
+      // Calculate approximate price range for logging
+      const priceLower = Math.pow(1.0001, newTickLower);
+      const priceUpper = Math.pow(1.0001, newTickUpper);
+      const priceRange = ((priceUpper / priceLower) - 1) * 100;
+
+      console.log('Rebalancing:', {
+        oldRange: `[${tickLower}, ${tickUpper}]`,
+        newRange: `[${newTickLower}, ${newTickUpper}]`,
+        currentTick,
+        halfWidth,
+        priceRangePercent: `${priceRange.toFixed(1)}%`
+      });
 
       await moveRange({
         tokenId,
