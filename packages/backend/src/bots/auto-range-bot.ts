@@ -482,3 +482,12 @@ export function startAutoRangeBot(): CronJob {
 }
 
 export { runAutoRangeBot };
+
+// Export for debugging/API access
+export function getKnownPositions(): string[] {
+  return Array.from(knownRangePositions);
+}
+
+export function getLastScannedBlock(): string {
+  return lastScannedBlock.toString();
+}

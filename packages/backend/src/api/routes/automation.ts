@@ -4,6 +4,7 @@ import * as blockchain from '../../services/blockchain.js';
 import { walletClient } from '../../services/blockchain.js';
 import { config } from '../../config/index.js';
 import { logger } from '../../utils/logger.js';
+import { getKnownPositions, getLastScannedBlock } from '../../bots/auto-range-bot.js';
 
 const router = Router();
 const routeLogger = logger.child({ route: 'automation' });
