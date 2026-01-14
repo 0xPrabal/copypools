@@ -12,20 +12,20 @@ const BASE_CONTRACTS = {
   // Uniswap V4 PositionManager - indexes ALL position ownership via Transfer events
   POSITION_MANAGER: process.env.POSITION_MANAGER_ADDRESS || "0x7C5f5A4bBd8fD63184577525326123B519429bDc",
 };
-// Start from recent block to catch RangeMoved events (~100k blocks = ~10-20 min sync)
-// This catches position 938056→954275 rebalance at block 40753962
-const BASE_START_BLOCK = 40700000;
+// Start from very recent block for fast sync (~5k blocks = ~1-2 min sync)
+// Current block is ~40805000, start from 40800000 to catch recent events
+const BASE_START_BLOCK = 40800000;
 
 // PositionManager start block - same as BASE_START_BLOCK for consistency
-const POSITION_MANAGER_START_BLOCK = 40700000;
+const POSITION_MANAGER_START_BLOCK = 40800000;
 
-// ============ Sepolia Testnet ============
-const SEPOLIA_CONTRACTS = {
-  V4_UTILS: process.env.SEPOLIA_V4_UTILS_ADDRESS || "0xff9C5B6F76444144a36de91F4d2F3289E37Cf956",
-  V4_COMPOUNDOR: process.env.SEPOLIA_V4_COMPOUNDOR_ADDRESS || "0xBA8bc095e0BEA3C6B1C6F5FfB56F67AaD76914Ad",
-  V4_AUTO_RANGE: process.env.SEPOLIA_V4_AUTO_RANGE_ADDRESS || "0xD6e1ED971f2A83EB94dDC0Ceb6841D6D7628EEfD",
-};
-const SEPOLIA_START_BLOCK = 7500000; // Adjust to actual deployment block
+// ============ Sepolia Testnet (DISABLED) ============
+// const SEPOLIA_CONTRACTS = {
+//   V4_UTILS: process.env.SEPOLIA_V4_UTILS_ADDRESS || "0xff9C5B6F76444144a36de91F4d2F3289E37Cf956",
+//   V4_COMPOUNDOR: process.env.SEPOLIA_V4_COMPOUNDOR_ADDRESS || "0xBA8bc095e0BEA3C6B1C6F5FfB56F67AaD76914Ad",
+//   V4_AUTO_RANGE: process.env.SEPOLIA_V4_AUTO_RANGE_ADDRESS || "0xD6e1ED971f2A83EB94dDC0Ceb6841D6D7628EEfD",
+// };
+// const SEPOLIA_START_BLOCK = 7500000;
 
 // Base Mainnet RPC URLs - Prioritize paid/reliable RPCs first
 // IMPORTANT: Keep list short to avoid spreading requests across too many endpoints
@@ -39,17 +39,15 @@ const BASE_RPCS = [
   "https://base-rpc.publicnode.com",
 ].filter(Boolean) as string[];
 
-// Sepolia RPC URLs - Ponder will load balance across these
-const SEPOLIA_RPCS = [
-  // Paid RPCs first
-  process.env.QUICKNODE_SEPOLIA_RPC_URL,
-  process.env.ALCHEMY_SEPOLIA_RPC_URL,
-  process.env.INFURA_SEPOLIA_RPC_URL,
-  process.env.PONDER_RPC_URL_11155111,
-  // Free fallbacks
-  "https://ethereum-sepolia-rpc.publicnode.com",
-  "https://rpc.sepolia.org",
-].filter(Boolean) as string[];
+// Sepolia RPC URLs - DISABLED
+// const SEPOLIA_RPCS = [
+//   process.env.QUICKNODE_SEPOLIA_RPC_URL,
+//   process.env.ALCHEMY_SEPOLIA_RPC_URL,
+//   process.env.INFURA_SEPOLIA_RPC_URL,
+//   process.env.PONDER_RPC_URL_11155111,
+//   "https://ethereum-sepolia-rpc.publicnode.com",
+//   "https://rpc.sepolia.org",
+// ].filter(Boolean) as string[];
 
 export default createConfig({
   database: {
