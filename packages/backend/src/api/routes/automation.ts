@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import * as subgraph from '../../services/subgraph.js';
 import * as blockchain from '../../services/blockchain.js';
+import { walletClient } from '../../services/blockchain.js';
+import { config } from '../../config/index.js';
 import { logger } from '../../utils/logger.js';
 
 const router = Router();
@@ -241,6 +243,51 @@ router.post('/batch-status', async (req: Request, res: Response) => {
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get batch status');
     res.status(500).json({ error: 'Failed to fetch batch status' });
+  }
+});
+
+// ========== Bot Status Endpoint ==========
+
+// Get bot and wallet status (for debugging)
+router.get('/status', async (req: Request, res: Response) => {
+  try {
+    const walletConfigured = walletClient !== null;
+    let walletAddress: string | null = null;
+    let walletBalance: string | null = null;
+
+    if (walletConfigured && walletClient?.account?.address) {
+      walletAddress = walletClient.account.address;
+      try {
+        // Get wallet balance
+        const balance = await blockchain.publicClient.getBalance({
+          address: walletAddress as `0x${string}`,
+        });
+        walletBalance = (Number(balance) / 1e18).toFixed(6) + ' ETH';
+      } catch (e) {
+        walletBalance = 'Error fetching balance';
+      }
+    }
+
+    res.json({
+      botEnabled: config.BOT_ENABLED,
+      walletConfigured,
+      walletAddress: walletAddress ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : null,
+      walletBalance,
+      chainId: config.CHAIN_ID,
+      intervals: {
+        compound: config.COMPOUND_INTERVAL_MS,
+        autoRange: config.AUTO_RANGE_INTERVAL_MS,
+        autoExit: config.AUTO_EXIT_INTERVAL_MS,
+      },
+      contracts: {
+        v4Compoundor: blockchain.contracts.v4Compoundor ? 'configured' : 'not configured',
+        v4AutoRange: blockchain.contracts.v4AutoRange ? 'configured' : 'not configured',
+        v4AutoExit: blockchain.contracts.v4AutoExit ? 'configured' : 'not configured',
+      },
+    });
+  } catch (error) {
+    routeLogger.error({ error }, 'Failed to get bot status');
+    res.status(500).json({ error: 'Failed to fetch bot status' });
   }
 });
 
