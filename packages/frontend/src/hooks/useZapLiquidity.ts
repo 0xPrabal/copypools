@@ -47,6 +47,10 @@ export interface ZapParams {
   rangeStrategy: 'full' | 'wide' | 'concentrated';
   recipient: `0x${string}`;
   slippageBps?: number; // Slippage tolerance in basis points (default: 300 = 3%)
+  // Optional: If provided, will add to existing position instead of creating new one
+  existingTokenId?: bigint;
+  existingTickLower?: number;
+  existingTickUpper?: number;
 }
 
 export interface ZapQuote {
@@ -386,7 +390,8 @@ export function useZapLiquidity() {
         }
       }
 
-      const { inputToken, inputAmount, targetToken0, targetToken1, fee, rangeStrategy, recipient, slippageBps = 500 } = params; // Default 5% slippage
+      const { inputToken, inputAmount, targetToken0, targetToken1, fee, rangeStrategy, recipient, slippageBps = 500, existingTokenId, existingTickLower, existingTickUpper } = params; // Default 5% slippage
+    const isIncreaseLiquidity = existingTokenId !== undefined;
 
       // Parse input amount
       const inputAmountWei = parseUnits(inputAmount, inputToken.decimals);
@@ -463,11 +468,15 @@ export function useZapLiquidity() {
         throw new Error('Pool not initialized');
       }
 
-      // Calculate tick range
+      // Calculate tick range - use existing position's range if increasing liquidity
       let tickLower: number;
       let tickUpper: number;
 
-      if (rangeStrategy === 'full') {
+      if (isIncreaseLiquidity && existingTickLower !== undefined && existingTickUpper !== undefined) {
+        // Use existing position's tick range
+        tickLower = existingTickLower;
+        tickUpper = existingTickUpper;
+      } else if (rangeStrategy === 'full') {
         [tickLower, tickUpper] = getFullRangeTicks(tickSpacing);
       } else if (rangeStrategy === 'wide') {
         [tickLower, tickUpper] = calculateTickRange(currentTick, tickSpacing, 2000);
@@ -595,28 +604,52 @@ export function useZapLiquidity() {
       console.log('amount0Max:', amount0Max.toString());
       console.log('amount1Max:', amount1Max.toString());
 
-      // SwapAndMintParams struct
-      const swapAndMintParams = {
-        poolKey,
-        tickLower,
-        tickUpper,
-        amount0Desired,
-        amount1Desired,
-        amount0Max,
-        amount1Max,
-        recipient,
-        deadline: BigInt(Math.floor(Date.now() / 1000) + 3600), // 1 hour
-        swapSourceCurrency,
-        swapSourceAmount: swapAmount,
-        swapData,
-        maxSwapSlippage: BigInt(slippageBps), // Use configurable slippage (default 3%)
-      };
-
       // Calculate ETH value to send
       const inputIsNative = inputToken.address.toLowerCase() === ZERO_ADDRESS;
       const ethValue = inputIsNative ? inputAmountWei : 0n;
 
+      // Choose function based on whether we're adding to existing position
+      const functionName = isIncreaseLiquidity ? 'swapAndIncreaseLiquidity' : 'swapAndMint';
+
+      // Build params based on function type
+      let contractParams: any;
+      if (isIncreaseLiquidity) {
+        // SwapAndIncreaseParams struct for existing position
+        contractParams = {
+          tokenId: existingTokenId,
+          amount0Desired,
+          amount1Desired,
+          amount0Max,
+          amount1Max,
+          deadline: BigInt(Math.floor(Date.now() / 1000) + 3600), // 1 hour
+          swapSourceCurrency,
+          swapSourceAmount: swapAmount,
+          swapData,
+          maxSwapSlippage: BigInt(slippageBps),
+        };
+      } else {
+        // SwapAndMintParams struct for new position
+        contractParams = {
+          poolKey,
+          tickLower,
+          tickUpper,
+          amount0Desired,
+          amount1Desired,
+          amount0Max,
+          amount1Max,
+          recipient,
+          deadline: BigInt(Math.floor(Date.now() / 1000) + 3600), // 1 hour
+          swapSourceCurrency,
+          swapSourceAmount: swapAmount,
+          swapData,
+          maxSwapSlippage: BigInt(slippageBps),
+        };
+      }
+
       console.log('=== Final Params ===');
+      console.log('functionName:', functionName);
+      console.log('isIncreaseLiquidity:', isIncreaseLiquidity);
+      if (isIncreaseLiquidity) console.log('tokenId:', existingTokenId?.toString());
       console.log('amount0Desired:', amount0Desired.toString());
       console.log('amount1Desired:', amount1Desired.toString());
       console.log('swapSourceAmount:', swapAmount.toString());
@@ -627,12 +660,12 @@ export function useZapLiquidity() {
       let gasLimit = 5000000n;
       try {
         if (publicClient) {
-          console.log('[Zap] Estimating gas for swapAndMint...');
+          console.log(`[Zap] Estimating gas for ${functionName}...`);
           const estimated = await publicClient.estimateContractGas({
             address: CONTRACTS.V4_UTILS,
             abi: V4UtilsAbi,
-            functionName: 'swapAndMint',
-            args: [swapAndMintParams],
+            functionName,
+            args: [contractParams],
             value: ethValue,
           });
           gasLimit = (estimated * GAS_BUFFER_MULTIPLIER) / 100n;
@@ -644,14 +677,14 @@ export function useZapLiquidity() {
       }
 
       // Simulate transaction before executing
-      console.log('[Zap] Simulating swapAndMint transaction...');
+      console.log(`[Zap] Simulating ${functionName} transaction...`);
       try {
         await publicClient?.simulateContract({
           account: userAddress,
           address: CONTRACTS.V4_UTILS,
           abi: V4UtilsAbi,
-          functionName: 'swapAndMint',
-          args: [swapAndMintParams],
+          functionName,
+          args: [contractParams],
           value: ethValue,
         });
         console.log('[Zap] Simulation successful');
@@ -673,7 +706,7 @@ export function useZapLiquidity() {
       }
 
       // Execute transaction
-      console.log('[Zap] Calling writeContractAsync for swapAndMint...');
+      console.log(`[Zap] Calling writeContractAsync for ${functionName}...`);
       console.log('[Zap] Contract:', CONTRACTS.V4_UTILS);
       console.log('[Zap] Gas limit:', gasLimit.toString());
       console.log('[Zap] ETH value:', ethValue.toString());
@@ -686,8 +719,8 @@ export function useZapLiquidity() {
           chainId: chainId as 8453 | 11155111,
           address: CONTRACTS.V4_UTILS,
           abi: V4UtilsAbi,
-          functionName: 'swapAndMint',
-          args: [swapAndMintParams],
+          functionName,
+          args: [contractParams],
           value: ethValue,
           gas: gasLimit,
           account: userAddress, // Explicitly pass account for Privy/MetaMask

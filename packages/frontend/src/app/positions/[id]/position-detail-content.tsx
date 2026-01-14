@@ -390,9 +390,9 @@ export default function PositionDetailContent() {
     });
   };
 
-  // Handle single token increase using zap
+  // Handle single token increase using zap - adds to EXISTING position
   const handleSingleTokenIncrease = async () => {
-    if (!address || !singleTokenAddress || !singleTokenAmount || !position) return;
+    if (!address || !singleTokenAddress || !singleTokenAmount || !position || !tokenId) return;
 
     const isToken0 = singleTokenAddress.toLowerCase() === position.pool.token0.address.toLowerCase();
     const inputTokenData = isToken0 ? position.pool.token0 : position.pool.token1;
@@ -424,9 +424,13 @@ export default function PositionDetailContent() {
       targetToken0,
       targetToken1,
       fee: position.pool.fee,
-      rangeStrategy: 'wide', // Use existing position's range logic
+      rangeStrategy: 'wide', // Not used when existingTokenId is provided
       recipient: address,
       slippageBps: 500, // 5% slippage for better success rate with volatile pairs
+      // Pass existing position details to ADD to it instead of creating new
+      existingTokenId: tokenId,
+      existingTickLower: position.tickLower,
+      existingTickUpper: position.tickUpper,
     });
   };
 
