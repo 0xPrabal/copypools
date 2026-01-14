@@ -36,6 +36,19 @@ let stateLoaded = false;
 // Track last rebalance time per position (in-memory cache)
 const lastRebalanceTimeCache = new Map<string, number>();
 
+// Track recent errors for debugging (keep last 10)
+const recentErrors: { tokenId: string; error: string; timestamp: string }[] = [];
+const MAX_ERRORS = 10;
+
+function recordError(tokenId: string, error: string) {
+  recentErrors.unshift({ tokenId, error, timestamp: new Date().toISOString() });
+  if (recentErrors.length > MAX_ERRORS) recentErrors.pop();
+}
+
+export function getRecentErrors() {
+  return recentErrors;
+}
+
 interface RebalanceablePosition {
   tokenId: string;
   poolId: string;
@@ -402,6 +415,7 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     botLogger.error({ tokenId, errorMessage }, 'Smart rebalance failed');
+    recordError(tokenId, errorMessage);
     return { rebalanced: false, decision: null };
   }
 }

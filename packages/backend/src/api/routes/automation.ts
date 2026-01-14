@@ -4,7 +4,7 @@ import * as blockchain from '../../services/blockchain.js';
 import { walletClient } from '../../services/blockchain.js';
 import { config } from '../../config/index.js';
 import { logger } from '../../utils/logger.js';
-import { getKnownPositions, getLastScannedBlock } from '../../bots/auto-range-bot.js';
+import { getKnownPositions, getLastScannedBlock, getRecentErrors } from '../../bots/auto-range-bot.js';
 
 const router = Router();
 const routeLogger = logger.child({ route: 'automation' });
@@ -300,11 +300,54 @@ router.get('/status', async (req: Request, res: Response) => {
         knownPositionsCount: knownPositions.length,
         knownPositions: knownPositions,
         lastScannedBlock: lastScannedBlock,
+        recentErrors: getRecentErrors(),
       },
     });
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get bot status');
     res.status(500).json({ error: 'Failed to fetch bot status' });
+  }
+});
+
+// ========== Manual Trigger Endpoint (for debugging) ==========
+
+// Manually trigger rebalance check for a position
+router.post('/range/:tokenId/trigger', async (req: Request, res: Response) => {
+  try {
+    const { tokenId } = req.params;
+
+    // Check if position needs rebalance
+    const rebalanceCheck = await blockchain.checkRebalance(BigInt(tokenId));
+
+    if (!rebalanceCheck.needsRebalance) {
+      return res.json({
+        success: false,
+        message: 'Position does not need rebalance',
+        reason: rebalanceCheck.reason,
+      });
+    }
+
+    // Try to execute rebalance
+    try {
+      const hash = await blockchain.executeRebalance(BigInt(tokenId), '0x');
+      return res.json({
+        success: true,
+        message: 'Rebalance executed',
+        txHash: hash,
+      });
+    } catch (execError: any) {
+      return res.json({
+        success: false,
+        message: 'Rebalance execution failed',
+        error: execError.message || String(execError),
+      });
+    }
+  } catch (error: any) {
+    routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to trigger rebalance');
+    res.status(500).json({
+      error: 'Failed to trigger rebalance',
+      details: error.message || String(error),
+    });
   }
 });
 
