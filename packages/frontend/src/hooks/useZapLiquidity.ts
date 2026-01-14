@@ -6,6 +6,7 @@ import { parseUnits, encodeAbiParameters, keccak256 } from 'viem';
 import { getContracts, CHAIN_IDS } from '@/config/contracts';
 import V4UtilsAbi from '@/abis/V4Utils.json';
 import StateViewAbi from '@/abis/StateView.json';
+import ERC20Abi from '@/abis/ERC20.json';
 import { getTickSpacing, calculateTickRange, getFullRangeTicks } from '@/utils/tickMath';
 
 // 0x AllowanceHolder addresses (v2 API)
@@ -395,6 +396,36 @@ export function useZapLiquidity() {
 
       // Parse input amount
       const inputAmountWei = parseUnits(inputAmount, inputToken.decimals);
+
+      // IMPORTANT: Verify on-chain allowance before proceeding (prevents stale cache issues)
+      const ZERO_ADDRESS_CHECK = '0x0000000000000000000000000000000000000000';
+      const isInputNative = inputToken.address.toLowerCase() === ZERO_ADDRESS_CHECK;
+
+      if (!isInputNative && publicClient && userAddress) {
+        console.log('[Zap] Verifying on-chain allowance for', inputToken.symbol);
+        try {
+          const currentAllowance = await publicClient.readContract({
+            address: inputToken.address,
+            abi: ERC20Abi,
+            functionName: 'allowance',
+            args: [userAddress, CONTRACTS.V4_UTILS],
+          }) as bigint;
+
+          console.log('[Zap] Current allowance:', currentAllowance.toString(), 'Required:', inputAmountWei.toString());
+
+          if (currentAllowance < inputAmountWei) {
+            throw new Error(
+              `Insufficient ${inputToken.symbol} allowance. Please approve ${inputToken.symbol} before creating the position. ` +
+              `Current allowance: ${currentAllowance.toString()}, Required: ${inputAmountWei.toString()}`
+            );
+          }
+        } catch (allowanceError: any) {
+          if (allowanceError.message?.includes('Insufficient')) {
+            throw allowanceError; // Re-throw our custom error
+          }
+          console.warn('[Zap] Allowance check failed, proceeding anyway:', allowanceError);
+        }
+      }
 
       // Sort tokens for pool key
       const sortedToken0 = targetToken0.address.toLowerCase() < targetToken1.address.toLowerCase()
