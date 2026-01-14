@@ -4,7 +4,7 @@ import * as blockchain from '../../services/blockchain.js';
 import { walletClient } from '../../services/blockchain.js';
 import { config } from '../../config/index.js';
 import { logger } from '../../utils/logger.js';
-import { getKnownPositions, getLastScannedBlock, getRecentErrors } from '../../bots/auto-range-bot.js';
+import { getKnownPositions, getLastScannedBlock, getRecentErrors, getPositionStatus } from '../../bots/auto-range-bot.js';
 
 const router = Router();
 const routeLogger = logger.child({ route: 'automation' });
@@ -301,6 +301,7 @@ router.get('/status', async (req: Request, res: Response) => {
         knownPositions: knownPositions,
         lastScannedBlock: lastScannedBlock,
         recentErrors: getRecentErrors(),
+        processingLog: getPositionStatus(),
       },
     });
   } catch (error) {

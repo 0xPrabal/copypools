@@ -40,13 +40,26 @@ const lastRebalanceTimeCache = new Map<string, number>();
 const recentErrors: { tokenId: string; error: string; timestamp: string }[] = [];
 const MAX_ERRORS = 10;
 
+// Track position processing status
+const positionStatus: { tokenId: string; status: string; timestamp: string }[] = [];
+const MAX_STATUS = 20;
+
 function recordError(tokenId: string, error: string) {
   recentErrors.unshift({ tokenId, error, timestamp: new Date().toISOString() });
   if (recentErrors.length > MAX_ERRORS) recentErrors.pop();
 }
 
+function recordStatus(tokenId: string, status: string) {
+  positionStatus.unshift({ tokenId, status, timestamp: new Date().toISOString() });
+  if (positionStatus.length > MAX_STATUS) positionStatus.pop();
+}
+
 export function getRecentErrors() {
   return recentErrors;
+}
+
+export function getPositionStatus() {
+  return positionStatus;
 }
 
 interface RebalanceablePosition {
@@ -252,9 +265,11 @@ async function scanForRangeConfiguredEvents(): Promise<void> {
 async function processPositionSmart(tokenId: string): Promise<{ rebalanced: boolean; decision: RebalanceDecision | null }> {
   try {
     const tokenIdBigInt = BigInt(tokenId);
+    recordStatus(tokenId, 'Processing started');
 
     // Check per-block deduplication
     if (!(await canRebalanceInCurrentBlock(tokenId))) {
+      recordStatus(tokenId, 'Skipped: Already processed in this block');
       botLogger.debug({ tokenId }, 'Already processed in this block');
       return { rebalanced: false, decision: null };
     }
@@ -262,6 +277,7 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     // Verify range config is enabled on-chain
     const rangeConfig = await blockchain.getRangeConfig(tokenIdBigInt);
     if (!rangeConfig || !rangeConfig.enabled) {
+      recordStatus(tokenId, 'Skipped: Range config not enabled on-chain');
       botLogger.debug({ tokenId }, 'Range config not enabled on-chain');
       knownRangePositions.delete(tokenId);
       return { rebalanced: false, decision: null };
@@ -270,6 +286,7 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     // Check if already rebalanced to newer position
     const rebalancedTo = await getRebalancedTo(tokenIdBigInt);
     if (rebalancedTo > 0n) {
+      recordStatus(tokenId, `Skipped: Already rebalanced to ${rebalancedTo}`);
       botLogger.debug({ tokenId, rebalancedTo: rebalancedTo.toString() }, 'Position already rebalanced');
       return { rebalanced: false, decision: null };
     }
@@ -334,17 +351,23 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     // ============ EXECUTE IF NEEDED ============
 
     if (!decision.shouldRebalance) {
+      recordStatus(tokenId, `Decision: No rebalance needed - ${decision.reason}`);
       return { rebalanced: false, decision };
     }
+
+    recordStatus(tokenId, `Decision: Should rebalance - ${decision.reason}`);
 
     // Double-check contract's checkRebalance (it enforces cooldown)
     const { needsRebalance: contractAllows } = await blockchain.checkRebalance(tokenIdBigInt);
 
     // Always respect the contract's decision - it enforces cooldown and other constraints
     if (!contractAllows) {
+      recordStatus(tokenId, 'Blocked: Contract checkRebalance returned false');
       botLogger.debug({ tokenId }, 'Contract checkRebalance returned false, respecting cooldown');
       return { rebalanced: false, decision };
     }
+
+    recordStatus(tokenId, 'Executing rebalance...');
 
     // Get new range
     const newRange = await blockchain.calculateOptimalRange(tokenIdBigInt);
