@@ -81,8 +81,8 @@ router.get('/:tokenId', async (req: Request, res: Response) => {
           }
         }
 
-        // Add USD values for Ponder positions if requested
-        if (includeUSD && position.poolId && position.liquidity && BigInt(position.liquidity) > 0n) {
+        // Always try to get currentTick and inRange from pool data
+        if (position.poolId) {
           try {
             // Try to get pool from Ponder first (has correct tickSpacing)
             const poolResult = await subgraph.getPool(position.poolId);
@@ -125,19 +125,27 @@ router.get('/:tokenId', async (req: Request, res: Response) => {
 
             const slot0 = await blockchain.getPoolSlot0(poolKey);
 
-            const usdValues = await calculatePositionValueUSD(
-              BigInt(position.liquidity),
-              slot0.sqrtPriceX96,
-              position.tickLower,
-              position.tickUpper,
-              token0,
-              token1,
-              chainId
-            );
+            // Set current tick and inRange (always needed)
+            (position as any).currentTick = slot0.tick;
+            (position as any).sqrtPriceX96 = slot0.sqrtPriceX96.toString();
+            (position as any).inRange = slot0.tick >= position.tickLower && slot0.tick < position.tickUpper;
+            (position as any).poolKey = poolKey;
 
-            (position as any).usdValues = usdValues;
-          } catch (usdError) {
-            routeLogger.debug({ tokenId, error: usdError }, 'Failed to add USD values to Ponder position');
+            // Add USD values if requested and position has liquidity
+            if (includeUSD && position.liquidity && BigInt(position.liquidity) > 0n) {
+              const usdValues = await calculatePositionValueUSD(
+                BigInt(position.liquidity),
+                slot0.sqrtPriceX96,
+                position.tickLower,
+                position.tickUpper,
+                token0,
+                token1,
+                chainId
+              );
+              (position as any).usdValues = usdValues;
+            }
+          } catch (poolError) {
+            routeLogger.debug({ tokenId, error: poolError }, 'Failed to get pool data for Ponder position');
           }
         }
 
@@ -183,29 +191,32 @@ router.get('/:tokenId', async (req: Request, res: Response) => {
       // Position might not be registered for compounding
     }
 
-    // Add USD values if requested and position has pool data
-    if (includeUSD && position.poolKey) {
+    // Get current tick and calculate inRange from pool data
+    if (position.poolKey) {
       try {
-        // Get pool slot0 for sqrtPriceX96
         const slot0 = await blockchain.getPoolSlot0(position.poolKey);
+        (position as any).currentTick = slot0.tick;
+        (position as any).sqrtPriceX96 = slot0.sqrtPriceX96.toString();
+        (position as any).inRange = slot0.tick >= position.tickLower && slot0.tick < position.tickUpper;
 
-        // Calculate USD values
-        const usdValues = await calculatePositionValueUSD(
-          BigInt(position.liquidity),
-          slot0.sqrtPriceX96,
-          position.tickLower,
-          position.tickUpper,
-          position.poolKey.currency0,
-          position.poolKey.currency1,
-          chainId,
-          pendingFees
-        );
-
-        (position as any).usdValues = usdValues;
+        // Add USD values if requested
+        if (includeUSD) {
+          const usdValues = await calculatePositionValueUSD(
+            BigInt(position.liquidity),
+            slot0.sqrtPriceX96,
+            position.tickLower,
+            position.tickUpper,
+            position.poolKey.currency0,
+            position.poolKey.currency1,
+            chainId,
+            pendingFees
+          );
+          (position as any).usdValues = usdValues;
+        }
       } catch (e) {
-        routeLogger.warn({ tokenId, error: e }, 'Failed to calculate USD values');
+        routeLogger.warn({ tokenId, error: e }, 'Failed to get pool slot0');
         (position as any).usdValues = null;
-        (position as any).usdError = 'Failed to fetch prices';
+        (position as any).usdError = 'Failed to fetch pool data';
       }
     }
 
