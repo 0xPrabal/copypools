@@ -806,9 +806,9 @@ export async function getPositionTokenIds(ownerAddress: string, chainId: number 
 
     const currentBlock = await publicClient.getBlockNumber();
 
-    // Only scan recent blocks (last 1000) as a fast fallback
+    // Scan recent blocks as a fast fallback
     // Full history scanning should be handled by Ponder or position-indexer
-    const RECENT_BLOCKS = BigInt(1000);
+    const RECENT_BLOCKS = BigInt(50000); // ~2 days on Base
     const startBlock = currentBlock > RECENT_BLOCKS ? currentBlock - RECENT_BLOCKS : BigInt(0);
 
     // Smaller batch size to avoid 413 errors and stay under rate limits
