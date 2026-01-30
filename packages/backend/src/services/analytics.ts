@@ -128,9 +128,9 @@ export async function getPositionAnalytics(
 
     // Calculate USD metrics if requested
     let usdMetrics: USDMetrics | undefined = undefined;
-    if (includeUSD && position.pool) {
+    if (includeUSD) {
       try {
-        // Get pool data for sqrtPriceX96
+        // Get pool data for sqrtPriceX96 from blockchain (doesn't require subgraph pool data)
         const positionInfo = await blockchain.getPositionInfo(BigInt(tokenId));
 
         if (positionInfo?.poolKey) {
