@@ -24,10 +24,10 @@ const CONFIG = {
   HEALTH_CHECK_INTERVAL: 300_000, // Check unhealthy RPCs every 5 minutes (was 60s)
   CIRCUIT_RESET_TIMEOUT: 600_000, // Try unhealthy RPCs again after 10 minutes (was 5min)
 
-  // Rate Limiting (Token Bucket) - optimized for low usage
-  TOKENS_PER_SECOND: 5,           // Max RPC calls per second globally (was 15)
-  BUCKET_SIZE: 20,                // Max burst capacity (was 50)
-  REFILL_INTERVAL: 200,           // Refill tokens every 200ms (was 100ms)
+  // Rate Limiting (Token Bucket) - increased for better performance
+  TOKENS_PER_SECOND: 20,          // Max RPC calls per second globally (increased from 5)
+  BUCKET_SIZE: 50,                // Max burst capacity (increased from 20)
+  REFILL_INTERVAL: 100,           // Refill tokens every 100ms (was 200ms)
 
   // Client Cache
   CLIENT_TTL: 600_000,            // Refresh clients every 10 minutes (was 5min)
@@ -234,6 +234,79 @@ class RpcHealthTracker {
       stats[key] = { ...health };
     }
     return stats;
+  }
+
+  /**
+   * Get detailed health information for monitoring endpoints
+   */
+  getDetailedHealthInfo(): {
+    endpoints: Array<{
+      url: string;
+      name: string;
+      chainId: number;
+      healthy: boolean;
+      latencyMs: number;
+      successRate: number;
+      lastError: string | null;
+      failedAt: string | null;
+    }>;
+    summary: {
+      totalEndpoints: number;
+      healthyEndpoints: number;
+      unhealthyEndpoints: number;
+    };
+  } {
+    const endpoints: Array<{
+      url: string;
+      name: string;
+      chainId: number;
+      healthy: boolean;
+      latencyMs: number;
+      successRate: number;
+      lastError: string | null;
+      failedAt: string | null;
+    }> = [];
+
+    let healthyCount = 0;
+    let unhealthyCount = 0;
+
+    for (const [key, health] of this.healthMap.entries()) {
+      const [chainIdStr] = key.split(':');
+      const chainId = parseInt(chainIdStr);
+
+      const successRate =
+        health.totalRequests > 0
+          ? (health.totalRequests - health.totalFailures) / health.totalRequests
+          : 1;
+
+      endpoints.push({
+        url: health.url.substring(0, 50) + '...', // Truncate URL for security
+        name: health.name,
+        chainId,
+        healthy: health.isHealthy,
+        latencyMs: Math.round(health.avgResponseTime),
+        successRate: Math.round(successRate * 10000) / 10000,
+        lastError: health.isHealthy ? null : 'Connection failed or timeout',
+        failedAt: health.lastFailure
+          ? new Date(health.lastFailure).toISOString()
+          : null,
+      });
+
+      if (health.isHealthy) {
+        healthyCount++;
+      } else {
+        unhealthyCount++;
+      }
+    }
+
+    return {
+      endpoints,
+      summary: {
+        totalEndpoints: endpoints.length,
+        healthyEndpoints: healthyCount,
+        unhealthyEndpoints: unhealthyCount,
+      },
+    };
   }
 
   destroy(): void {
@@ -528,6 +601,13 @@ class RpcManager {
    */
   getHealthStats(): Record<string, RpcHealth> {
     return this.healthTracker.getStats();
+  }
+
+  /**
+   * Get detailed health information for monitoring
+   */
+  getDetailedHealth() {
+    return this.healthTracker.getDetailedHealthInfo();
   }
 
   /**

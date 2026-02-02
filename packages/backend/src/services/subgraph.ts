@@ -15,6 +15,7 @@ const pool = new pg.Pool({
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
+  statement_timeout: 30000, // 30 second query timeout
 });
 
 // Set search_path to ponder schema on each connection

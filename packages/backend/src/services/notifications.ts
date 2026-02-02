@@ -220,43 +220,150 @@ export function getWebhookSubscriptions(owner: string): WebhookSubscription[] {
   return webhookSubscriptions.get(owner) || [];
 }
 
-// Trigger webhooks for a notification
-async function triggerWebhooks(notification: Notification): Promise<void> {
-  const owner = notification.owner || 'global';
-  const subscriptions = webhookSubscriptions.get(owner) || [];
+// Webhook retry configuration
+const WEBHOOK_RETRY_CONFIG = {
+  maxAttempts: 3,
+  baseDelayMs: 1000, // 1 second
+  maxDelayMs: 4000, // 4 seconds
+};
 
-  for (const subscription of subscriptions) {
-    if (!subscription.active) continue;
-    if (!subscription.events.includes(notification.type)) continue;
+// Track webhook delivery status
+interface WebhookDeliveryStatus {
+  webhookId: string;
+  notificationId: string;
+  attempts: number;
+  lastAttempt: number;
+  status: 'pending' | 'success' | 'failed';
+  lastError?: string;
+}
 
+const webhookDeliveryLog: Map<string, WebhookDeliveryStatus> = new Map();
+
+/**
+ * Attempt to deliver a webhook with exponential backoff retry
+ */
+async function deliverWebhookWithRetry(
+  subscription: WebhookSubscription,
+  payload: Record<string, unknown>,
+  notificationId: string
+): Promise<boolean> {
+  const deliveryKey = `${subscription.id}:${notificationId}`;
+  let lastError: string | undefined;
+
+  for (let attempt = 1; attempt <= WEBHOOK_RETRY_CONFIG.maxAttempts; attempt++) {
     try {
-      const payload = {
-        event: notification.type,
-        notification,
-        timestamp: Date.now(),
-      };
-
-      // In production, use proper HTTP client with retries
-      await fetch(subscription.url, {
+      const response = await fetch(subscription.url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(subscription.secret && { 'X-Webhook-Secret': subscription.secret }),
         },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(10000), // 10 second timeout
       });
 
-      notificationLogger.debug(
-        { webhookId: subscription.id, event: notification.type },
-        'Webhook triggered'
+      if (response.ok) {
+        // Success - log and return
+        webhookDeliveryLog.set(deliveryKey, {
+          webhookId: subscription.id,
+          notificationId,
+          attempts: attempt,
+          lastAttempt: Date.now(),
+          status: 'success',
+        });
+
+        notificationLogger.debug(
+          { webhookId: subscription.id, notificationId, attempt },
+          'Webhook delivered successfully'
+        );
+        return true;
+      }
+
+      lastError = `HTTP ${response.status}: ${response.statusText}`;
+      notificationLogger.warn(
+        { webhookId: subscription.id, attempt, status: response.status },
+        'Webhook delivery failed, will retry'
       );
     } catch (error) {
-      notificationLogger.error(
-        { webhookId: subscription.id, error },
-        'Webhook trigger failed'
+      lastError = error instanceof Error ? error.message : String(error);
+      notificationLogger.warn(
+        { webhookId: subscription.id, attempt, error: lastError },
+        'Webhook delivery error, will retry'
       );
     }
+
+    // Wait before retry (exponential backoff: 1s, 2s, 4s)
+    if (attempt < WEBHOOK_RETRY_CONFIG.maxAttempts) {
+      const delay = Math.min(
+        WEBHOOK_RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt - 1),
+        WEBHOOK_RETRY_CONFIG.maxDelayMs
+      );
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
+
+  // All retries failed
+  webhookDeliveryLog.set(deliveryKey, {
+    webhookId: subscription.id,
+    notificationId,
+    attempts: WEBHOOK_RETRY_CONFIG.maxAttempts,
+    lastAttempt: Date.now(),
+    status: 'failed',
+    lastError,
+  });
+
+  notificationLogger.error(
+    {
+      webhookId: subscription.id,
+      notificationId,
+      attempts: WEBHOOK_RETRY_CONFIG.maxAttempts,
+      lastError,
+    },
+    'Webhook delivery failed after all retries'
+  );
+
+  return false;
+}
+
+/**
+ * Get recent webhook delivery failures for debugging
+ */
+export function getRecentWebhookFailures(limit: number = 20): WebhookDeliveryStatus[] {
+  const failures: WebhookDeliveryStatus[] = [];
+  for (const status of webhookDeliveryLog.values()) {
+    if (status.status === 'failed') {
+      failures.push(status);
+    }
+  }
+  // Sort by lastAttempt descending and limit
+  return failures
+    .sort((a, b) => b.lastAttempt - a.lastAttempt)
+    .slice(0, limit);
+}
+
+// Trigger webhooks for a notification with retry logic
+async function triggerWebhooks(notification: Notification): Promise<void> {
+  const owner = notification.owner || 'global';
+  const subscriptions = webhookSubscriptions.get(owner) || [];
+
+  const payload = {
+    event: notification.type,
+    notification,
+    timestamp: Date.now(),
+  };
+
+  // Process webhooks in parallel (fire-and-forget with logging)
+  const deliveryPromises = subscriptions
+    .filter(sub => sub.active && sub.events.includes(notification.type))
+    .map(subscription =>
+      deliverWebhookWithRetry(subscription, payload, notification.id)
+    );
+
+  // Wait for all webhook deliveries to complete (or fail)
+  // This is fire-and-forget from the notification creation perspective
+  Promise.all(deliveryPromises).catch(error => {
+    notificationLogger.error({ error }, 'Unexpected error in webhook delivery');
+  });
 }
 
 // Notification service runner (to be called periodically)

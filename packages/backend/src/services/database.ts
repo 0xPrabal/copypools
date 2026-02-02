@@ -5,15 +5,98 @@ import { memoryCache, CACHE_KEYS, CACHE_TTL } from './cache.js';
 
 const dbLogger = logger.child({ module: 'database' });
 
-// Create pool connection
+// Configuration
+const DB_CONFIG = {
+  STATEMENT_TIMEOUT_MS: 30000, // 30 second query timeout
+  SLOW_QUERY_THRESHOLD_MS: 100, // Log queries taking longer than 100ms
+  MAX_CONNECTIONS: 10,
+  IDLE_TIMEOUT_MS: 30000,
+  CONNECTION_TIMEOUT_MS: 2000,
+};
+
+// Create pool connection with statement timeout
 const pool = config.DATABASE_URL
   ? new pg.Pool({
       connectionString: config.DATABASE_URL,
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
+      max: DB_CONFIG.MAX_CONNECTIONS,
+      idleTimeoutMillis: DB_CONFIG.IDLE_TIMEOUT_MS,
+      connectionTimeoutMillis: DB_CONFIG.CONNECTION_TIMEOUT_MS,
+      statement_timeout: DB_CONFIG.STATEMENT_TIMEOUT_MS,
     })
   : null;
+
+// Track slow queries
+interface QueryMetrics {
+  totalQueries: number;
+  slowQueries: number;
+  totalDurationMs: number;
+  errors: number;
+}
+
+const queryMetrics: QueryMetrics = {
+  totalQueries: 0,
+  slowQueries: 0,
+  totalDurationMs: 0,
+  errors: 0,
+};
+
+/**
+ * Execute a query with timing and slow query logging
+ */
+async function timedQuery<T extends pg.QueryResultRow>(
+  client: pg.Pool | pg.PoolClient,
+  text: string,
+  params?: unknown[]
+): Promise<pg.QueryResult<T>> {
+  const start = Date.now();
+  queryMetrics.totalQueries++;
+
+  try {
+    const result = await client.query<T>(text, params);
+    const duration = Date.now() - start;
+    queryMetrics.totalDurationMs += duration;
+
+    if (duration > DB_CONFIG.SLOW_QUERY_THRESHOLD_MS) {
+      queryMetrics.slowQueries++;
+      dbLogger.warn(
+        {
+          duration,
+          queryPreview: text.substring(0, 100),
+          paramCount: params?.length || 0,
+        },
+        'Slow query detected'
+      );
+    }
+
+    return result;
+  } catch (error) {
+    queryMetrics.errors++;
+    throw error;
+  }
+}
+
+/**
+ * Get query metrics for monitoring
+ */
+export function getQueryMetrics(): QueryMetrics & { avgDurationMs: number } {
+  return {
+    ...queryMetrics,
+    avgDurationMs:
+      queryMetrics.totalQueries > 0
+        ? Math.round(queryMetrics.totalDurationMs / queryMetrics.totalQueries)
+        : 0,
+  };
+}
+
+/**
+ * Reset query metrics
+ */
+export function resetQueryMetrics(): void {
+  queryMetrics.totalQueries = 0;
+  queryMetrics.slowQueries = 0;
+  queryMetrics.totalDurationMs = 0;
+  queryMetrics.errors = 0;
+}
 
 // Position cache interface (token IDs only)
 export interface PositionCache {
@@ -193,6 +276,22 @@ export async function initializeDatabase(): Promise<void> {
       ON positions(updated_at)
     `);
 
+    // Additional indexes for performance (Phase 2.4)
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_positions_owner
+      ON positions(owner)
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_positions_liquidity
+      ON positions(liquidity) WHERE liquidity > '0'
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_positions_updated_desc
+      ON positions(updated_at DESC)
+    `);
+
     // Create v4_pools table for pool listing with TVL, volume, APR
     await pool.query(`
       CREATE TABLE IF NOT EXISTS v4_pools (
@@ -262,7 +361,8 @@ export async function getPositionCache(
   }
 
   try {
-    const result = await pool.query(
+    const result = await timedQuery(
+      pool,
       `SELECT address, chain_id, last_scanned_block, token_ids, updated_at
        FROM position_cache
        WHERE LOWER(address) = LOWER($1) AND chain_id = $2`,
@@ -426,7 +526,8 @@ export async function getPositionsByOwner(
   }
 
   try {
-    const result = await pool.query(
+    const result = await timedQuery(
+      pool,
       `SELECT token_id, owner, chain_id, pool_id, currency0, currency1,
               fee, tick_spacing, hooks, tick_lower, tick_upper, liquidity,
               current_tick, in_range, compound_config, range_config, updated_at
@@ -531,87 +632,129 @@ export async function savePosition(position: Omit<CachedPosition, 'updatedAt'>):
   }
 }
 
-// Batch save positions (more efficient for multiple positions)
+// Batch save positions (optimized with multi-row INSERT using unnest)
 export async function savePositions(positions: Omit<CachedPosition, 'updatedAt'>[]): Promise<void> {
   if (!pool || positions.length === 0) {
     return;
   }
 
   try {
-    // Use a transaction for batch insert
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
+    // Prepare arrays for batch insert using unnest
+    const tokenIds: string[] = [];
+    const chainIds: number[] = [];
+    const owners: string[] = [];
+    const poolIds: string[] = [];
+    const currency0s: string[] = [];
+    const currency1s: string[] = [];
+    const fees: number[] = [];
+    const tickSpacings: number[] = [];
+    const hooksList: string[] = [];
+    const tickLowers: number[] = [];
+    const tickUppers: number[] = [];
+    const liquidities: string[] = [];
+    const currentTicks: number[] = [];
+    const inRanges: boolean[] = [];
+    const compoundConfigs: (string | null)[] = [];
+    const rangeConfigs: (string | null)[] = [];
 
-      for (const position of positions) {
-        // Serialize config objects for JSONB storage
-        const compoundConfigJson = position.compoundConfig ? JSON.stringify({
-          enabled: position.compoundConfig.enabled,
-          minCompoundInterval: position.compoundConfig.minCompoundInterval,
-          minRewardAmount: position.compoundConfig.minRewardAmount?.toString() || '0',
-          autoSwap: position.compoundConfig.autoSwap,
-        }) : null;
+    for (const position of positions) {
+      tokenIds.push(position.tokenId);
+      chainIds.push(position.chainId);
+      owners.push(position.owner.toLowerCase());
+      poolIds.push(position.poolId);
+      currency0s.push(position.currency0);
+      currency1s.push(position.currency1);
+      fees.push(position.fee);
+      tickSpacings.push(position.tickSpacing);
+      hooksList.push(position.hooks);
+      tickLowers.push(position.tickLower);
+      tickUppers.push(position.tickUpper);
+      liquidities.push(position.liquidity);
+      currentTicks.push(position.currentTick);
+      inRanges.push(position.inRange);
 
-        const rangeConfigJson = position.rangeConfig ? JSON.stringify({
-          enabled: position.rangeConfig.enabled,
-          lowerDelta: position.rangeConfig.lowerDelta,
-          upperDelta: position.rangeConfig.upperDelta,
-          rebalanceThreshold: position.rangeConfig.rebalanceThreshold,
-          maxSlippage: position.rangeConfig.maxSlippage,
-        }) : null;
+      // Serialize config objects for JSONB storage
+      compoundConfigs.push(
+        position.compoundConfig
+          ? JSON.stringify({
+              enabled: position.compoundConfig.enabled,
+              minCompoundInterval: position.compoundConfig.minCompoundInterval,
+              minRewardAmount: position.compoundConfig.minRewardAmount?.toString() || '0',
+              autoSwap: position.compoundConfig.autoSwap,
+            })
+          : null
+      );
 
-        await client.query(
-          `INSERT INTO positions (
-            token_id, chain_id, owner, pool_id, currency0, currency1,
-            fee, tick_spacing, hooks, tick_lower, tick_upper, liquidity,
-            current_tick, in_range, compound_config, range_config, updated_at
-          ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
-          ON CONFLICT (token_id, chain_id)
-          DO UPDATE SET
-            owner = LOWER($3),
-            pool_id = $4,
-            currency0 = $5,
-            currency1 = $6,
-            fee = $7,
-            tick_spacing = $8,
-            hooks = $9,
-            tick_lower = $10,
-            tick_upper = $11,
-            liquidity = $12,
-            current_tick = $13,
-            in_range = $14,
-            compound_config = $15,
-            range_config = $16,
-            updated_at = NOW()`,
-          [
-            position.tokenId,
-            position.chainId,
-            position.owner,
-            position.poolId,
-            position.currency0,
-            position.currency1,
-            position.fee,
-            position.tickSpacing,
-            position.hooks,
-            position.tickLower,
-            position.tickUpper,
-            position.liquidity,
-            position.currentTick,
-            position.inRange,
-            compoundConfigJson,
-            rangeConfigJson,
-          ]
-        );
-      }
-
-      await client.query('COMMIT');
-      dbLogger.debug({ count: positions.length }, 'Batch saved positions');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
+      rangeConfigs.push(
+        position.rangeConfig
+          ? JSON.stringify({
+              enabled: position.rangeConfig.enabled,
+              lowerDelta: position.rangeConfig.lowerDelta,
+              upperDelta: position.rangeConfig.upperDelta,
+              rebalanceThreshold: position.rangeConfig.rebalanceThreshold,
+              maxSlippage: position.rangeConfig.maxSlippage,
+            })
+          : null
+      );
     }
+
+    // Use unnest for efficient multi-row INSERT
+    await timedQuery(
+      pool,
+      `INSERT INTO positions (
+        token_id, chain_id, owner, pool_id, currency0, currency1,
+        fee, tick_spacing, hooks, tick_lower, tick_upper, liquidity,
+        current_tick, in_range, compound_config, range_config, updated_at
+      )
+      SELECT * FROM unnest(
+        $1::varchar[], $2::integer[], $3::varchar[], $4::varchar[],
+        $5::varchar[], $6::varchar[], $7::integer[], $8::integer[],
+        $9::varchar[], $10::integer[], $11::integer[], $12::varchar[],
+        $13::integer[], $14::boolean[], $15::jsonb[], $16::jsonb[]
+      ) AS t(
+        token_id, chain_id, owner, pool_id, currency0, currency1,
+        fee, tick_spacing, hooks, tick_lower, tick_upper, liquidity,
+        current_tick, in_range, compound_config, range_config
+      ),
+      LATERAL (SELECT NOW() AS updated_at) AS time_val
+      ON CONFLICT (token_id, chain_id)
+      DO UPDATE SET
+        owner = EXCLUDED.owner,
+        pool_id = EXCLUDED.pool_id,
+        currency0 = EXCLUDED.currency0,
+        currency1 = EXCLUDED.currency1,
+        fee = EXCLUDED.fee,
+        tick_spacing = EXCLUDED.tick_spacing,
+        hooks = EXCLUDED.hooks,
+        tick_lower = EXCLUDED.tick_lower,
+        tick_upper = EXCLUDED.tick_upper,
+        liquidity = EXCLUDED.liquidity,
+        current_tick = EXCLUDED.current_tick,
+        in_range = EXCLUDED.in_range,
+        compound_config = EXCLUDED.compound_config,
+        range_config = EXCLUDED.range_config,
+        updated_at = NOW()`,
+      [
+        tokenIds,
+        chainIds,
+        owners,
+        poolIds,
+        currency0s,
+        currency1s,
+        fees,
+        tickSpacings,
+        hooksList,
+        tickLowers,
+        tickUppers,
+        liquidities,
+        currentTicks,
+        inRanges,
+        compoundConfigs,
+        rangeConfigs,
+      ]
+    );
+
+    dbLogger.debug({ count: positions.length }, 'Batch saved positions (optimized)');
   } catch (error) {
     dbLogger.error({ error, count: positions.length }, 'Failed to batch save positions');
   }

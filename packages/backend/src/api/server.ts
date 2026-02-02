@@ -21,6 +21,7 @@ import {
   securityHeaders,
   requestTimeout,
 } from './middleware/production.js';
+import { correlationIdMiddleware } from './middleware/correlation.js';
 
 const apiLogger = logger.child({ module: 'api' });
 
@@ -37,6 +38,7 @@ export function createServer() {
   });
 
   // Production middleware
+  app.use(correlationIdMiddleware); // Add correlation ID to all requests
   app.use(securityHeaders);
   // CORS - allow all origins explicitly for production
   app.use(cors({
@@ -50,11 +52,7 @@ export function createServer() {
   app.use(requestTimeout(30000)); // 30 second timeout
   app.use(apiRateLimiter); // Rate limiting
 
-  // Request logging
-  app.use((req: Request, _res: Response, next: NextFunction) => {
-    apiLogger.debug({ method: req.method, path: req.path }, 'Request received');
-    next();
-  });
+  // Note: Request logging is handled by correlationIdMiddleware
 
   // Health check routes (includes RPC health, rate limiting, cache status)
   app.use('/health', healthRouter);

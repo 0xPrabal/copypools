@@ -26,6 +26,60 @@ import {
 const router = Router();
 const routeLogger = logger.child({ route: 'positions' });
 
+// Promise timeout configuration
+const ENRICHMENT_TIMEOUT_MS = 10000; // 10 seconds for enrichment operations
+
+/**
+ * Wrap a promise with a timeout
+ * Returns { data, timedOut } - if timedOut is true, data will be undefined
+ */
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label?: string
+): Promise<{ data?: T; timedOut: boolean; error?: string }> {
+  let timeoutId: NodeJS.Timeout;
+
+  const timeoutPromise = new Promise<{ data?: T; timedOut: boolean; error: string }>((resolve) => {
+    timeoutId = setTimeout(() => {
+      resolve({ timedOut: true, error: `Operation timed out after ${timeoutMs}ms${label ? ` (${label})` : ''}` });
+    }, timeoutMs);
+  });
+
+  try {
+    const data = await Promise.race([
+      promise.then(data => ({ data, timedOut: false })),
+      timeoutPromise,
+    ]);
+    clearTimeout(timeoutId!);
+    return data;
+  } catch (error) {
+    clearTimeout(timeoutId!);
+    return {
+      timedOut: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Wrap Promise.all with timeout and return partial results
+ */
+async function promiseAllWithTimeout<T>(
+  promises: Promise<T>[],
+  timeoutMs: number
+): Promise<{ results: (T | null)[]; completedCount: number; timedOutCount: number }> {
+  const wrappedPromises = promises.map(p =>
+    withTimeout(p, timeoutMs).then(result => (result.timedOut ? null : result.data ?? null))
+  );
+
+  const results = await Promise.all(wrappedPromises);
+  const completedCount = results.filter(r => r !== null).length;
+  const timedOutCount = results.filter(r => r === null).length;
+
+  return { results, completedCount, timedOutCount };
+}
+
 // Cache settings (optimized to reduce RPC calls)
 const MEMORY_CACHE_TTL = 30 * 1000; // 30 seconds for in-memory
 const DB_CACHE_STALE_MINUTES = 2; // Consider DB cache stale after 2 minutes
@@ -421,11 +475,75 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
 
     routeLogger.info({ address, count: onChainPositions.length, chainId }, 'Found positions on chain');
 
-    // Enrich positions with automation configs and current tick (in parallel)
-    const positions = await Promise.all(
-      onChainPositions.map(async (position) => {
-        const enrichedPosition: any = {
-          ...position,
+    // Enrich positions with automation configs and current tick (in parallel with timeout)
+    const enrichmentErrors: string[] = [];
+
+    const enrichmentPromises = onChainPositions.map(async (position) => {
+      const enrichedPosition: any = {
+        ...position,
+        depositedToken0: '0',
+        depositedToken1: '0',
+        withdrawnToken0: '0',
+        withdrawnToken1: '0',
+        collectedFeesToken0: '0',
+        collectedFeesToken1: '0',
+        compoundConfig: null,
+        rangeConfig: null,
+        currentTick: position.currentTick || 0,
+        sqrtPriceX96: position.sqrtPriceX96 || '0',
+        inRange: position.inRange ?? true,
+        _enrichmentComplete: true,
+      };
+
+      if (!enrich) return enrichedPosition;
+
+      const tokenId = BigInt(position.tokenId);
+
+      if (useLegacyPath) {
+        // Primary chain: full enrichment with automation configs
+        const [compoundConfig, rangeConfig] = await Promise.all([
+          blockchain.getCompoundConfig(tokenId).catch(() => null),
+          blockchain.getRangeConfig(tokenId).catch(() => null),
+        ]);
+
+        if (compoundConfig?.enabled) {
+          enrichedPosition.compoundConfig = compoundConfig;
+        }
+        if (rangeConfig?.enabled) {
+          enrichedPosition.rangeConfig = rangeConfig;
+        }
+
+        // Get current tick and sqrtPriceX96 from StateView
+        if (position.poolKey) {
+          try {
+            const slot0 = await blockchain.getPoolSlot0(position.poolKey);
+            enrichedPosition.currentTick = slot0.tick;
+            enrichedPosition.sqrtPriceX96 = slot0.sqrtPriceX96.toString();
+            enrichedPosition.inRange = slot0.tick >= position.tickLower && slot0.tick < position.tickUpper;
+          } catch (e) {
+            routeLogger.warn({ tokenId: position.tokenId, error: e }, 'Failed to get slot0 from StateView');
+            enrichedPosition._enrichmentComplete = false;
+          }
+        }
+      }
+      // For non-primary chains, multichain.fetchPositionsForOwner already includes currentTick and inRange
+
+      return enrichedPosition;
+    });
+
+    // Use timeout wrapper for enrichment
+    const { results, completedCount, timedOutCount } = await promiseAllWithTimeout(
+      enrichmentPromises,
+      ENRICHMENT_TIMEOUT_MS
+    );
+
+    // Filter out null results (timed out) and track errors
+    const positions = results.map((result, index) => {
+      if (result === null) {
+        enrichmentErrors.push(`Position ${onChainPositions[index]?.tokenId}: enrichment timed out`);
+        // Return base position without enrichment
+        return {
+          ...onChainPositions[index],
           depositedToken0: '0',
           depositedToken1: '0',
           withdrawnToken0: '0',
@@ -434,46 +552,17 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
           collectedFeesToken1: '0',
           compoundConfig: null,
           rangeConfig: null,
-          currentTick: position.currentTick || 0,
-          sqrtPriceX96: position.sqrtPriceX96 || '0',
-          inRange: position.inRange ?? true,
+          currentTick: onChainPositions[index]?.currentTick || 0,
+          sqrtPriceX96: onChainPositions[index]?.sqrtPriceX96 || '0',
+          inRange: onChainPositions[index]?.inRange ?? true,
+          _enrichmentComplete: false,
         };
+      }
+      return result;
+    });
 
-        if (!enrich) return enrichedPosition;
-
-        const tokenId = BigInt(position.tokenId);
-
-        if (useLegacyPath) {
-          // Primary chain: full enrichment with automation configs
-          const [compoundConfig, rangeConfig] = await Promise.all([
-            blockchain.getCompoundConfig(tokenId).catch(() => null),
-            blockchain.getRangeConfig(tokenId).catch(() => null),
-          ]);
-
-          if (compoundConfig?.enabled) {
-            enrichedPosition.compoundConfig = compoundConfig;
-          }
-          if (rangeConfig?.enabled) {
-            enrichedPosition.rangeConfig = rangeConfig;
-          }
-
-          // Get current tick and sqrtPriceX96 from StateView
-          if (position.poolKey) {
-            try {
-              const slot0 = await blockchain.getPoolSlot0(position.poolKey);
-              enrichedPosition.currentTick = slot0.tick;
-              enrichedPosition.sqrtPriceX96 = slot0.sqrtPriceX96.toString();
-              enrichedPosition.inRange = slot0.tick >= position.tickLower && slot0.tick < position.tickUpper;
-            } catch (e) {
-              routeLogger.warn({ tokenId: position.tokenId, error: e }, 'Failed to get slot0 from StateView');
-            }
-          }
-        }
-        // For non-primary chains, multichain.fetchPositionsForOwner already includes currentTick and inRange
-
-        return enrichedPosition;
-      })
-    );
+    // Determine if we should return partial content
+    const isPartialContent = timedOutCount > 0 || enrichmentErrors.length > 0;
 
     // Save to memory cache
     memoryCache.set(memoryCacheKey, positions, MEMORY_CACHE_TTL);
@@ -504,8 +593,33 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
       });
     }
 
-    routeLogger.debug({ address, count: positions.length, layer: 'chain' }, 'Fetched fresh');
+    routeLogger.debug({ address, count: positions.length, layer: 'chain', timedOutCount }, 'Fetched fresh');
+
     if (res.headersSent) return;
+
+    // Return 206 Partial Content if some enrichments failed
+    if (isPartialContent) {
+      const dataCompleteness = completedCount / (completedCount + timedOutCount);
+      res.setHeader('X-Data-Completeness', dataCompleteness.toFixed(2));
+      res.setHeader('X-Enrichment-Errors', enrichmentErrors.length.toString());
+
+      routeLogger.warn({
+        address,
+        completedCount,
+        timedOutCount,
+        errorsCount: enrichmentErrors.length,
+      }, 'Returning partial content due to enrichment failures');
+
+      return res.status(206).json({
+        positions,
+        _meta: {
+          partial: true,
+          completeness: dataCompleteness,
+          enrichmentErrors: enrichmentErrors.slice(0, 10), // Limit errors in response
+        },
+      });
+    }
+
     res.json(positions);
   } catch (error) {
     routeLogger.error({
@@ -619,7 +733,6 @@ router.get('/:tokenId/analytics', async (req: Request, res: Response) => {
 // Get position snapshots (historical data)
 router.get('/:tokenId/snapshots', async (req: Request, res: Response) => {
   try {
-    const { tokenId } = req.params;
     // This would query snapshots from subgraph
     // For now, return empty array
     res.json([]);
