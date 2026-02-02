@@ -77,10 +77,42 @@ export async function getPositionAnalytics(
 ): Promise<PositionAnalytics | null> {
   try {
     const positionResult = await subgraph.getPosition(tokenId);
-    const position = (positionResult as any)?.position;
+    let position = (positionResult as any)?.position;
 
     if (!position) {
       return null;
+    }
+
+    // CRITICAL: Check if position needs enrichment from chain
+    // poolId === 'unknown' or tickLower/tickUpper === 0 means Ponder has incomplete data
+    const needsEnrichment = !position.poolId || position.poolId === 'unknown' ||
+      (position.tickLower === 0 && position.tickUpper === 0);
+
+    if (needsEnrichment) {
+      analyticsLogger.debug({ tokenId }, 'Position needs enrichment from chain (unknown poolId)');
+      const onChainInfo = await blockchain.getPositionInfo(BigInt(tokenId));
+      if (onChainInfo) {
+        // Merge on-chain data with Ponder data
+        position = {
+          ...position,
+          poolId: onChainInfo.poolId,
+          poolKey: onChainInfo.poolKey,
+          tickLower: onChainInfo.tickLower,
+          tickUpper: onChainInfo.tickUpper,
+          liquidity: onChainInfo.liquidity,
+        };
+
+        // Persist to database for future requests (async, don't wait)
+        subgraph.updatePositionFromChain(
+          tokenId,
+          onChainInfo.poolId,
+          onChainInfo.tickLower,
+          onChainInfo.tickUpper,
+          onChainInfo.liquidity
+        ).catch(err => {
+          analyticsLogger.warn({ error: err, tokenId }, 'Failed to persist enriched position');
+        });
+      }
     }
 
     // Get on-chain pending fees

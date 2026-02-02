@@ -150,11 +150,45 @@ router.get('/:tokenId', checkRpcHealth, async (req: Request, res: Response) => {
     try {
       const ponderResult = await subgraph.getPosition(tokenId);
       if (ponderResult.position) {
-        const position = ponderResult.position;
+        let position = ponderResult.position;
+
+        // CRITICAL: Check if position needs enrichment from chain
+        // poolId === 'unknown' or tickLower/tickUpper === 0 means Ponder has incomplete data
+        const needsEnrichment = !position.poolId || position.poolId === 'unknown' ||
+          (position.tickLower === 0 && position.tickUpper === 0);
+
+        if (needsEnrichment) {
+          routeLogger.info({ tokenId }, 'Position needs enrichment from chain (unknown poolId)');
+          const onChainInfo = await blockchain.getPositionInfo(BigInt(tokenId));
+
+          if (onChainInfo) {
+            // Merge on-chain data with Ponder data (on-chain takes precedence for pool info)
+            position = {
+              ...position,
+              poolId: onChainInfo.poolId,
+              poolKey: onChainInfo.poolKey,
+              tickLower: onChainInfo.tickLower,
+              tickUpper: onChainInfo.tickUpper,
+              liquidity: onChainInfo.liquidity,
+              owner: onChainInfo.owner,
+            };
+
+            // Persist to database for future requests (async, don't wait)
+            subgraph.updatePositionFromChain(
+              tokenId,
+              onChainInfo.poolId,
+              onChainInfo.tickLower,
+              onChainInfo.tickUpper,
+              onChainInfo.liquidity
+            ).catch(err => {
+              routeLogger.warn({ error: err, tokenId }, 'Failed to persist enriched position to database');
+            });
+          }
+        }
 
         // CRITICAL: Verify on-chain liquidity - Ponder may have stale data
         // (e.g., liquidity removed via PositionManager directly, not V4Utils)
-        if (position.liquidity && BigInt(position.liquidity) > 0n) {
+        if (position.liquidity && BigInt(position.liquidity) > 0n && !needsEnrichment) {
           try {
             const onChainLiquidity = await blockchain.getPositionLiquidity(BigInt(tokenId));
             if (onChainLiquidity === 0n) {
@@ -168,47 +202,50 @@ router.get('/:tokenId', checkRpcHealth, async (req: Request, res: Response) => {
           }
         }
 
-        // Always try to get currentTick and inRange from pool data
-        if (position.poolId) {
+        // Get currentTick and inRange from pool data (if we have valid poolId)
+        if (position.poolId && position.poolId !== 'unknown') {
           try {
-            // Try to get pool from Ponder first (has correct tickSpacing)
-            const poolResult = await subgraph.getPool(position.poolId);
+            let poolKey = position.poolKey;
 
-            let token0: string;
-            let token1: string;
-            let fee: number;
-            let tickSpacing: number;
-            let hooks: string;
+            // If no poolKey yet, construct it from poolId or pool data
+            if (!poolKey) {
+              // Try to get pool from Ponder first (has correct tickSpacing)
+              const poolResult = await subgraph.getPool(position.poolId);
 
-            if (poolResult.pool) {
-              // Use pool data from Ponder (accurate tickSpacing)
-              // Column names: token0_id -> token0Id, tick_spacing -> tickSpacing
-              token0 = poolResult.pool.token0Id || poolResult.pool.token0 || poolResult.pool.currency0;
-              token1 = poolResult.pool.token1Id || poolResult.pool.token1 || poolResult.pool.currency1;
-              fee = poolResult.pool.fee || poolResult.pool.feeTier || 3000;
-              tickSpacing = poolResult.pool.tickSpacing || feeToTickSpacing(fee);
-              hooks = poolResult.pool.hooks || '0x0000000000000000000000000000000000000000';
-            } else {
-              // Fallback: Parse poolId (format: "token0-token1-fee")
-              const poolParts = position.poolId.split('-');
-              if (poolParts.length < 2) {
-                throw new Error('Invalid poolId format');
+              let token0: string;
+              let token1: string;
+              let fee: number;
+              let tickSpacing: number;
+              let hooks: string;
+
+              if (poolResult.pool) {
+                // Use pool data from Ponder (accurate tickSpacing)
+                token0 = poolResult.pool.token0Id || poolResult.pool.token0 || poolResult.pool.currency0;
+                token1 = poolResult.pool.token1Id || poolResult.pool.token1 || poolResult.pool.currency1;
+                fee = poolResult.pool.fee || poolResult.pool.feeTier || 3000;
+                tickSpacing = poolResult.pool.tickSpacing || feeToTickSpacing(fee);
+                hooks = poolResult.pool.hooks || '0x0000000000000000000000000000000000000000';
+              } else {
+                // Fallback: Parse poolId (format: "token0-token1-fee")
+                const poolParts = position.poolId.split('-');
+                if (poolParts.length < 2) {
+                  throw new Error('Invalid poolId format');
+                }
+                token0 = poolParts[0];
+                token1 = poolParts[1];
+                fee = parseInt(poolParts[2] || '3000');
+                tickSpacing = feeToTickSpacing(fee);
+                hooks = '0x0000000000000000000000000000000000000000';
               }
-              token0 = poolParts[0];
-              token1 = poolParts[1];
-              fee = parseInt(poolParts[2] || '3000');
-              tickSpacing = feeToTickSpacing(fee);
-              hooks = '0x0000000000000000000000000000000000000000';
-            }
 
-            // Get current pool price from chain
-            const poolKey = {
-              currency0: token0,
-              currency1: token1,
-              fee,
-              tickSpacing,
-              hooks,
-            };
+              poolKey = {
+                currency0: token0,
+                currency1: token1,
+                fee,
+                tickSpacing,
+                hooks,
+              };
+            }
 
             const slot0 = await blockchain.getPoolSlot0(poolKey);
 
@@ -225,8 +262,8 @@ router.get('/:tokenId', checkRpcHealth, async (req: Request, res: Response) => {
                 slot0.sqrtPriceX96,
                 position.tickLower,
                 position.tickUpper,
-                token0,
-                token1,
+                poolKey.currency0,
+                poolKey.currency1,
                 chainId
               );
               (position as any).usdValues = usdValues;
