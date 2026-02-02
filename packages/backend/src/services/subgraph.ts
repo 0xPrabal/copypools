@@ -200,6 +200,82 @@ export async function getAllPositions(first = 100, skip = 0, activeOnly = false)
   return { positions: { items: positions } };
 }
 
+/**
+ * Update a position in the Ponder database with enriched on-chain data
+ * Used to persist pool info for positions that had poolId: "unknown"
+ */
+export async function updatePositionFromChain(
+  tokenId: string,
+  poolId: string,
+  tickLower: number,
+  tickUpper: number,
+  liquidity: string
+): Promise<boolean> {
+  try {
+    const result = await pool.query(
+      `UPDATE position
+       SET pool_id = $2, tick_lower = $3, tick_upper = $4, liquidity = $5
+       WHERE id = $1 OR token_id = $1`,
+      [tokenId, poolId, tickLower, tickUpper, liquidity]
+    );
+
+    if (result.rowCount && result.rowCount > 0) {
+      subgraphLogger.info({ tokenId, poolId }, 'Updated position with on-chain data');
+      return true;
+    }
+    return false;
+  } catch (error) {
+    subgraphLogger.error({ error: (error as Error).message, tokenId }, 'Failed to update position');
+    return false;
+  }
+}
+
+/**
+ * Batch update positions in the Ponder database with enriched on-chain data
+ * More efficient than individual updates
+ */
+export async function batchUpdatePositionsFromChain(
+  positions: Array<{
+    tokenId: string;
+    poolId: string;
+    tickLower: number;
+    tickUpper: number;
+    liquidity: string;
+  }>
+): Promise<number> {
+  if (positions.length === 0) return 0;
+
+  let updatedCount = 0;
+
+  // Use a transaction for batch updates
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    for (const pos of positions) {
+      const result = await client.query(
+        `UPDATE position
+         SET pool_id = $2, tick_lower = $3, tick_upper = $4, liquidity = $5
+         WHERE (id = $1 OR token_id = $1) AND (pool_id = 'unknown' OR pool_id IS NULL)`,
+        [pos.tokenId, pos.poolId, pos.tickLower, pos.tickUpper, pos.liquidity]
+      );
+      if (result.rowCount && result.rowCount > 0) {
+        updatedCount++;
+      }
+    }
+
+    await client.query('COMMIT');
+    subgraphLogger.info({ count: updatedCount }, 'Batch updated positions with on-chain data');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    subgraphLogger.error({ error: (error as Error).message }, 'Failed to batch update positions');
+  } finally {
+    client.release();
+  }
+
+  return updatedCount;
+}
+
 // ============ Compound Queries ============
 
 export async function getCompoundablePositions(minReward: string, limit = 100) {

@@ -425,46 +425,90 @@ router.get('/owner/:address', checkRpcHealth, async (req: Request, res: Response
       if (ponderResult.positions?.items?.length > 0) {
         routeLogger.info({ address, count: ponderResult.positions.items.length, layer: 'ponder' }, 'Found positions in Ponder');
 
-        // CRITICAL: Verify on-chain liquidity for each position
-        // Ponder may have stale data (e.g., position closed after rebalance but not yet indexed)
-        const ponderPositionsWithLiquidity = await Promise.all(
+        // CRITICAL: Verify on-chain liquidity AND enrich unknown positions
+        // Ponder may have stale data or incomplete data (poolId: "unknown")
+        const ponderPositionsEnriched = await Promise.all(
           ponderResult.positions.items.map(async (p: any) => {
             try {
+              // If poolId is "unknown" or invalid, fetch full position info from chain
+              const needsEnrichment = !p.poolId || p.poolId === 'unknown' || p.tickLower === 0 && p.tickUpper === 0;
+
+              if (needsEnrichment) {
+                routeLogger.debug({ tokenId: p.tokenId }, 'Position needs enrichment from chain (unknown poolId)');
+                const onChainInfo = await blockchain.getPositionInfo(BigInt(p.tokenId));
+                if (onChainInfo) {
+                  return {
+                    ...p,
+                    poolId: onChainInfo.poolId,
+                    poolKey: onChainInfo.poolKey,
+                    tickLower: onChainInfo.tickLower,
+                    tickUpper: onChainInfo.tickUpper,
+                    liquidity: onChainInfo.liquidity,
+                    _enrichedFromChain: true,
+                    _verified: true,
+                  };
+                }
+              }
+
+              // Just verify liquidity for positions with valid pool info
               const onChainLiquidity = await blockchain.getPositionLiquidity(BigInt(p.tokenId));
               return { ...p, liquidity: onChainLiquidity.toString(), _verified: true };
             } catch (e) {
-              // If we can't verify, use Ponder's value but mark as unverified
-              routeLogger.debug({ tokenId: p.tokenId, error: e }, 'Failed to verify on-chain liquidity');
+              // If we can't verify/enrich, use Ponder's value but mark as unverified
+              routeLogger.debug({ tokenId: p.tokenId, error: e }, 'Failed to verify/enrich position');
               return { ...p, _verified: false };
             }
           })
         );
 
+        // Persist enriched positions back to database (async, don't wait)
+        // This ensures future requests don't need to fetch from chain again
+        const enrichedFromChain = ponderPositionsEnriched.filter((p: any) => p._enrichedFromChain);
+        if (enrichedFromChain.length > 0) {
+          subgraph.batchUpdatePositionsFromChain(
+            enrichedFromChain.map((p: any) => ({
+              tokenId: p.tokenId,
+              poolId: p.poolId,
+              tickLower: p.tickLower,
+              tickUpper: p.tickUpper,
+              liquidity: p.liquidity,
+            }))
+          ).catch(err => {
+            routeLogger.warn({ error: err }, 'Failed to persist enriched positions to database');
+          });
+        }
+
         // Transform Ponder format to API format (filter by verified on-chain liquidity)
-        const rawPositions = ponderPositionsWithLiquidity
-          .filter((p: any) => BigInt(p.liquidity || '0') > 0n)
-          .map((ponderPos: any) => ({
-            tokenId: ponderPos.tokenId,
-            owner: ponderPos.owner,
-            poolId: ponderPos.poolId,
-            poolKey: {
+        // Filter out positions with 0 liquidity OR still unknown poolId (can't display them properly)
+        const rawPositions = ponderPositionsEnriched
+          .filter((p: any) => BigInt(p.liquidity || '0') > 0n && p.poolId && p.poolId !== 'unknown')
+          .map((ponderPos: any) => {
+            // Use enriched poolKey if available, otherwise parse from poolId
+            const poolKey = ponderPos.poolKey || {
               currency0: ponderPos.poolId?.split('-')[0] || '',
               currency1: ponderPos.poolId?.split('-')[1] || '',
               fee: parseInt(ponderPos.poolId?.split('-')[2] || '0'),
               tickSpacing: feeToTickSpacing(parseInt(ponderPos.poolId?.split('-')[2] || '3000')),
               hooks: '0x0000000000000000000000000000000000000000',
-            },
-            tickLower: ponderPos.tickLower,
-            tickUpper: ponderPos.tickUpper,
-            liquidity: ponderPos.liquidity,
-            currentTick: 0,
-            sqrtPriceX96: '0',
-            inRange: true,
-            compoundConfig: ponderPos.compoundConfig,
-            rangeConfig: ponderPos.rangeConfig,
-            depositedToken0: ponderPos.depositedToken0 || '0',
-            depositedToken1: ponderPos.depositedToken1 || '0',
-          }));
+            };
+
+            return {
+              tokenId: ponderPos.tokenId,
+              owner: ponderPos.owner,
+              poolId: ponderPos.poolId,
+              poolKey,
+              tickLower: ponderPos.tickLower,
+              tickUpper: ponderPos.tickUpper,
+              liquidity: ponderPos.liquidity,
+              currentTick: 0,
+              sqrtPriceX96: '0',
+              inRange: true,
+              compoundConfig: ponderPos.compoundConfig,
+              rangeConfig: ponderPos.rangeConfig,
+              depositedToken0: ponderPos.depositedToken0 || '0',
+              depositedToken1: ponderPos.depositedToken1 || '0',
+            };
+          });
 
         // Enrich with slot0 data (currentTick, sqrtPriceX96) for USD calculations
         // Group positions by unique poolKey to minimize RPC calls
