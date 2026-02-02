@@ -712,34 +712,42 @@ export interface OnChainPosition {
  * 2. Database cache (from position-indexer) - fast (0 RPC calls)
  * 3. Alchemy NFT API - fast
  * 4. RPC event scanning (recent 1000 blocks only) - slowest fallback
+ *
+ * @param noCache - If true, skip Ponder and DB cache layers for fresh discovery
  */
-export async function getPositionTokenIds(ownerAddress: string, chainId: number = config.CHAIN_ID): Promise<bigint[]> {
+export async function getPositionTokenIds(ownerAddress: string, chainId: number = config.CHAIN_ID, noCache: boolean = false): Promise<bigint[]> {
   // LAYER 0: Query Ponder's position table first (0 RPC calls)
   // Ponder indexes PositionManager Transfer events for complete ownership tracking
-  try {
-    const subgraph = await import('./subgraph.js');
-    const ponderResult = await subgraph.getPositionsByOwner(ownerAddress);
-    if (ponderResult.positions?.items?.length > 0) {
-      const tokenIds = ponderResult.positions.items.map((p: { tokenId: string }) => BigInt(p.tokenId));
-      logger.info({ owner: ownerAddress, chainId, count: tokenIds.length, source: 'ponder' }, 'Found position token IDs from Ponder');
-      return tokenIds;
+  // Skip if noCache is true (e.g., after rebalance when Ponder may not have new position yet)
+  if (!noCache) {
+    try {
+      const subgraph = await import('./subgraph.js');
+      const ponderResult = await subgraph.getPositionsByOwner(ownerAddress);
+      if (ponderResult.positions?.items?.length > 0) {
+        const tokenIds = ponderResult.positions.items.map((p: { tokenId: string }) => BigInt(p.tokenId));
+        logger.info({ owner: ownerAddress, chainId, count: tokenIds.length, source: 'ponder' }, 'Found position token IDs from Ponder');
+        return tokenIds;
+      }
+    } catch (error) {
+      logger.debug({ error, owner: ownerAddress }, 'Ponder query failed, trying other methods');
     }
-  } catch (error) {
-    logger.debug({ error, owner: ownerAddress }, 'Ponder query failed, trying other methods');
   }
 
   // LAYER 1: Check database position cache (from position-indexer)
   // This is a backup in case Ponder is not running
-  try {
-    const { getPositionCache } = await import('./database.js');
-    const dbCache = await getPositionCache(ownerAddress, chainId);
-    if (dbCache && dbCache.tokenIds.length > 0) {
-      const tokenIds = dbCache.tokenIds.map(id => BigInt(id));
-      logger.info({ owner: ownerAddress, chainId, count: tokenIds.length, source: 'database_cache' }, 'Found position token IDs from database cache');
-      return tokenIds;
+  // Skip if noCache is true
+  if (!noCache) {
+    try {
+      const { getPositionCache } = await import('./database.js');
+      const dbCache = await getPositionCache(ownerAddress, chainId);
+      if (dbCache && dbCache.tokenIds.length > 0) {
+        const tokenIds = dbCache.tokenIds.map(id => BigInt(id));
+        logger.info({ owner: ownerAddress, chainId, count: tokenIds.length, source: 'database_cache' }, 'Found position token IDs from database cache');
+        return tokenIds;
+      }
+    } catch (error) {
+      logger.debug({ error, owner: ownerAddress }, 'Database cache not available, trying other methods');
     }
-  } catch (error) {
-    logger.debug({ error, owner: ownerAddress }, 'Database cache not available, trying other methods');
   }
 
   const apiKey = getAlchemyApiKey();
@@ -1032,9 +1040,11 @@ export async function getPositionLiquidity(tokenId: bigint): Promise<bigint> {
  * Get all positions for an owner with full info
  * This fetches directly from chain, not from Ponder
  * Uses rate-limited batch execution for optimal RPC usage
+ *
+ * @param noCache - If true, skip Ponder and DB cache layers for fresh discovery
  */
-export async function getPositionsByOwnerOnChain(ownerAddress: string): Promise<OnChainPosition[]> {
-  const tokenIds = await getPositionTokenIds(ownerAddress);
+export async function getPositionsByOwnerOnChain(ownerAddress: string, noCache: boolean = false): Promise<OnChainPosition[]> {
+  const tokenIds = await getPositionTokenIds(ownerAddress, config.CHAIN_ID, noCache);
 
   if (tokenIds.length === 0) {
     return [];

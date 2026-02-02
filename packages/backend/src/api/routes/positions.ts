@@ -419,13 +419,29 @@ router.get('/owner/:address', checkRpcHealth, async (req: Request, res: Response
 
     // LAYER 3: Check Ponder's indexed position table (0 RPC calls for lookup, but enrich with slot0)
     // Ponder indexes positions from V4Utils:PositionMinted events
-    try {
+    // Skip Ponder if noCache is true (user wants fresh data, e.g., after rebalance)
+    if (!noCache) try {
       const ponderResult = await subgraph.getPositionsByOwner(address);
       if (ponderResult.positions?.items?.length > 0) {
         routeLogger.info({ address, count: ponderResult.positions.items.length, layer: 'ponder' }, 'Found positions in Ponder');
 
-        // Transform Ponder format to API format
-        const rawPositions = ponderResult.positions.items
+        // CRITICAL: Verify on-chain liquidity for each position
+        // Ponder may have stale data (e.g., position closed after rebalance but not yet indexed)
+        const ponderPositionsWithLiquidity = await Promise.all(
+          ponderResult.positions.items.map(async (p: any) => {
+            try {
+              const onChainLiquidity = await blockchain.getPositionLiquidity(BigInt(p.tokenId));
+              return { ...p, liquidity: onChainLiquidity.toString(), _verified: true };
+            } catch (e) {
+              // If we can't verify, use Ponder's value but mark as unverified
+              routeLogger.debug({ tokenId: p.tokenId, error: e }, 'Failed to verify on-chain liquidity');
+              return { ...p, _verified: false };
+            }
+          })
+        );
+
+        // Transform Ponder format to API format (filter by verified on-chain liquidity)
+        const rawPositions = ponderPositionsWithLiquidity
           .filter((p: any) => BigInt(p.liquidity || '0') > 0n)
           .map((ponderPos: any) => ({
             tokenId: ponderPos.tokenId,
@@ -501,7 +517,8 @@ router.get('/owner/:address', checkRpcHealth, async (req: Request, res: Response
 
     if (useLegacyPath) {
       // Use optimized single-chain path for primary configured chain
-      onChainPositions = await blockchain.getPositionsByOwnerOnChain(address);
+      // Pass noCache to ensure fresh discovery (skips Ponder/DB cache when true)
+      onChainPositions = await blockchain.getPositionsByOwnerOnChain(address, noCache);
     } else {
       // Use multichain service for other supported chains
       onChainPositions = await multichain.fetchPositionsForOwner(chainId, address);
