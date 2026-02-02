@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import * as subgraph from '../../services/subgraph.js';
 import * as blockchain from '../../services/blockchain.js';
 import * as database from '../../services/database.js';
@@ -6,21 +6,19 @@ import * as multichain from '../../services/multichain.js';
 import { logger } from '../../utils/logger.js';
 import { memoryCache } from '../../services/cache.js';
 import { config } from '../../config/index.js';
-import { isSupportedChain, getChainConfig } from '../../config/chains.js';
+import { isSupportedChain } from '../../config/chains.js';
+import { rpcManager } from '../../services/rpc-manager.js';
+import { ErrorCodes } from '../../utils/errors.js';
 import {
   analyzePosition,
   calculateVolatility,
   getPriceHistory,
   recordPriceSample,
   makeRebalanceDecision,
-  PositionAnalysis,
   RebalanceDecision,
 } from '../../services/smart-rebalance.js';
 import {
   calculatePositionValueUSD,
-  getBatchPrices,
-  getTokenInfo,
-  tickToSqrtRatioX96,
 } from '../../services/price.js';
 
 const router = Router();
@@ -28,6 +26,40 @@ const routeLogger = logger.child({ route: 'positions' });
 
 // Promise timeout configuration
 const ENRICHMENT_TIMEOUT_MS = 10000; // 10 seconds for enrichment operations
+
+/**
+ * Check if RPC service is available and healthy
+ * Returns true if at least one RPC endpoint is healthy
+ */
+function isRpcHealthy(chainId: number = config.CHAIN_ID): boolean {
+  const stats = rpcManager.getStats();
+  const chainStats = stats.rpcs.find(r => r.chainId === chainId);
+  return chainStats ? chainStats.healthy > 0 : false;
+}
+
+/**
+ * Middleware to check RPC health before operations that require chain access
+ * Returns 503 Service Unavailable if all RPCs are unhealthy
+ */
+function checkRpcHealth(req: Request, res: Response, next: NextFunction): void {
+  const chainId = req.query.chainId ? parseInt(req.query.chainId as string, 10) : config.CHAIN_ID;
+
+  if (!isRpcHealthy(chainId)) {
+    const stats = rpcManager.getStats();
+    routeLogger.warn({ chainId, rpcStats: stats }, 'RPC service degraded, returning 503');
+
+    res.setHeader('Retry-After', '30');
+    res.status(503).json({
+      error: 'Service temporarily unavailable',
+      code: ErrorCodes.RPC_ALL_UNHEALTHY,
+      message: 'All RPC endpoints are currently unhealthy. Please retry in 30 seconds.',
+      retryAfter: 30,
+    });
+    return;
+  }
+
+  next();
+}
 
 /**
  * Wrap a promise with a timeout
@@ -96,7 +128,8 @@ function feeToTickSpacing(fee: number): number {
 }
 
 // Get position by token ID - uses caching to minimize RPC calls
-router.get('/:tokenId', async (req: Request, res: Response) => {
+// checkRpcHealth middleware ensures RPC is available before proceeding
+router.get('/:tokenId', checkRpcHealth, async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
     const includeUSD = req.query.includeUSD !== 'false'; // Default to true
@@ -291,7 +324,8 @@ router.get('/:tokenId', async (req: Request, res: Response) => {
 // 1. Memory cache (15 seconds) - instant
 // 2. Database cache (2 minutes) - fast, persistent
 // 3. Alchemy NFT API + RPC - fresh data
-router.get('/owner/:address', async (req: Request, res: Response) => {
+// checkRpcHealth middleware ensures RPC is available before proceeding
+router.get('/owner/:address', checkRpcHealth, async (req: Request, res: Response) => {
   try {
     const { address } = req.params;
     const enrich = req.query.enrich !== 'false'; // Default to true
@@ -748,7 +782,7 @@ router.get('/:tokenId/snapshots', async (req: Request, res: Response) => {
  * Get smart rebalance analysis for a position
  * Returns center drift, urgency, recommendation, and whether to rebalance
  */
-router.get('/:tokenId/smart-analysis', async (req: Request, res: Response) => {
+router.get('/:tokenId/smart-analysis', checkRpcHealth, async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
     const noCache = req.query.noCache === 'true';
@@ -865,7 +899,7 @@ router.get('/:tokenId/smart-analysis', async (req: Request, res: Response) => {
 /**
  * Get smart analysis for multiple positions at once
  */
-router.post('/batch-smart-analysis', async (req: Request, res: Response) => {
+router.post('/batch-smart-analysis', checkRpcHealth, async (req: Request, res: Response) => {
   try {
     const { tokenIds } = req.body;
 

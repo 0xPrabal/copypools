@@ -942,31 +942,37 @@ function parsePositionInfo(positionInfo: bigint): { tickLower: number; tickUpper
 
 /**
  * Get position info for a specific token ID from V4 PositionManager
- * Uses parallel RPC calls for better performance
+ * Uses viem's multicall to batch 3 RPC calls into 1 for 3x efficiency
  */
 export async function getPositionInfo(tokenId: bigint): Promise<OnChainPosition | null> {
   try {
-    // Fetch all data in parallel using Promise.all
-    const [owner, poolAndPositionInfo, liquidity] = await Promise.all([
-      publicClient.readContract({
-        address: POSITION_MANAGER_ADDRESS,
-        abi: PositionManagerABI,
-        functionName: 'ownerOf',
-        args: [tokenId],
-      }),
-      publicClient.readContract({
-        address: POSITION_MANAGER_ADDRESS,
-        abi: PositionManagerABI,
-        functionName: 'getPoolAndPositionInfo',
-        args: [tokenId],
-      }),
-      publicClient.readContract({
-        address: POSITION_MANAGER_ADDRESS,
-        abi: PositionManagerABI,
-        functionName: 'getPositionLiquidity',
-        args: [tokenId],
-      }),
-    ]);
+    // Use multicall to batch all 3 contract reads into a single RPC call
+    // This reduces RPC calls by 3x compared to separate readContract calls
+    const results = await publicClient.multicall({
+      contracts: [
+        {
+          address: POSITION_MANAGER_ADDRESS,
+          abi: PositionManagerABI,
+          functionName: 'ownerOf',
+          args: [tokenId],
+        },
+        {
+          address: POSITION_MANAGER_ADDRESS,
+          abi: PositionManagerABI,
+          functionName: 'getPoolAndPositionInfo',
+          args: [tokenId],
+        },
+        {
+          address: POSITION_MANAGER_ADDRESS,
+          abi: PositionManagerABI,
+          functionName: 'getPositionLiquidity',
+          args: [tokenId],
+        },
+      ],
+      allowFailure: false, // Fail fast if any call fails
+    });
+
+    const [owner, poolAndPositionInfo, liquidity] = results;
 
     const [poolKey, positionInfoPacked] = poolAndPositionInfo as [
       { currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string },

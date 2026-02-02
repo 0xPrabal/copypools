@@ -1,10 +1,44 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import * as subgraph from '../../services/subgraph.js';
 import * as analyticsService from '../../services/analytics.js';
 import { logger } from '../../utils/logger.js';
+import { rpcManager } from '../../services/rpc-manager.js';
+import { config } from '../../config/index.js';
+import { ErrorCodes } from '../../utils/errors.js';
 
 const router = Router();
 const routeLogger = logger.child({ route: 'analytics' });
+
+/**
+ * Check if RPC service is available and healthy
+ */
+function isRpcHealthy(chainId: number = config.CHAIN_ID): boolean {
+  const stats = rpcManager.getStats();
+  const chainStats = stats.rpcs.find(r => r.chainId === chainId);
+  return chainStats ? chainStats.healthy > 0 : false;
+}
+
+/**
+ * Middleware to check RPC health before operations that require chain access
+ * Returns 503 Service Unavailable if all RPCs are unhealthy
+ */
+function checkRpcHealth(_req: Request, res: Response, next: NextFunction): void {
+  if (!isRpcHealthy()) {
+    const stats = rpcManager.getStats();
+    routeLogger.warn({ rpcStats: stats }, 'RPC service degraded, returning 503');
+
+    res.setHeader('Retry-After', '30');
+    res.status(503).json({
+      error: 'Service temporarily unavailable',
+      code: ErrorCodes.RPC_ALL_UNHEALTHY,
+      message: 'All RPC endpoints are currently unhealthy. Please retry in 30 seconds.',
+      retryAfter: 30,
+    });
+    return;
+  }
+
+  next();
+}
 
 // Get protocol-wide stats
 router.get('/protocol', async (_req: Request, res: Response) => {
@@ -47,8 +81,8 @@ router.get('/user/:address', async (req: Request, res: Response) => {
   }
 });
 
-// Get position analytics
-router.get('/position/:tokenId', async (req: Request, res: Response) => {
+// Get position analytics - requires RPC for USD calculations
+router.get('/position/:tokenId', checkRpcHealth, async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
     const analytics = await analyticsService.getPositionAnalytics(tokenId);
@@ -66,8 +100,8 @@ router.get('/position/:tokenId', async (req: Request, res: Response) => {
   }
 });
 
-// Check compound profitability for a position
-router.get('/compound-check/:tokenId', async (req: Request, res: Response) => {
+// Check compound profitability for a position - requires RPC
+router.get('/compound-check/:tokenId', checkRpcHealth, async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
     const result = await analyticsService.checkCompoundProfitability(tokenId);
@@ -80,8 +114,8 @@ router.get('/compound-check/:tokenId', async (req: Request, res: Response) => {
   }
 });
 
-// Check rebalance need for a position
-router.get('/rebalance-check/:tokenId', async (req: Request, res: Response) => {
+// Check rebalance need for a position - requires RPC
+router.get('/rebalance-check/:tokenId', checkRpcHealth, async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
     const result = await analyticsService.checkRebalanceNeed(tokenId);
@@ -94,8 +128,8 @@ router.get('/rebalance-check/:tokenId', async (req: Request, res: Response) => {
   }
 });
 
-// Batch check multiple positions
-router.post('/batch-check', async (req: Request, res: Response) => {
+// Batch check multiple positions - requires RPC
+router.post('/batch-check', checkRpcHealth, async (req: Request, res: Response) => {
   try {
     const { tokenIds, checkType } = req.body;
 
