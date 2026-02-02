@@ -67,6 +67,7 @@ router.get('/v4', async (req: Request, res: Response) => {
       volume1dTvlRatio: pool.tvlUsd > 0 ? pool.volume1dUsd / pool.tvlUsd : 0,
     }));
 
+    if (res.headersSent) return;
     res.json({
       chainId,
       chainName: CHAIN_NAMES[chainId] || 'Unknown',
@@ -80,6 +81,7 @@ router.get('/v4', async (req: Request, res: Response) => {
     });
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get V4 pools');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch V4 pools' });
   }
 });
@@ -97,9 +99,11 @@ router.post('/v4/sync', async (req: Request, res: Response) => {
     routeLogger.info('Manual pool sync triggered');
     await syncPools();
     const { pools, total } = await getV4Pools({ chainId: 8453, limit: 1 });
+    if (res.headersSent) return;
     res.json({ success: true, message: 'Pool sync completed', totalPools: total });
   } catch (error) {
     routeLogger.error({ error }, 'Failed to sync pools');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to sync pools' });
   }
 });

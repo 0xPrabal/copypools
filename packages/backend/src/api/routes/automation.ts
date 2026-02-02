@@ -41,6 +41,7 @@ router.get('/compound/:tokenId', async (req: Request, res: Response) => {
       routeLogger.debug({ tokenId, error: e }, 'Could not check compound profitability on-chain');
     }
 
+    if (res.headersSent) return;
     res.json({
       tokenId,
       config: position.compoundConfig || null,
@@ -53,6 +54,7 @@ router.get('/compound/:tokenId', async (req: Request, res: Response) => {
     });
   } catch (error) {
     routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to get compound config');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch compound config' });
   }
 });
@@ -62,9 +64,11 @@ router.get('/compound', async (req: Request, res: Response) => {
   try {
     const { limit = '100' } = req.query;
     const result = await subgraph.getCompoundablePositions('0', parseInt(limit as string));
+    if (res.headersSent) return;
     res.json((result as any).compoundConfigs || []);
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get compoundable positions');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch compoundable positions' });
   }
 });
@@ -110,6 +114,7 @@ router.get('/exit/:tokenId', async (req: Request, res: Response) => {
       }
     }
 
+    if (res.headersSent) return;
     res.json({
       tokenId,
       config: position.exitConfig || null,
@@ -119,6 +124,7 @@ router.get('/exit/:tokenId', async (req: Request, res: Response) => {
     });
   } catch (error) {
     routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to get exit config');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch exit config' });
   }
 });
@@ -128,9 +134,11 @@ router.get('/exit', async (req: Request, res: Response) => {
   try {
     const { limit = '100' } = req.query;
     const result = await subgraph.getExitablePositions(parseInt(limit as string));
+    if (res.headersSent) return;
     res.json((result as any).exitConfigs || []);
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get exitable positions');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch exitable positions' });
   }
 });
@@ -180,6 +188,7 @@ router.get('/range/:tokenId', async (req: Request, res: Response) => {
     const tickUpper = position.tickUpper || 0;
     const inRange = currentTick >= tickLower && currentTick < tickUpper;
 
+    if (res.headersSent) return;
     res.json({
       tokenId,
       config: position.rangeConfig || null,
@@ -192,6 +201,7 @@ router.get('/range/:tokenId', async (req: Request, res: Response) => {
     });
   } catch (error) {
     routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to get range config');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch range config' });
   }
 });
@@ -201,9 +211,11 @@ router.get('/range', async (req: Request, res: Response) => {
   try {
     const { limit = '100' } = req.query;
     const result = await subgraph.getRebalanceablePositions(parseInt(limit as string));
+    if (res.headersSent) return;
     res.json((result as any).rangeConfigs || []);
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get rebalanceable positions');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch rebalanceable positions' });
   }
 });
@@ -240,9 +252,11 @@ router.post('/batch-status', async (req: Request, res: Response) => {
       })
     );
 
+    if (res.headersSent) return;
     res.json(statuses);
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get batch status');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch batch status' });
   }
 });
@@ -279,6 +293,7 @@ router.get('/status', async (req: Request, res: Response) => {
       // Bot might not be initialized yet
     }
 
+    if (res.headersSent) return;
     res.json({
       botEnabled: config.BOT_ENABLED,
       walletConfigured,
@@ -306,6 +321,7 @@ router.get('/status', async (req: Request, res: Response) => {
     });
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get bot status');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch bot status' });
   }
 });
@@ -345,6 +361,7 @@ router.post('/range/:tokenId/trigger', async (req: Request, res: Response) => {
     }
   } catch (error: any) {
     routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to trigger rebalance');
+    if (res.headersSent) return;
     res.status(500).json({
       error: 'Failed to trigger rebalance',
       details: error.message || String(error),

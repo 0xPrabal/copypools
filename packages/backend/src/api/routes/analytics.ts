@@ -10,9 +10,11 @@ const routeLogger = logger.child({ route: 'analytics' });
 router.get('/protocol', async (_req: Request, res: Response) => {
   try {
     const analytics = await analyticsService.getProtocolAnalytics();
+    if (res.headersSent) return; // Request may have timed out
     res.json(analytics);
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get protocol stats');
+    if (res.headersSent) return; // Request may have timed out
     res.status(500).json({ error: 'Failed to fetch protocol stats' });
   }
 });
@@ -22,9 +24,11 @@ router.get('/daily', async (req: Request, res: Response) => {
   try {
     const { days = '30' } = req.query;
     const result = await subgraph.getDailyStats(parseInt(days as string));
+    if (res.headersSent) return;
     res.json((result as any).dailyStatss?.items || []);
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get daily stats');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch daily stats' });
   }
 });
@@ -34,9 +38,11 @@ router.get('/user/:address', async (req: Request, res: Response) => {
   try {
     const { address } = req.params;
     const analytics = await analyticsService.getPortfolioAnalytics(address);
+    if (res.headersSent) return;
     res.json(analytics);
   } catch (error) {
     routeLogger.error({ error, address: req.params.address }, 'Failed to get user analytics');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch user analytics' });
   }
 });
@@ -47,6 +53,7 @@ router.get('/position/:tokenId', async (req: Request, res: Response) => {
     const { tokenId } = req.params;
     const analytics = await analyticsService.getPositionAnalytics(tokenId);
 
+    if (res.headersSent) return;
     if (!analytics) {
       return res.status(404).json({ error: 'Position not found' });
     }
@@ -54,6 +61,7 @@ router.get('/position/:tokenId', async (req: Request, res: Response) => {
     res.json(analytics);
   } catch (error) {
     routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to get position analytics');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch position analytics' });
   }
 });
@@ -63,9 +71,11 @@ router.get('/compound-check/:tokenId', async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
     const result = await analyticsService.checkCompoundProfitability(tokenId);
+    if (res.headersSent) return;
     res.json(result);
   } catch (error) {
     routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to check compound profitability');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to check compound profitability' });
   }
 });
@@ -75,9 +85,11 @@ router.get('/rebalance-check/:tokenId', async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
     const result = await analyticsService.checkRebalanceNeed(tokenId);
+    if (res.headersSent) return;
     res.json(result);
   } catch (error) {
     routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to check rebalance need');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to check rebalance need' });
   }
 });
@@ -121,9 +133,11 @@ router.post('/batch-check', async (req: Request, res: Response) => {
       })
     );
 
+    if (res.headersSent) return;
     res.json({ results });
   } catch (error) {
     routeLogger.error({ error }, 'Failed batch check');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to perform batch check' });
   }
 });
@@ -147,9 +161,11 @@ router.get('/top-positions', async (req: Request, res: Response) => {
     });
 
     // Return only the requested number of top positions
+    if (res.headersSent) return;
     res.json(sortedPositions.slice(0, requestedLimit));
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get top positions');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch top positions' });
   }
 });
@@ -177,9 +193,11 @@ router.get('/compounds', async (req: Request, res: Response) => {
       period: `${days} days`,
     };
 
+    if (res.headersSent) return;
     res.json(stats);
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get compound stats');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch compound stats' });
   }
 });
@@ -204,9 +222,11 @@ router.get('/rebalances', async (req: Request, res: Response) => {
       period: `${days} days`,
     };
 
+    if (res.headersSent) return;
     res.json(stats);
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get rebalance stats');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch rebalance stats' });
   }
 });

@@ -27,8 +27,8 @@ const router = Router();
 const routeLogger = logger.child({ route: 'positions' });
 
 // Cache settings (optimized to reduce RPC calls)
-const MEMORY_CACHE_TTL = 60 * 1000; // 60 seconds for in-memory (optimized from 15s)
-const DB_CACHE_STALE_MINUTES = 5; // Consider DB cache stale after 5 minutes (optimized from 2min)
+const MEMORY_CACHE_TTL = 30 * 1000; // 30 seconds for in-memory
+const DB_CACHE_STALE_MINUTES = 2; // Consider DB cache stale after 2 minutes
 
 // Fee tier to tick spacing mapping (Uniswap V4 standard)
 function feeToTickSpacing(fee: number): number {
@@ -224,9 +224,11 @@ router.get('/:tokenId', async (req: Request, res: Response) => {
     memoryCache.set(cacheKey, position, MEMORY_CACHE_TTL);
     routeLogger.debug({ tokenId, layer: 'chain' }, 'Position fetched from chain and cached');
 
+    if (res.headersSent) return;
     res.json(position);
   } catch (error) {
     routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to get position');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch position' });
   }
 });
@@ -503,6 +505,7 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
     }
 
     routeLogger.debug({ address, count: positions.length, layer: 'chain' }, 'Fetched fresh');
+    if (res.headersSent) return;
     res.json(positions);
   } catch (error) {
     routeLogger.error({
@@ -510,6 +513,7 @@ router.get('/owner/:address', async (req: Request, res: Response) => {
       stack: error instanceof Error ? error.stack : undefined,
       address: req.params.address
     }, 'Failed to get positions');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch positions' });
   }
 });
@@ -603,9 +607,11 @@ router.get('/:tokenId/analytics', async (req: Request, res: Response) => {
       }
     }
 
+    if (res.headersSent) return;
     res.json(analytics);
   } catch (error) {
     routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to get analytics');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch analytics' });
   }
 });
@@ -734,9 +740,11 @@ router.get('/:tokenId/smart-analysis', async (req: Request, res: Response) => {
     // Cache for 30 seconds (analysis data changes slowly)
     memoryCache.set(cacheKey, response, 30 * 1000);
 
+    if (res.headersSent) return;
     res.json(response);
   } catch (error) {
     routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to get smart analysis');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to analyze position' });
   }
 });
@@ -827,9 +835,11 @@ router.post('/batch-smart-analysis', async (req: Request, res: Response) => {
       })
     );
 
+    if (res.headersSent) return;
     res.json({ positions: results });
   } catch (error) {
     routeLogger.error({ error }, 'Failed to batch analyze positions');
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to analyze positions' });
   }
 });
