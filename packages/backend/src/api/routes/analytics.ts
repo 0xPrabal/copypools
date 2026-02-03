@@ -193,8 +193,8 @@ router.get('/top-positions', async (req: Request, res: Response) => {
     const minValue = parseFloat(minValueUsd as string) || 0;
     const offset = (requestedPage - 1) * requestedLimit;
 
-    // Fetch active positions with liquidity
-    const result = await subgraph.getAllPositions(1000, 0, true);
+    // Fetch active positions with liquidity, joined with pool + token data
+    const result = await subgraph.getAllPositionsWithPool(1000, 0, true);
     const positions = (result as any)?.positions?.items || [];
 
     // Enrich positions with USD data in parallel (batch of up to 20 at a time)
@@ -217,9 +217,9 @@ router.get('/top-positions', async (req: Request, res: Response) => {
             // If still 0, fall back to on-chain read
             let tickLower = pos.tickLower || 0;
             let tickUpper = pos.tickUpper || 0;
-            let poolFee = pos.poolKey?.fee || pos.fee || 0;
-            let token0Symbol = pos.pool?.token0Symbol || '';
-            let token1Symbol = pos.pool?.token1Symbol || '';
+            let poolFee = pos.poolFee || pos.poolKey?.fee || pos.fee || 0;
+            let token0Symbol = pos.token0Symbol || '';
+            let token1Symbol = pos.token1Symbol || '';
 
             if (tickLower === 0 && tickUpper === 0) {
               try {

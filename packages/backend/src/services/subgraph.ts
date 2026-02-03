@@ -201,6 +201,38 @@ export async function getAllPositions(first = 100, skip = 0, activeOnly = false)
 }
 
 /**
+ * Get all positions with pool and token symbol data via JOINs
+ * Used by top-positions to avoid empty symbol/fee fields
+ */
+export async function getAllPositionsWithPool(first = 100, skip = 0, activeOnly = false) {
+  let sql = `
+    SELECT
+      p.*,
+      pool.fee AS pool_fee,
+      pool.tick AS pool_tick,
+      pool.sqrt_price_x96 AS pool_sqrt_price_x96,
+      t0.symbol AS token0_symbol,
+      t0.decimals AS token0_decimals,
+      t1.symbol AS token1_symbol,
+      t1.decimals AS token1_decimals
+    FROM position p
+    LEFT JOIN pool ON p.pool_id = pool.id
+    LEFT JOIN token t0 ON pool.token0_id = t0.id
+    LEFT JOIN token t1 ON pool.token1_id = t1.id
+  `;
+
+  if (activeOnly) {
+    sql += ` WHERE p.liquidity != '0' AND p.closed_at_timestamp IS NULL`;
+  }
+
+  sql += ` ORDER BY p.created_at_timestamp DESC LIMIT $1 OFFSET $2`;
+
+  const positions = await queryWithRetry<any>(sql, [first, skip]);
+
+  return { positions: { items: positions } };
+}
+
+/**
  * Update a position in the Ponder database with enriched on-chain data
  * Used to persist pool info for positions that had poolId: "unknown"
  */
