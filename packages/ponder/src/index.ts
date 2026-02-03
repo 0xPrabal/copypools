@@ -1066,18 +1066,92 @@ ponder.on("PositionManager:Transfer", async ({ event, context }) => {
       const existing = await context.db.find(position, { id: positionId });
 
       if (!existing) {
-        // Create minimal position record - pool info may be enriched by V4Utils:PositionMinted
-        // if both events fire in same transaction
+        // Attempt to enrich with on-chain tick/pool data at index time
+        // so we have complete data for ALL V4 positions, not just protocol ones
+        const POSITION_MANAGER = "0x7C5f5A4bBd8fD63184577525326123B519429bDc";
+        let enrichedTickLower = 0;
+        let enrichedTickUpper = 0;
+        let enrichedLiquidity = "0";
+        let enrichedPoolId = "unknown";
+
+        try {
+          const posInfo = await context.client.readContract({
+            address: POSITION_MANAGER as `0x${string}`,
+            abi: [{
+              name: "getPoolAndPositionInfo",
+              type: "function",
+              stateMutability: "view",
+              inputs: [{ name: "tokenId", type: "uint256" }],
+              outputs: [
+                { name: "poolKey", type: "tuple", components: [
+                  { name: "currency0", type: "address" },
+                  { name: "currency1", type: "address" },
+                  { name: "fee", type: "uint24" },
+                  { name: "tickSpacing", type: "int24" },
+                  { name: "hooks", type: "address" }
+                ]},
+                { name: "info", type: "uint256" }
+              ]
+            }] as const,
+            functionName: "getPoolAndPositionInfo",
+            args: [tokenId],
+          });
+
+          const [poolKey, packedInfo] = posInfo as [
+            { currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string },
+            bigint
+          ];
+
+          // Parse packed position info: tickLower (int24) in bits 232-255, tickUpper (int24) in bits 208-231
+          const tickLowerRaw = Number((packedInfo >> 232n) & 0xFFFFFFn);
+          enrichedTickLower = tickLowerRaw > 0x7FFFFF ? tickLowerRaw - 0x1000000 : tickLowerRaw;
+          const tickUpperRaw = Number((packedInfo >> 208n) & 0xFFFFFFn);
+          enrichedTickUpper = tickUpperRaw > 0x7FFFFF ? tickUpperRaw - 0x1000000 : tickUpperRaw;
+
+          enrichedPoolId = `${poolKey.currency0.toLowerCase()}-${poolKey.currency1.toLowerCase()}-${poolKey.fee}`;
+
+          // Also get liquidity
+          const liqResult = await context.client.readContract({
+            address: POSITION_MANAGER as `0x${string}`,
+            abi: [{
+              name: "getPositionLiquidity",
+              type: "function",
+              stateMutability: "view",
+              inputs: [{ name: "tokenId", type: "uint256" }],
+              outputs: [{ name: "", type: "uint128" }]
+            }] as const,
+            functionName: "getPositionLiquidity",
+            args: [tokenId],
+          });
+          enrichedLiquidity = String(liqResult);
+
+          // Create token + pool entities so we have symbol data
+          await getOrCreateToken(context, poolKey.currency0);
+          await getOrCreateToken(context, poolKey.currency1);
+          await getOrCreatePool(
+            context,
+            enrichedPoolId,
+            poolKey.currency0,
+            poolKey.currency1,
+            Number(poolKey.fee),
+            Number(poolKey.tickSpacing),
+            poolKey.hooks
+          );
+        } catch (enrichErr) {
+          // On-chain read failed -- insert with zeros, will be enriched later by analytics
+          console.log(`Could not enrich position ${positionId} at index time: ${(enrichErr as Error).message}`);
+        }
+
         let inserted = false;
         try {
           await context.db.insert(position).values({
             id: positionId,
             tokenId: positionId,
             owner: to.toLowerCase(),
-            poolId: "unknown", // Will be updated by V4Utils:PositionMinted or on-chain fetch
-            tickLower: 0,
-            tickUpper: 0,
-            liquidity: "0",
+            poolId: enrichedPoolId,
+            tickLower: enrichedTickLower,
+            tickUpper: enrichedTickUpper,
+            liquidity: enrichedLiquidity,
             depositedToken0: "0",
             depositedToken1: "0",
             withdrawnToken0: "0",
