@@ -219,7 +219,7 @@ router.get('/top-positions', async (req: Request, res: Response) => {
 
     // Filter by network if specified
     if (network && network !== 'all') {
-      revertParams.set(`only-${network}`, 'true');
+      revertParams.set('network', network as string);
     }
 
     // Min value filter
@@ -255,40 +255,46 @@ router.get('/top-positions', async (req: Request, res: Response) => {
       throw new Error('Invalid response from Revert API');
     }
 
-    // Transform Revert positions to our format
-    const positions = revertData.data.map((pos: any) => {
-      const perf = pos.performance?.hodl || {};
-      const tokens = pos.tokens || {};
-      const token0Info = tokens[pos.token0] || {};
-      const token1Info = tokens[pos.token1] || {};
+    // Transform Revert positions to our format, filtering out anomalous data
+    const MAX_SANE_VALUE = 1_000_000_000; // $1B cap for sanity
+    const positions = revertData.data
+      .filter((pos: any) => {
+        const value = parseFloat(pos.underlying_value) || 0;
+        return value <= MAX_SANE_VALUE;
+      })
+      .map((pos: any) => {
+        const perf = pos.performance?.hodl || {};
+        const tokens = pos.tokens || {};
+        const token0Info = tokens[pos.token0] || {};
+        const token1Info = tokens[pos.token1] || {};
 
-      return {
-        tokenId: String(pos.nft_id),
-        owner: pos.real_owner || '',
-        tickLower: pos.tick_lower,
-        tickUpper: pos.tick_upper,
-        inRange: pos.in_range || false,
-        network: pos.network || 'base',
-        exchange: pos.exchange || 'uniswapv3',
-        pool: {
-          address: pos.pool || '',
-          token0Symbol: token0Info.symbol || '',
-          token1Symbol: token1Info.symbol || '',
-          token0Address: pos.token0 || '',
-          token1Address: pos.token1 || '',
-          token0Decimals: token0Info.decimals || 18,
-          token1Decimals: token1Info.decimals || 18,
-          fee: parseInt(pos.fee_tier || '0'),
-        },
-        positionValueUSD: parseFloat(pos.underlying_value) || 0,
-        pnl: parseFloat(perf.pool_pnl) || 0,
-        roi: parseFloat(perf.pool_roi) || 0,
-        apr: parseFloat(perf.pool_apr) || 0,
-        feeApr: parseFloat(perf.fee_apr) || 0,
-        il: parseFloat(perf.il) || 0,
-        ageDays: pos.age || 0,
-      };
-    });
+        return {
+          tokenId: String(pos.nft_id),
+          owner: pos.real_owner || '',
+          tickLower: pos.tick_lower,
+          tickUpper: pos.tick_upper,
+          inRange: pos.in_range || false,
+          network: pos.network || 'base',
+          exchange: pos.exchange || 'uniswapv3',
+          pool: {
+            address: pos.pool || '',
+            token0Symbol: token0Info.symbol || '',
+            token1Symbol: token1Info.symbol || '',
+            token0Address: pos.token0 || '',
+            token1Address: pos.token1 || '',
+            token0Decimals: token0Info.decimals || 18,
+            token1Decimals: token1Info.decimals || 18,
+            fee: parseInt(pos.fee_tier || '0'),
+          },
+          positionValueUSD: parseFloat(pos.underlying_value) || 0,
+          pnl: parseFloat(perf.pool_pnl) || 0,
+          roi: parseFloat(perf.pool_roi) || 0,
+          apr: parseFloat(perf.pool_apr) || 0,
+          feeApr: parseFloat(perf.fee_apr) || 0,
+          il: parseFloat(perf.il) || 0,
+          ageDays: pos.age || 0,
+        };
+      });
 
     const total = revertData.total_count || positions.length;
     const totalPages = Math.ceil(total / requestedLimit);
