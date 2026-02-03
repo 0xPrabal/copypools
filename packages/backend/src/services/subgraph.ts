@@ -6,7 +6,8 @@ import * as blockchain from './blockchain.js';
 const subgraphLogger = logger.child({ module: 'subgraph' });
 
 // Ponder schema name (must match ponder start --schema parameter)
-const PONDER_SCHEMA = process.env.PONDER_SCHEMA || 'ponder_base_v2';
+// Default changed to 'ponder_base' to match the current Ponder deployment
+const PONDER_SCHEMA = process.env.PONDER_SCHEMA || 'ponder_base';
 
 // PostgreSQL connection pool for Ponder database
 const pool = new pg.Pool({
