@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import * as subgraph from '../../services/subgraph.js';
 import * as analyticsService from '../../services/analytics.js';
-import * as blockchain from '../../services/blockchain.js';
+
 import { logger } from '../../utils/logger.js';
 import { rpcManager } from '../../services/rpc-manager.js';
 import { config } from '../../config/index.js';
@@ -177,180 +177,125 @@ router.post('/batch-check', checkRpcHealth, async (req: Request, res: Response) 
   }
 });
 
-// Get top positions by fees earned - with optional USD enrichment
+// Map our sort fields to Revert API sort params
+const REVERT_SORT_MAP: Record<string, string> = {
+  apr: 'apr',
+  pnl: 'pnl',
+  feeApr: 'fee_apr',
+  poolApr: 'pool_apr',
+  value: 'underlying_value',
+  age: 'age',
+  fees: 'pnl',
+};
+
+// Get top positions via Revert Finance API (152K+ real Uniswap positions)
 router.get('/top-positions', async (req: Request, res: Response) => {
   try {
     const {
       limit = '20',
       page = '1',
-      sortBy = 'fees',
+      sortBy = 'apr',
       sortOrder = 'desc',
       minValueUsd = '0',
+      network = 'base',
     } = req.query;
 
     const requestedLimit = Math.min(parseInt(limit as string) || 20, 100);
     const requestedPage = Math.max(parseInt(page as string) || 1, 1);
-    const minValue = parseFloat(minValueUsd as string) || 0;
     const offset = (requestedPage - 1) * requestedLimit;
+    const revertSort = REVERT_SORT_MAP[sortBy as string] || 'apr';
+    const desc = (sortOrder as string) !== 'asc';
 
-    // Fetch active positions with liquidity, joined with pool + token data
-    const result = await subgraph.getAllPositionsWithPool(1000, 0, true);
-    const positions = (result as any)?.positions?.items || [];
-
-    // Enrich positions with USD data in parallel (batch of up to 20 at a time)
-    const enriched: any[] = [];
-    const batchSize = 20;
-
-    for (let i = 0; i < positions.length; i += batchSize) {
-      const batch = positions.slice(i, i + batchSize);
-      const batchResults = await Promise.allSettled(
-        batch.map(async (pos: any) => {
-          const tokenId = pos.id || pos.tokenId;
-          try {
-            const analytics = await analyticsService.getPositionAnalytics(tokenId);
-            const createdAt = parseInt(pos.createdAtTimestamp || '0');
-            const now = Math.floor(Date.now() / 1000);
-            const ageSeconds = now - createdAt;
-
-            // Get accurate tick data: DB may have 0s for unenriched positions
-            // getPositionAnalytics triggers enrichment + DB persist, so re-read from DB
-            // If still 0, fall back to on-chain read
-            let tickLower = pos.tickLower || 0;
-            let tickUpper = pos.tickUpper || 0;
-            let poolFee = pos.poolFee || pos.poolKey?.fee || pos.fee || 0;
-            let token0Symbol = pos.token0Symbol || '';
-            let token1Symbol = pos.token1Symbol || '';
-
-            if (tickLower === 0 && tickUpper === 0) {
-              try {
-                const onChainInfo = await blockchain.getPositionInfo(BigInt(tokenId));
-                if (onChainInfo) {
-                  tickLower = onChainInfo.tickLower;
-                  tickUpper = onChainInfo.tickUpper;
-                  if (onChainInfo.poolKey) {
-                    poolFee = poolFee || onChainInfo.poolKey.fee;
-                    token0Symbol = token0Symbol || onChainInfo.poolKey.currency0;
-                    token1Symbol = token1Symbol || onChainInfo.poolKey.currency1;
-                  }
-                }
-              } catch (chainErr) {
-                routeLogger.debug({ tokenId, error: chainErr }, 'Could not fetch on-chain tick data');
-              }
-            }
-
-            return {
-              tokenId,
-              owner: pos.owner || '',
-              liquidity: pos.liquidity || '0',
-              tickLower,
-              tickUpper,
-              collectedFeesToken0: pos.collectedFeesToken0 || '0',
-              collectedFeesToken1: pos.collectedFeesToken1 || '0',
-              pool: {
-                token0Symbol,
-                token1Symbol,
-                fee: poolFee,
-              },
-              positionValueUSD: analytics?.usdMetrics?.positionValueUSD ?? null,
-              totalFeesEarnedUSD: analytics?.usdMetrics?.totalFeesEarnedUSD ?? null,
-              pendingFeesUSD: analytics?.usdMetrics?.pendingFeesUSD ?? null,
-              estimatedAPR: analytics?.usdMetrics?.apyUSD ?? parseFloat(analytics?.profitability?.estimatedAPR || '0'),
-              dailyFeeRate: analytics?.usdMetrics?.dailyFeeRateUSD ?? parseFloat(analytics?.profitability?.dailyFeeRate || '0'),
-              inRange: analytics?.profitability?.isInRange ?? false,
-              createdAtTimestamp: pos.createdAtTimestamp || '0',
-              ageSeconds,
-            };
-          } catch (e) {
-            // Return basic data without USD enrichment on failure
-            const createdAt = parseInt(pos.createdAtTimestamp || '0');
-            const now = Math.floor(Date.now() / 1000);
-
-            // Still try to get ticks from chain even on analytics failure
-            let tickLower = pos.tickLower || 0;
-            let tickUpper = pos.tickUpper || 0;
-            if (tickLower === 0 && tickUpper === 0) {
-              try {
-                const onChainInfo = await blockchain.getPositionInfo(BigInt(tokenId));
-                if (onChainInfo) {
-                  tickLower = onChainInfo.tickLower;
-                  tickUpper = onChainInfo.tickUpper;
-                }
-              } catch { /* ignore */ }
-            }
-
-            return {
-              tokenId,
-              owner: pos.owner || '',
-              liquidity: pos.liquidity || '0',
-              tickLower,
-              tickUpper,
-              collectedFeesToken0: pos.collectedFeesToken0 || '0',
-              collectedFeesToken1: pos.collectedFeesToken1 || '0',
-              pool: {
-                token0Symbol: '',
-                token1Symbol: '',
-                fee: 0,
-              },
-              positionValueUSD: null,
-              totalFeesEarnedUSD: null,
-              pendingFeesUSD: null,
-              estimatedAPR: 0,
-              dailyFeeRate: 0,
-              inRange: false,
-              createdAtTimestamp: pos.createdAtTimestamp || '0',
-              ageSeconds: now - createdAt,
-            };
-          }
-        })
-      );
-
-      for (const result of batchResults) {
-        if (result.status === 'fulfilled') {
-          enriched.push(result.value);
-        }
-      }
-    }
-
-    // Filter by minimum USD value
-    const filtered = minValue > 0
-      ? enriched.filter(p => p.positionValueUSD !== null && p.positionValueUSD >= minValue)
-      : enriched;
-
-    // Sort positions
-    const sortField = sortBy as string;
-    const order = (sortOrder as string) === 'asc' ? 1 : -1;
-    filtered.sort((a: any, b: any) => {
-      let aVal: number, bVal: number;
-      switch (sortField) {
-        case 'value':
-          aVal = a.positionValueUSD ?? 0;
-          bVal = b.positionValueUSD ?? 0;
-          break;
-        case 'apr':
-          aVal = a.estimatedAPR ?? 0;
-          bVal = b.estimatedAPR ?? 0;
-          break;
-        case 'age':
-          aVal = a.ageSeconds ?? 0;
-          bVal = b.ageSeconds ?? 0;
-          break;
-        case 'fees':
-        default:
-          aVal = a.totalFeesEarnedUSD ?? 0;
-          bVal = b.totalFeesEarnedUSD ?? 0;
-          break;
-      }
-      return (aVal - bVal) * order;
+    // Build Revert API URL
+    const revertParams = new URLSearchParams({
+      limit: String(requestedLimit),
+      offset: String(offset),
+      page: String(requestedPage),
+      sort: revertSort,
+      desc: String(desc),
+      'no-withdrawals': 'true',
+      'with-v4': 'true',
     });
 
-    // Paginate
-    const total = filtered.length;
+    // Filter by network if specified
+    if (network && network !== 'all') {
+      revertParams.set(`only-${network}`, 'true');
+    }
+
+    // Min value filter
+    const minValue = parseFloat(minValueUsd as string) || 0;
+    if (minValue > 0) {
+      revertParams.set('min-underlying-value', String(minValue));
+    }
+
+    const revertUrl = `https://api.revert.finance/v1/positions?${revertParams.toString()}`;
+    routeLogger.debug({ revertUrl }, 'Fetching top positions from Revert API');
+
+    const revertResponse = await fetch(revertUrl, {
+      headers: {
+        'Accept': 'application/json',
+        'Origin': 'https://revert.finance',
+        'Referer': 'https://revert.finance/',
+        'User-Agent': 'CopyPools/1.0',
+      },
+      signal: AbortSignal.timeout(30000),
+    });
+
+    if (!revertResponse.ok) {
+      throw new Error(`Revert API returned ${revertResponse.status}`);
+    }
+
+    const revertData = await revertResponse.json() as {
+      success: boolean;
+      total_count: number;
+      data: any[];
+    };
+
+    if (!revertData.success || !Array.isArray(revertData.data)) {
+      throw new Error('Invalid response from Revert API');
+    }
+
+    // Transform Revert positions to our format
+    const positions = revertData.data.map((pos: any) => {
+      const perf = pos.performance?.hodl || {};
+      const tokens = pos.tokens || {};
+      const token0Info = tokens[pos.token0] || {};
+      const token1Info = tokens[pos.token1] || {};
+
+      return {
+        tokenId: String(pos.nft_id),
+        owner: pos.real_owner || '',
+        tickLower: pos.tick_lower,
+        tickUpper: pos.tick_upper,
+        inRange: pos.in_range || false,
+        network: pos.network || 'base',
+        exchange: pos.exchange || 'uniswapv3',
+        pool: {
+          address: pos.pool || '',
+          token0Symbol: token0Info.symbol || '',
+          token1Symbol: token1Info.symbol || '',
+          token0Address: pos.token0 || '',
+          token1Address: pos.token1 || '',
+          token0Decimals: token0Info.decimals || 18,
+          token1Decimals: token1Info.decimals || 18,
+          fee: parseInt(pos.fee_tier || '0'),
+        },
+        positionValueUSD: parseFloat(pos.underlying_value) || 0,
+        pnl: parseFloat(perf.pool_pnl) || 0,
+        roi: parseFloat(perf.pool_roi) || 0,
+        apr: parseFloat(perf.pool_apr) || 0,
+        feeApr: parseFloat(perf.fee_apr) || 0,
+        il: parseFloat(perf.il) || 0,
+        ageDays: pos.age || 0,
+      };
+    });
+
+    const total = revertData.total_count || positions.length;
     const totalPages = Math.ceil(total / requestedLimit);
-    const paginatedPositions = filtered.slice(offset, offset + requestedLimit);
 
     if (res.headersSent) return;
     res.json({
-      positions: paginatedPositions,
+      positions,
       pagination: {
         page: requestedPage,
         limit: requestedLimit,
@@ -359,7 +304,7 @@ router.get('/top-positions', async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    routeLogger.error({ error }, 'Failed to get top positions');
+    routeLogger.error({ error }, 'Failed to get top positions from Revert API');
     if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch top positions' });
   }
