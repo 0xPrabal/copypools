@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import * as subgraph from '../../services/subgraph.js';
 import * as analyticsService from '../../services/analytics.js';
+import * as blockchain from '../../services/blockchain.js';
 import { logger } from '../../utils/logger.js';
 import { rpcManager } from '../../services/rpc-manager.js';
 import { config } from '../../config/index.js';
@@ -211,18 +212,44 @@ router.get('/top-positions', async (req: Request, res: Response) => {
             const now = Math.floor(Date.now() / 1000);
             const ageSeconds = now - createdAt;
 
+            // Get accurate tick data: DB may have 0s for unenriched positions
+            // getPositionAnalytics triggers enrichment + DB persist, so re-read from DB
+            // If still 0, fall back to on-chain read
+            let tickLower = pos.tickLower || 0;
+            let tickUpper = pos.tickUpper || 0;
+            let poolFee = pos.poolKey?.fee || pos.fee || 0;
+            let token0Symbol = pos.pool?.token0Symbol || '';
+            let token1Symbol = pos.pool?.token1Symbol || '';
+
+            if (tickLower === 0 && tickUpper === 0) {
+              try {
+                const onChainInfo = await blockchain.getPositionInfo(BigInt(tokenId));
+                if (onChainInfo) {
+                  tickLower = onChainInfo.tickLower;
+                  tickUpper = onChainInfo.tickUpper;
+                  if (onChainInfo.poolKey) {
+                    poolFee = poolFee || onChainInfo.poolKey.fee;
+                    token0Symbol = token0Symbol || onChainInfo.poolKey.currency0;
+                    token1Symbol = token1Symbol || onChainInfo.poolKey.currency1;
+                  }
+                }
+              } catch (chainErr) {
+                routeLogger.debug({ tokenId, error: chainErr }, 'Could not fetch on-chain tick data');
+              }
+            }
+
             return {
               tokenId,
               owner: pos.owner || '',
               liquidity: pos.liquidity || '0',
-              tickLower: pos.tickLower || 0,
-              tickUpper: pos.tickUpper || 0,
+              tickLower,
+              tickUpper,
               collectedFeesToken0: pos.collectedFeesToken0 || '0',
               collectedFeesToken1: pos.collectedFeesToken1 || '0',
               pool: {
-                token0Symbol: pos.pool?.token0Symbol || pos.poolKey?.currency0 || '',
-                token1Symbol: pos.pool?.token1Symbol || pos.poolKey?.currency1 || '',
-                fee: pos.poolKey?.fee || pos.fee || 0,
+                token0Symbol,
+                token1Symbol,
+                fee: poolFee,
               },
               positionValueUSD: analytics?.usdMetrics?.positionValueUSD ?? null,
               totalFeesEarnedUSD: analytics?.usdMetrics?.totalFeesEarnedUSD ?? null,
@@ -237,12 +264,26 @@ router.get('/top-positions', async (req: Request, res: Response) => {
             // Return basic data without USD enrichment on failure
             const createdAt = parseInt(pos.createdAtTimestamp || '0');
             const now = Math.floor(Date.now() / 1000);
+
+            // Still try to get ticks from chain even on analytics failure
+            let tickLower = pos.tickLower || 0;
+            let tickUpper = pos.tickUpper || 0;
+            if (tickLower === 0 && tickUpper === 0) {
+              try {
+                const onChainInfo = await blockchain.getPositionInfo(BigInt(tokenId));
+                if (onChainInfo) {
+                  tickLower = onChainInfo.tickLower;
+                  tickUpper = onChainInfo.tickUpper;
+                }
+              } catch { /* ignore */ }
+            }
+
             return {
               tokenId,
               owner: pos.owner || '',
               liquidity: pos.liquidity || '0',
-              tickLower: pos.tickLower || 0,
-              tickUpper: pos.tickUpper || 0,
+              tickLower,
+              tickUpper,
               collectedFeesToken0: pos.collectedFeesToken0 || '0',
               collectedFeesToken1: pos.collectedFeesToken1 || '0',
               pool: {
