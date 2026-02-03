@@ -176,27 +176,147 @@ router.post('/batch-check', checkRpcHealth, async (req: Request, res: Response) 
   }
 });
 
-// Get top positions by fees earned
+// Get top positions by fees earned - with optional USD enrichment
 router.get('/top-positions', async (req: Request, res: Response) => {
   try {
-    const { limit = '10' } = req.query;
-    const requestedLimit = parseInt(limit as string);
+    const {
+      limit = '20',
+      page = '1',
+      sortBy = 'fees',
+      sortOrder = 'desc',
+      minValueUsd = '0',
+    } = req.query;
 
-    // Fetch more positions to ensure we find actual top earners
-    // We fetch up to 1000 positions to get a comprehensive view
-    const result = await subgraph.getAllPositions(1000, 0);
+    const requestedLimit = Math.min(parseInt(limit as string) || 20, 100);
+    const requestedPage = Math.max(parseInt(page as string) || 1, 1);
+    const minValue = parseFloat(minValueUsd as string) || 0;
+    const offset = (requestedPage - 1) * requestedLimit;
+
+    // Fetch active positions with liquidity
+    const result = await subgraph.getAllPositions(1000, 0, true);
     const positions = (result as any)?.positions?.items || [];
 
-    // Sort by total collected fees (token0 + token1) descending
-    const sortedPositions = positions.sort((a: any, b: any) => {
-      const aFees = BigInt(a.collectedFeesToken0 || '0') + BigInt(a.collectedFeesToken1 || '0');
-      const bFees = BigInt(b.collectedFeesToken0 || '0') + BigInt(b.collectedFeesToken1 || '0');
-      return bFees > aFees ? 1 : bFees < aFees ? -1 : 0;
+    // Enrich positions with USD data in parallel (batch of up to 20 at a time)
+    const enriched: any[] = [];
+    const batchSize = 20;
+
+    for (let i = 0; i < positions.length; i += batchSize) {
+      const batch = positions.slice(i, i + batchSize);
+      const batchResults = await Promise.allSettled(
+        batch.map(async (pos: any) => {
+          const tokenId = pos.id || pos.tokenId;
+          try {
+            const analytics = await analyticsService.getPositionAnalytics(tokenId);
+            const createdAt = parseInt(pos.createdAtTimestamp || '0');
+            const now = Math.floor(Date.now() / 1000);
+            const ageSeconds = now - createdAt;
+
+            return {
+              tokenId,
+              owner: pos.owner || '',
+              liquidity: pos.liquidity || '0',
+              tickLower: pos.tickLower || 0,
+              tickUpper: pos.tickUpper || 0,
+              collectedFeesToken0: pos.collectedFeesToken0 || '0',
+              collectedFeesToken1: pos.collectedFeesToken1 || '0',
+              pool: {
+                token0Symbol: pos.pool?.token0Symbol || pos.poolKey?.currency0 || '',
+                token1Symbol: pos.pool?.token1Symbol || pos.poolKey?.currency1 || '',
+                fee: pos.poolKey?.fee || pos.fee || 0,
+              },
+              positionValueUSD: analytics?.usdMetrics?.positionValueUSD ?? null,
+              totalFeesEarnedUSD: analytics?.usdMetrics?.totalFeesEarnedUSD ?? null,
+              pendingFeesUSD: analytics?.usdMetrics?.pendingFeesUSD ?? null,
+              estimatedAPR: analytics?.usdMetrics?.apyUSD ?? parseFloat(analytics?.profitability?.estimatedAPR || '0'),
+              dailyFeeRate: analytics?.usdMetrics?.dailyFeeRateUSD ?? parseFloat(analytics?.profitability?.dailyFeeRate || '0'),
+              inRange: analytics?.profitability?.isInRange ?? false,
+              createdAtTimestamp: pos.createdAtTimestamp || '0',
+              ageSeconds,
+            };
+          } catch (e) {
+            // Return basic data without USD enrichment on failure
+            const createdAt = parseInt(pos.createdAtTimestamp || '0');
+            const now = Math.floor(Date.now() / 1000);
+            return {
+              tokenId,
+              owner: pos.owner || '',
+              liquidity: pos.liquidity || '0',
+              tickLower: pos.tickLower || 0,
+              tickUpper: pos.tickUpper || 0,
+              collectedFeesToken0: pos.collectedFeesToken0 || '0',
+              collectedFeesToken1: pos.collectedFeesToken1 || '0',
+              pool: {
+                token0Symbol: '',
+                token1Symbol: '',
+                fee: 0,
+              },
+              positionValueUSD: null,
+              totalFeesEarnedUSD: null,
+              pendingFeesUSD: null,
+              estimatedAPR: 0,
+              dailyFeeRate: 0,
+              inRange: false,
+              createdAtTimestamp: pos.createdAtTimestamp || '0',
+              ageSeconds: now - createdAt,
+            };
+          }
+        })
+      );
+
+      for (const result of batchResults) {
+        if (result.status === 'fulfilled') {
+          enriched.push(result.value);
+        }
+      }
+    }
+
+    // Filter by minimum USD value
+    const filtered = minValue > 0
+      ? enriched.filter(p => p.positionValueUSD !== null && p.positionValueUSD >= minValue)
+      : enriched;
+
+    // Sort positions
+    const sortField = sortBy as string;
+    const order = (sortOrder as string) === 'asc' ? 1 : -1;
+    filtered.sort((a: any, b: any) => {
+      let aVal: number, bVal: number;
+      switch (sortField) {
+        case 'value':
+          aVal = a.positionValueUSD ?? 0;
+          bVal = b.positionValueUSD ?? 0;
+          break;
+        case 'apr':
+          aVal = a.estimatedAPR ?? 0;
+          bVal = b.estimatedAPR ?? 0;
+          break;
+        case 'age':
+          aVal = a.ageSeconds ?? 0;
+          bVal = b.ageSeconds ?? 0;
+          break;
+        case 'fees':
+        default:
+          aVal = a.totalFeesEarnedUSD ?? 0;
+          bVal = b.totalFeesEarnedUSD ?? 0;
+          break;
+      }
+      return (aVal - bVal) * order;
     });
 
-    // Return only the requested number of top positions
+    // Paginate
+    const total = filtered.length;
+    const totalPages = Math.ceil(total / requestedLimit);
+    const paginatedPositions = filtered.slice(offset, offset + requestedLimit);
+
     if (res.headersSent) return;
-    res.json(sortedPositions.slice(0, requestedLimit));
+    res.json({
+      positions: paginatedPositions,
+      pagination: {
+        page: requestedPage,
+        limit: requestedLimit,
+        total,
+        totalPages,
+      },
+    });
   } catch (error) {
     routeLogger.error({ error }, 'Failed to get top positions');
     if (res.headersSent) return;
