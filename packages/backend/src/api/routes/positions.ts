@@ -483,42 +483,54 @@ router.get('/owner/:address', checkRpcHealth, async (req: Request, res: Response
           }
 
           const batch = allItems.slice(i, i + ENRICHMENT_BATCH_SIZE);
+
+          // Split batch: positions needing enrichment (unknown poolId) vs already valid
+          const needsEnrichmentBatch: any[] = [];
+          const validBatch: any[] = [];
+          for (const p of batch) {
+            const needsIt = !p.poolId || p.poolId === 'unknown' || (p.tickLower === 0 && p.tickUpper === 0);
+            if (needsIt) needsEnrichmentBatch.push(p);
+            else validBatch.push(p);
+          }
+
+          // Only make RPC calls for positions that actually need enrichment
+          // Trust Ponder's liquidity for positions with valid pool data (saves 100s of RPC calls)
           const batchResult = await promiseAllWithTimeout(
-            batch.map(async (p: any) => {
+            needsEnrichmentBatch.map(async (p: any) => {
               try {
-                const needsEnrichment = !p.poolId || p.poolId === 'unknown' || p.tickLower === 0 && p.tickUpper === 0;
-
-                if (needsEnrichment) {
-                  const onChainInfo = await blockchain.getPositionInfo(BigInt(p.tokenId));
-                  if (onChainInfo) {
-                    return {
-                      ...p,
-                      poolId: onChainInfo.poolId,
-                      poolKey: onChainInfo.poolKey,
-                      tickLower: onChainInfo.tickLower,
-                      tickUpper: onChainInfo.tickUpper,
-                      liquidity: onChainInfo.liquidity,
-                      _enrichedFromChain: true,
-                      _verified: true,
-                    };
-                  }
+                const onChainInfo = await blockchain.getPositionInfo(BigInt(p.tokenId));
+                if (onChainInfo) {
+                  return {
+                    ...p,
+                    poolId: onChainInfo.poolId,
+                    poolKey: onChainInfo.poolKey,
+                    tickLower: onChainInfo.tickLower,
+                    tickUpper: onChainInfo.tickUpper,
+                    liquidity: onChainInfo.liquidity,
+                    _enrichedFromChain: true,
+                    _verified: true,
+                  };
                 }
-
-                const onChainLiquidity = await blockchain.getPositionLiquidity(BigInt(p.tokenId));
-                return { ...p, liquidity: onChainLiquidity.toString(), _verified: true };
+                return { ...p, _verified: false };
               } catch (e) {
-                routeLogger.debug({ tokenId: p.tokenId, error: e }, 'Failed to verify/enrich position');
+                routeLogger.debug({ tokenId: p.tokenId, error: e }, 'Failed to enrich position');
                 return { ...p, _verified: false };
               }
             }),
             6000 // 6s per batch timeout
           );
 
-          for (let j = 0; j < batch.length; j++) {
+          // Add enriched positions
+          for (let j = 0; j < needsEnrichmentBatch.length; j++) {
             const result = batchResult.results[j];
-            ponderPositionsEnriched.push(result !== null ? result : { ...batch[j], _verified: false });
+            ponderPositionsEnriched.push(result !== null ? result : { ...needsEnrichmentBatch[j], _verified: false });
           }
           enrichmentTimedOut += batchResult.timedOutCount;
+
+          // Add valid positions as-is (trust Ponder data, no RPC needed)
+          for (const p of validBatch) {
+            ponderPositionsEnriched.push({ ...p, _verified: true });
+          }
         }
 
         if (enrichmentTimedOut > 0) {
