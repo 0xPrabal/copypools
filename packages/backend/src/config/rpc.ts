@@ -19,16 +19,6 @@ export const rpcConfigsPerChain: Record<number, RpcConfig[]> = {
   //   { url: 'https://1rpc.io/eth', name: '1RPC' },
   // ],
 
-  // Sepolia Testnet
-  11155111: [
-    { url: process.env.QUICKNODE_SEPOLIA_RPC_URL || '', name: 'QuickNode' },
-    { url: process.env.RPC_URL || '', name: 'Primary (env)' },
-    { url: 'https://rpc.sepolia.org', name: 'Sepolia.org' },
-    { url: 'https://ethereum-sepolia-rpc.publicnode.com', name: 'PublicNode' },
-    { url: 'https://sepolia.drpc.org', name: 'dRPC' },
-    { url: 'https://rpc2.sepolia.org', name: 'Sepolia.org 2' },
-  ],
-
   // Base Mainnet
   8453: [
     { url: process.env.INFURA_BASE_RPC_URL || '', name: 'Infura' },

@@ -1106,11 +1106,12 @@ ponder.on("PositionManager:Transfer", async ({ event, context }) => {
             bigint
           ];
 
-          // Parse packed position info: tickLower (int24) in bits 232-255, tickUpper (int24) in bits 208-231
-          const tickLowerRaw = Number((packedInfo >> 232n) & 0xFFFFFFn);
-          enrichedTickLower = tickLowerRaw > 0x7FFFFF ? tickLowerRaw - 0x1000000 : tickLowerRaw;
-          const tickUpperRaw = Number((packedInfo >> 208n) & 0xFFFFFFn);
-          enrichedTickUpper = tickUpperRaw > 0x7FFFFF ? tickUpperRaw - 0x1000000 : tickUpperRaw;
+          // Parse packed position info (uint256):
+          // Layout from LSB: hasSubscriber (8 bits) | tickLower (24 bits) | tickUpper (24 bits) | poolId (200 bits)
+          const tickLowerRaw = Number((packedInfo >> 8n) & 0xFFFFFFn);
+          enrichedTickLower = tickLowerRaw >= 0x800000 ? tickLowerRaw - 0x1000000 : tickLowerRaw;
+          const tickUpperRaw = Number((packedInfo >> 32n) & 0xFFFFFFn);
+          enrichedTickUpper = tickUpperRaw >= 0x800000 ? tickUpperRaw - 0x1000000 : tickUpperRaw;
 
           enrichedPoolId = `${poolKey.currency0.toLowerCase()}-${poolKey.currency1.toLowerCase()}-${poolKey.fee}`;
 

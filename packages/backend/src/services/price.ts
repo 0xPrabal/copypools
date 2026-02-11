@@ -22,13 +22,11 @@ const priceLogger = logger.child({ service: 'price' });
 // USDC addresses per chain (quote currency for pricing)
 export const USDC_ADDRESSES: Record<number, string> = {
   8453: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',     // Base Mainnet
-  11155111: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', // Sepolia
 };
 
 // WETH addresses per chain (for native ETH pricing)
 export const WETH_ADDRESSES: Record<number, string> = {
   8453: '0x4200000000000000000000000000000000000006',     // Base Mainnet
-  11155111: '0x7b79995e5f793a07bc00c21412e50ecae098e7f9', // Sepolia
 };
 
 // Native ETH address (zero address)
@@ -40,9 +38,6 @@ const STABLECOINS: Record<number, Set<string>> = {
     '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', // USDC
     '0x50c5725949a6f0c72e6c4a641f24049a917db0cb', // DAI
     '0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca', // USDbC
-  ]),
-  11155111: new Set([
-    '0x1c7d4b196cb0c7b01d743fbc6116a902379c7238', // USDC
   ]),
 };
 
@@ -72,11 +67,6 @@ export const TOKEN_INFO: Record<number, Record<string, { symbol: string; decimal
     '0x2416092f143378750bb29b79ed961ab195cceea5': { symbol: 'ezETH', decimals: 18 },
     '0x04c0599ae5a44757c0af6f9ec3b93da8976c150a': { symbol: 'weETH', decimals: 18 },
     '0xfde4c96c8593536e31f229ea8f37b2ada2699bb2': { symbol: 'USDT', decimals: 6 },
-  },
-  11155111: {
-    '0x0000000000000000000000000000000000000000': { symbol: 'ETH', decimals: 18 },
-    '0x7b79995e5f793a07bc00c21412e50ecae098e7f9': { symbol: 'WETH', decimals: 18 },
-    '0x1c7d4b196cb0c7b01d743fbc6116a902379c7238': { symbol: 'USDC', decimals: 6 },
   },
 };
 

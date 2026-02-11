@@ -10,13 +10,12 @@ const swapLogger = logger.child({ module: 'swap-api' });
 const ZEROX_API_URL = 'https://api.0x.org';
 
 // Supported chains for 0x API v2
-const SUPPORTED_CHAINS = [1, 8453, 11155111]; // Mainnet, Base, Sepolia
+const SUPPORTED_CHAINS = [1, 8453]; // Mainnet, Base
 
 // WETH addresses per chain
 const WETH_ADDRESSES: Record<number, string> = {
   1: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
   8453: '0x4200000000000000000000000000000000000006',
-  11155111: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9',
 };
 
 interface SwapQuoteRequest {
@@ -56,6 +55,23 @@ swapRouter.post('/quote', async (req: Request, res: Response) => {
       return res.status(400).json({
         error: 'Missing required fields: sellToken, buyToken, sellAmount, chainId, taker',
       });
+    }
+
+    // Validate address formats (must be 0x-prefixed hex, 42 chars)
+    const addressRegex = /^0x[0-9a-fA-F]{40}$/;
+    if (!addressRegex.test(sellToken) || !addressRegex.test(buyToken) || !addressRegex.test(taker)) {
+      return res.status(400).json({ error: 'Invalid address format for sellToken, buyToken, or taker' });
+    }
+
+    // Validate sellAmount is a positive numeric string
+    if (!/^\d+$/.test(sellAmount) || sellAmount === '0') {
+      return res.status(400).json({ error: 'sellAmount must be a positive integer string' });
+    }
+
+    // Validate slippage bounds (0.0001 to 0.50 = 0.01% to 50%)
+    const slippage = parseFloat(slippagePercentage);
+    if (isNaN(slippage) || slippage < 0.0001 || slippage > 0.50) {
+      return res.status(400).json({ error: 'slippagePercentage must be between 0.0001 and 0.50' });
     }
 
     // Check if 0x API key is configured
@@ -162,6 +178,17 @@ swapRouter.get('/price', async (req: Request, res: Response) => {
       return res.status(400).json({
         error: 'Missing required query params: sellToken, buyToken, sellAmount, chainId',
       });
+    }
+
+    // Validate address formats
+    const addressRegex = /^0x[0-9a-fA-F]{40}$/;
+    if (!addressRegex.test(sellToken as string) || !addressRegex.test(buyToken as string)) {
+      return res.status(400).json({ error: 'Invalid address format for sellToken or buyToken' });
+    }
+
+    // Validate sellAmount is numeric
+    if (!/^\d+$/.test(sellAmount as string) || sellAmount === '0') {
+      return res.status(400).json({ error: 'sellAmount must be a positive integer string' });
     }
 
     if (!config.ZEROX_API_KEY) {

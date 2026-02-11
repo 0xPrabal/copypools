@@ -11,6 +11,9 @@ import { config, contracts } from '../config/index.js';
 
 const botsLogger = logger.child({ module: 'bots' });
 
+// Track all jobs for graceful shutdown
+const activeJobs: any[] = [];
+
 export function startAllBots(): void {
   if (!config.BOT_ENABLED) {
     botsLogger.info('Bots are disabled');
@@ -19,39 +22,35 @@ export function startAllBots(): void {
 
   botsLogger.info('Starting bots for deployed contracts...');
 
-  const jobs: any[] = [];
-
   // Start compound bot (V4Compoundor - deployed)
   const compoundJob = startCompoundBot();
-  jobs.push(compoundJob);
+  activeJobs.push(compoundJob);
   botsLogger.info('Compound bot started');
 
   // Start auto-range bot (V4AutoRange - deployed)
   const autoRangeJob = startAutoRangeBot();
-  jobs.push(autoRangeJob);
+  activeJobs.push(autoRangeJob);
   botsLogger.info('Auto-range bot started');
 
   // Start auto-exit bot only if contract is deployed
-  let autoExitJob: any = null;
   if (contracts.v4AutoExit) {
-    autoExitJob = startAutoExitBot();
-    jobs.push(autoExitJob);
+    const autoExitJob = startAutoExitBot();
+    activeJobs.push(autoExitJob);
     botsLogger.info('Auto-exit bot started');
   } else {
     botsLogger.warn('V4AutoExit contract not deployed - skipping auto-exit bot');
   }
 
   // Start liquidation bot only if vault contract is deployed
-  let liquidationJob: any = null;
   if (contracts.v4Vault) {
-    liquidationJob = startLiquidationBot();
-    jobs.push(liquidationJob);
+    const liquidationJob = startLiquidationBot();
+    activeJobs.push(liquidationJob);
     botsLogger.info('Liquidation bot started');
   } else {
     botsLogger.warn('V4Vault contract not deployed - skipping liquidation bot');
   }
 
-  botsLogger.info(`${jobs.length} bots started successfully`);
+  botsLogger.info(`${activeJobs.length} bots started successfully`);
 
   // Start position indexer (indexes Transfer events for all users)
   startPositionIndexer()
@@ -64,21 +63,22 @@ export function startAllBots(): void {
 
   // Start notification service (runs every 10 minutes)
   const notificationJob = new CronJob('*/10 * * * *', runNotificationChecks, null, true);
-  jobs.push(notificationJob);
+  activeJobs.push(notificationJob);
   botsLogger.info('Notification service started (every 10 minutes)');
 
   // Start pool sync job (syncs V4 pools every 15 minutes)
   const poolSyncJob = startPoolSyncJob();
-  jobs.push(poolSyncJob);
+  activeJobs.push(poolSyncJob);
   botsLogger.info('Pool sync job started (every 15 minutes)');
+}
 
-  // Handle graceful shutdown
-  process.on('SIGINT', () => {
-    botsLogger.info('Stopping bots...');
-    jobs.forEach((job) => job.stop());
-    botsLogger.info('All bots stopped');
-    process.exit(0);
+export function stopAllBots(): void {
+  botsLogger.info('Stopping all bots...');
+  activeJobs.forEach((job) => {
+    try { job.stop(); } catch { /* already stopped */ }
   });
+  activeJobs.length = 0;
+  botsLogger.info('All bots stopped');
 }
 
 export {

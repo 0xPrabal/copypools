@@ -9,7 +9,7 @@ const dbLogger = logger.child({ module: 'database' });
 const DB_CONFIG = {
   STATEMENT_TIMEOUT_MS: 30000, // 30 second query timeout
   SLOW_QUERY_THRESHOLD_MS: 100, // Log queries taking longer than 100ms
-  MAX_CONNECTIONS: 10,
+  MAX_CONNECTIONS: 20,
   IDLE_TIMEOUT_MS: 30000,
   CONNECTION_TIMEOUT_MS: 2000,
 };
@@ -152,7 +152,6 @@ export interface V4Pool {
 // Chain IDs
 export const CHAIN_IDS = {
   BASE: 8453,
-  SEPOLIA: 11155111,
 } as const;
 
 // Full position data interface

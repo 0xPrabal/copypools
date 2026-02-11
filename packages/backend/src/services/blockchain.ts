@@ -1,5 +1,5 @@
 import { createPublicClient, createWalletClient, http, fallback, parseAbi, Address, Hex, Chain, encodeAbiParameters, keccak256, PublicClient, WalletClient, Transport } from 'viem';
-import { mainnet, arbitrum, base, optimism, polygon, sepolia } from 'viem/chains';
+import { mainnet, arbitrum, base, optimism, polygon } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 import { config, contracts } from '../config/index.js';
 import { logger } from '../utils/logger.js';
@@ -12,14 +12,13 @@ import { rpcManager, executeBatch } from './rpc-manager.js';
 // Chain mapping
 const chains: Record<number, Chain> = {
   1: mainnet,
-  11155111: sepolia,
   42161: arbitrum,
   8453: base,
   10: optimism,
   137: polygon,
 };
 
-const chain = chains[config.CHAIN_ID] || sepolia;
+const chain = chains[config.CHAIN_ID] || base;
 
 /**
  * Get public client with circuit breaker and health monitoring
@@ -669,19 +668,17 @@ function getAlchemyApiKey(): string | null {
 function getAlchemyChainName(chainId: number = config.CHAIN_ID): string {
   switch (chainId) {
     case 1: return 'eth-mainnet';
-    case 11155111: return 'eth-sepolia';
     case 42161: return 'arb-mainnet';
     case 8453: return 'base-mainnet';
     case 10: return 'opt-mainnet';
     case 137: return 'polygon-mainnet';
-    default: return 'eth-sepolia';
+    default: return 'base-mainnet';
   }
 }
 
 // PositionManager addresses per chain
 const POSITION_MANAGER_BY_CHAIN: Record<number, string> = {
   8453: '0x7C5f5A4bBd8fD63184577525326123B519429bDc', // Base Mainnet
-  11155111: '0x429ba70129df741B2Ca2a85BC3A2a3328e5c09b4', // Sepolia (Uniswap V4)
 };
 
 function getPositionManagerAddress(chainId: number): string {

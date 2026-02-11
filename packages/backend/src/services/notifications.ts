@@ -237,6 +237,7 @@ interface WebhookDeliveryStatus {
   lastError?: string;
 }
 
+const MAX_DELIVERY_LOG_SIZE = 500;
 const webhookDeliveryLog: Map<string, WebhookDeliveryStatus> = new Map();
 
 /**
@@ -263,6 +264,11 @@ async function deliverWebhookWithRetry(
       });
 
       if (response.ok) {
+        // Evict oldest entries if map is too large
+        if (webhookDeliveryLog.size >= MAX_DELIVERY_LOG_SIZE) {
+          const firstKey = webhookDeliveryLog.keys().next().value;
+          if (firstKey) webhookDeliveryLog.delete(firstKey);
+        }
         // Success - log and return
         webhookDeliveryLog.set(deliveryKey, {
           webhookId: subscription.id,
@@ -300,6 +306,12 @@ async function deliverWebhookWithRetry(
       );
       await new Promise(resolve => setTimeout(resolve, delay));
     }
+  }
+
+  // Evict oldest entries if map is too large
+  if (webhookDeliveryLog.size >= MAX_DELIVERY_LOG_SIZE) {
+    const firstKey = webhookDeliveryLog.keys().next().value;
+    if (firstKey) webhookDeliveryLog.delete(firstKey);
   }
 
   // All retries failed
