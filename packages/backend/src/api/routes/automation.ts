@@ -4,6 +4,8 @@ import * as blockchain from '../../services/blockchain.js';
 import { walletClient } from '../../services/blockchain.js';
 import { config } from '../../config/index.js';
 import { logger } from '../../utils/logger.js';
+import { getTokenPriceUSD, getTokenInfo } from '../../services/price.js';
+import { getRebalanceSwapData, calculateRebalanceSwap } from '../../services/swap.js';
 import { getKnownPositions, getLastScannedBlock, getRecentErrors, getPositionStatus } from '../../bots/auto-range-bot.js';
 
 const router = Router();
@@ -335,9 +337,11 @@ router.get('/status', async (req: Request, res: Response) => {
 router.post('/range/:tokenId/trigger', async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
+    const tokenIdBigInt = BigInt(tokenId);
+    const MIN_POSITION_VALUE_USD = 2;
 
     // Check if position needs rebalance
-    const rebalanceCheck = await blockchain.checkRebalance(BigInt(tokenId));
+    const rebalanceCheck = await blockchain.checkRebalance(tokenIdBigInt);
 
     if (!rebalanceCheck.needsRebalance) {
       return res.json({
@@ -347,19 +351,79 @@ router.post('/range/:tokenId/trigger', async (req: Request, res: Response) => {
       });
     }
 
-    // Try to execute rebalance
+    // Get position data for dust check and swap calculation
+    const posStatus = await blockchain.getPositionStatus(tokenIdBigInt);
+    const realLiquidity = await blockchain.getPositionLiquidity(tokenIdBigInt);
+
+    if (realLiquidity === 0n) {
+      return res.json({ success: false, message: 'Position has zero liquidity' });
+    }
+
+    const positionInfo = await blockchain.getAutoRangePositionInfo(tokenIdBigInt);
+
+    // Estimate position USD value - skip dust
+    const Q96 = 2n ** 96n;
+    const sqrtPriceLower = BigInt(Math.floor(Math.sqrt(1.0001 ** positionInfo.tickLower) * Number(Q96)));
+    const sqrtPriceUpper = BigInt(Math.floor(Math.sqrt(1.0001 ** positionInfo.tickUpper) * Number(Q96)));
+    const sqrtPriceCurrent = BigInt(Math.floor(Math.sqrt(1.0001 ** posStatus.currentTick) * Number(Q96)));
+
+    let amount0 = 0n;
+    let amount1 = 0n;
+    if (posStatus.currentTick < positionInfo.tickLower) {
+      amount0 = (realLiquidity * Q96 * (sqrtPriceUpper - sqrtPriceLower)) / (sqrtPriceLower * sqrtPriceUpper);
+    } else if (posStatus.currentTick >= positionInfo.tickUpper) {
+      amount1 = (realLiquidity * (sqrtPriceUpper - sqrtPriceLower)) / Q96;
+    } else {
+      amount0 = (realLiquidity * Q96 * (sqrtPriceUpper - sqrtPriceCurrent)) / (sqrtPriceCurrent * sqrtPriceUpper);
+      amount1 = (realLiquidity * (sqrtPriceCurrent - sqrtPriceLower)) / Q96;
+    }
+
+    const token0Info = getTokenInfo(positionInfo.poolKey.currency0, config.CHAIN_ID);
+    const token1Info = getTokenInfo(positionInfo.poolKey.currency1, config.CHAIN_ID);
+    const [token0Price, token1Price] = await Promise.all([
+      getTokenPriceUSD(positionInfo.poolKey.currency0, config.CHAIN_ID),
+      getTokenPriceUSD(positionInfo.poolKey.currency1, config.CHAIN_ID),
+    ]);
+
+    const amount0Human = Number(amount0) / Math.pow(10, token0Info.decimals);
+    const amount1Human = Number(amount1) / Math.pow(10, token1Info.decimals);
+    const totalValueUsd = amount0Human * (token0Price.priceUSD ?? 0) + amount1Human * (token1Price.priceUSD ?? 0);
+
+    if (totalValueUsd < MIN_POSITION_VALUE_USD) {
+      return res.json({
+        success: false,
+        message: `Position value too low for rebalance ($${totalValueUsd.toFixed(2)} < $${MIN_POSITION_VALUE_USD})`,
+        totalValueUsd: totalValueUsd.toFixed(2),
+      });
+    }
+
+    // Get new range and swap data
+    const newRange = await blockchain.calculateOptimalRange(tokenIdBigInt);
+    const swapData = await getRebalanceSwapData(
+      posStatus.currentTick,
+      newRange.tickLower,
+      newRange.tickUpper,
+      positionInfo.poolKey.currency0,
+      positionInfo.poolKey.currency1,
+      amount0,
+      amount1
+    );
+
+    // Try to execute rebalance with swap data
     try {
-      const hash = await blockchain.executeRebalance(BigInt(tokenId), '0x');
+      const hash = await blockchain.executeRebalance(tokenIdBigInt, swapData);
       return res.json({
         success: true,
         message: 'Rebalance executed',
         txHash: hash,
+        totalValueUsd: totalValueUsd.toFixed(2),
       });
     } catch (execError: any) {
       return res.json({
         success: false,
         message: 'Rebalance execution failed',
         error: execError.message || String(execError),
+        totalValueUsd: totalValueUsd.toFixed(2),
       });
     }
   } catch (error: any) {

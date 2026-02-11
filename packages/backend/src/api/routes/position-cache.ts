@@ -39,17 +39,8 @@ router.post('/index/:address/:chainId', validateAddress, validateChainId, async 
 
     // If we found tokens, save them to the database cache
     if (tokenIds.length > 0) {
-      const { createPublicClient, http } = await import('viem');
-      const { base } = await import('viem/chains');
-      const { config } = await import('../../config/index.js');
-
-      const chain = base;
-
-      const client = createPublicClient({
-        chain,
-        transport: http(config.RPC_URL),
-      });
-      const currentBlock = await client.getBlockNumber();
+      const { publicClient } = await import('../../services/blockchain.js');
+      const currentBlock = await publicClient.getBlockNumber();
 
       await database.savePositionCache(
         address,
