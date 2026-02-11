@@ -464,39 +464,45 @@ router.get('/owner/:address', checkRpcHealth, async (req: Request, res: Response
 
         // CRITICAL: Verify on-chain liquidity AND enrich unknown positions
         // Ponder may have stale data or incomplete data (poolId: "unknown")
-        const ponderPositionsEnriched = await Promise.all(
-          ponderResult.positions.items.map(async (p: any) => {
-            try {
-              // If poolId is "unknown" or invalid, fetch full position info from chain
-              const needsEnrichment = !p.poolId || p.poolId === 'unknown' || p.tickLower === 0 && p.tickUpper === 0;
+        // Use per-position timeout to prevent overall request timeout
+        const PONDER_ENRICHMENT_TIMEOUT = 8000; // 8s per position
+        const enrichmentPromises = ponderResult.positions.items.map(async (p: any) => {
+          try {
+            const needsEnrichment = !p.poolId || p.poolId === 'unknown' || p.tickLower === 0 && p.tickUpper === 0;
 
-              if (needsEnrichment) {
-                routeLogger.debug({ tokenId: p.tokenId }, 'Position needs enrichment from chain (unknown poolId)');
-                const onChainInfo = await blockchain.getPositionInfo(BigInt(p.tokenId));
-                if (onChainInfo) {
-                  return {
-                    ...p,
-                    poolId: onChainInfo.poolId,
-                    poolKey: onChainInfo.poolKey,
-                    tickLower: onChainInfo.tickLower,
-                    tickUpper: onChainInfo.tickUpper,
-                    liquidity: onChainInfo.liquidity,
-                    _enrichedFromChain: true,
-                    _verified: true,
-                  };
-                }
+            if (needsEnrichment) {
+              routeLogger.debug({ tokenId: p.tokenId }, 'Position needs enrichment from chain (unknown poolId)');
+              const onChainInfo = await blockchain.getPositionInfo(BigInt(p.tokenId));
+              if (onChainInfo) {
+                return {
+                  ...p,
+                  poolId: onChainInfo.poolId,
+                  poolKey: onChainInfo.poolKey,
+                  tickLower: onChainInfo.tickLower,
+                  tickUpper: onChainInfo.tickUpper,
+                  liquidity: onChainInfo.liquidity,
+                  _enrichedFromChain: true,
+                  _verified: true,
+                };
               }
-
-              // Just verify liquidity for positions with valid pool info
-              const onChainLiquidity = await blockchain.getPositionLiquidity(BigInt(p.tokenId));
-              return { ...p, liquidity: onChainLiquidity.toString(), _verified: true };
-            } catch (e) {
-              // If we can't verify/enrich, use Ponder's value but mark as unverified
-              routeLogger.debug({ tokenId: p.tokenId, error: e }, 'Failed to verify/enrich position');
-              return { ...p, _verified: false };
             }
-          })
+
+            const onChainLiquidity = await blockchain.getPositionLiquidity(BigInt(p.tokenId));
+            return { ...p, liquidity: onChainLiquidity.toString(), _verified: true };
+          } catch (e) {
+            routeLogger.debug({ tokenId: p.tokenId, error: e }, 'Failed to verify/enrich position');
+            return { ...p, _verified: false };
+          }
+        });
+
+        const enrichmentResult = await promiseAllWithTimeout(enrichmentPromises, PONDER_ENRICHMENT_TIMEOUT);
+        const ponderPositionsEnriched = enrichmentResult.results.map((result, idx) =>
+          result !== null ? result : { ...ponderResult.positions.items[idx], _verified: false }
         );
+
+        if (enrichmentResult.timedOutCount > 0) {
+          routeLogger.warn({ timedOut: enrichmentResult.timedOutCount, total: ponderResult.positions.items.length }, 'Ponder enrichment had timeouts');
+        }
 
         // Persist enriched positions back to database (async, don't wait)
         // This ensures future requests don't need to fetch from chain again
@@ -551,7 +557,7 @@ router.get('/owner/:address', checkRpcHealth, async (req: Request, res: Response
         // Group positions by unique poolKey to minimize RPC calls
         const poolSlot0Cache = new Map<string, { tick: number; sqrtPriceX96: bigint }>();
 
-        const positions = await Promise.all(rawPositions.map(async (pos: any) => {
+        const slot0Promises = rawPositions.map(async (pos: any) => {
           try {
             const poolCacheKey = `${pos.poolKey.currency0}-${pos.poolKey.currency1}-${pos.poolKey.fee}`;
 
@@ -571,7 +577,13 @@ router.get('/owner/:address', checkRpcHealth, async (req: Request, res: Response
             routeLogger.debug({ tokenId: pos.tokenId, error: e }, 'Failed to enrich Ponder position with slot0');
             return pos;
           }
-        }));
+        });
+
+        // Use timeout for slot0 enrichment (5s per position)
+        const slot0Result = await promiseAllWithTimeout(slot0Promises, 5000);
+        const positions = slot0Result.results.map((result, idx) =>
+          result !== null ? result : rawPositions[idx]
+        );
 
         // Store in memory cache
         memoryCache.set(memoryCacheKey, positions, MEMORY_CACHE_TTL);

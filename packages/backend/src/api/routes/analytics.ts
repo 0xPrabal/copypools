@@ -130,6 +130,7 @@ router.get('/rebalance-check/:tokenId', checkRpcHealth, async (req: Request, res
 });
 
 // Batch check multiple positions - requires RPC
+// Uses batched concurrency (5 at a time) with per-item timeouts
 router.post('/batch-check', checkRpcHealth, async (req: Request, res: Response) => {
   try {
     const { tokenIds, checkType } = req.body;
@@ -142,34 +143,68 @@ router.post('/batch-check', checkRpcHealth, async (req: Request, res: Response) 
       return res.status(400).json({ error: 'Maximum 50 positions per batch' });
     }
 
-    const results = await Promise.all(
-      tokenIds.map(async (tokenId: string) => {
-        try {
-          if (checkType === 'compound') {
-            return {
-              tokenId,
-              ...(await analyticsService.checkCompoundProfitability(tokenId)),
-            };
-          } else if (checkType === 'rebalance') {
-            return {
-              tokenId,
-              ...(await analyticsService.checkRebalanceNeed(tokenId)),
-            };
-          } else {
-            // Return full analytics
-            return {
-              tokenId,
-              analytics: await analyticsService.getPositionAnalytics(tokenId),
-            };
-          }
-        } catch (e) {
-          return { tokenId, error: 'Failed to check' };
-        }
-      })
-    );
+    const BATCH_SIZE = 5;
+    const PER_ITEM_TIMEOUT = 8000; // 8s per position
+    const results: any[] = [];
+    let timedOutCount = 0;
+
+    // Process in batches of 5 to control concurrency
+    for (let i = 0; i < tokenIds.length; i += BATCH_SIZE) {
+      // Bail early if response already sent (server timeout)
+      if (res.headersSent) return;
+
+      const batch = tokenIds.slice(i, i + BATCH_SIZE);
+
+      const batchResults = await Promise.allSettled(
+        batch.map(async (tokenId: string) => {
+          return new Promise<any>((resolve) => {
+            const timeout = setTimeout(() => {
+              timedOutCount++;
+              resolve({ tokenId, error: 'Timed out' });
+            }, PER_ITEM_TIMEOUT);
+
+            (async () => {
+              try {
+                if (checkType === 'compound') {
+                  return {
+                    tokenId,
+                    ...(await analyticsService.checkCompoundProfitability(tokenId)),
+                  };
+                } else if (checkType === 'rebalance') {
+                  return {
+                    tokenId,
+                    ...(await analyticsService.checkRebalanceNeed(tokenId)),
+                  };
+                } else {
+                  return {
+                    tokenId,
+                    analytics: await analyticsService.getPositionAnalytics(tokenId),
+                  };
+                }
+              } catch (e) {
+                return { tokenId, error: 'Failed to check' };
+              }
+            })().then((val) => {
+              clearTimeout(timeout);
+              resolve(val);
+            });
+          });
+        })
+      );
+
+      for (const result of batchResults) {
+        results.push(result.status === 'fulfilled' ? result.value : { error: 'Failed' });
+      }
+    }
 
     if (res.headersSent) return;
-    res.json({ results });
+
+    // Return partial content indicator if some timed out
+    if (timedOutCount > 0) {
+      routeLogger.warn({ timedOutCount, total: tokenIds.length }, 'Batch check had timeouts');
+    }
+
+    res.json({ results, _meta: { total: tokenIds.length, timedOut: timedOutCount } });
   } catch (error) {
     routeLogger.error({ error }, 'Failed batch check');
     if (res.headersSent) return;

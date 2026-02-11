@@ -2,8 +2,14 @@ import { logger } from '../utils/logger.js';
 import * as subgraph from './subgraph.js';
 import * as blockchain from './blockchain.js';
 import { calculateUSDMetrics, USDMetrics } from './price.js';
+import { memoryCache } from './cache.js';
 
 const analyticsLogger = logger.child({ module: 'analytics' });
+
+// Cache TTLs for expensive analytics operations
+const PROTOCOL_ANALYTICS_TTL = 5 * 60 * 1000; // 5 minutes
+const PORTFOLIO_ANALYTICS_TTL = 2 * 60 * 1000; // 2 minutes
+const TVL_POSITION_TIMEOUT = 8000; // 8s per position in TVL calc
 
 // Types
 export interface PositionAnalytics {
@@ -223,6 +229,14 @@ export async function getPositionAnalytics(
 
 // Calculate portfolio analytics for a user
 export async function getPortfolioAnalytics(owner: string): Promise<PortfolioAnalytics> {
+  // Check cache first (2 min TTL per user)
+  const cacheKey = `portfolio_analytics_${owner.toLowerCase()}`;
+  const cached = memoryCache.get<PortfolioAnalytics>(cacheKey);
+  if (cached) {
+    analyticsLogger.debug({ owner }, 'Portfolio analytics cache hit');
+    return cached;
+  }
+
   try {
     const result = await subgraph.getPositionsByOwner(owner, 100, 0);
     const positions = (result as any)?.positions?.items || [];
@@ -254,7 +268,7 @@ export async function getPortfolioAnalytics(owner: string): Promise<PortfolioAna
     const activePositions = positions.filter((p: any) => BigInt(p.liquidity || '0') > 0n).length;
     const averageAPR = positions.length > 0 ? (totalAPR / positions.length).toFixed(2) : '0';
 
-    return {
+    const portfolioResult: PortfolioAnalytics = {
       totalPositions: positions.length,
       activePositions,
       totalValueLocked: totalValueLocked.toString(),
@@ -269,6 +283,12 @@ export async function getPortfolioAnalytics(owner: string): Promise<PortfolioAna
         rangeEnabled,
       },
     };
+
+    // Cache the result
+    memoryCache.set(cacheKey, portfolioResult, PORTFOLIO_ANALYTICS_TTL);
+    analyticsLogger.debug({ owner, positions: positions.length }, 'Portfolio analytics cached');
+
+    return portfolioResult;
   } catch (error) {
     analyticsLogger.error({ owner, error }, 'Failed to get portfolio analytics');
     return {
@@ -308,57 +328,66 @@ async function calculateProtocolTVL(): Promise<{ tvl: string; totalFees: string 
     let errorCount = 0;
 
     // Calculate USD value for each position (limit concurrent calls)
-    const batchSize = 3; // Reduced batch size to avoid RPC rate limits
+    // Use larger batch size (5) with per-position timeout to finish faster
+    const batchSize = 5;
     for (let i = 0; i < activePositions.length; i += batchSize) {
       const batch = activePositions.slice(i, i + batchSize);
 
       const results = await Promise.allSettled(
         batch.map(async (position: any) => {
-          try {
-            const tokenId = position.tokenId || position.token_id;
-            if (!tokenId) {
-              analyticsLogger.warn({ position }, 'Position missing tokenId');
-              return { tvl: 0, fees: 0 };
-            }
+          // Wrap each position calculation with a timeout
+          return new Promise<{ tvl: number; fees: number }>((resolve) => {
+            const timeout = setTimeout(() => {
+              analyticsLogger.debug({ tokenId: position.tokenId }, 'TVL calc timed out');
+              resolve({ tvl: 0, fees: 0 });
+            }, TVL_POSITION_TIMEOUT);
 
-            const tokenIdBigInt = BigInt(tokenId);
-            const positionInfo = await blockchain.getPositionInfo(tokenIdBigInt);
+            (async () => {
+              try {
+                const tokenId = position.tokenId || position.token_id;
+                if (!tokenId) {
+                  return { tvl: 0, fees: 0 };
+                }
 
-            if (!positionInfo?.poolKey) {
-              analyticsLogger.debug({ tokenId }, 'Position missing poolKey');
-              return { tvl: 0, fees: 0 };
-            }
+                const tokenIdBigInt = BigInt(tokenId);
+                const positionInfo = await blockchain.getPositionInfo(tokenIdBigInt);
 
-            const slot0 = await blockchain.getPoolSlot0(positionInfo.poolKey);
-            const pendingFees = await blockchain.getPendingFees(tokenIdBigInt);
+                if (!positionInfo?.poolKey) {
+                  return { tvl: 0, fees: 0 };
+                }
 
-            const tickLower = position.tickLower || position.tick_lower || 0;
-            const tickUpper = position.tickUpper || position.tick_upper || 0;
+                const slot0 = await blockchain.getPoolSlot0(positionInfo.poolKey);
+                const pendingFees = await blockchain.getPendingFees(tokenIdBigInt);
 
-            const metrics = await calculateUSDMetrics(
-              BigInt(position.liquidity || '0'),
-              slot0.sqrtPriceX96,
-              tickLower,
-              tickUpper,
-              positionInfo.poolKey.currency0,
-              positionInfo.poolKey.currency1,
-              8453, // Base mainnet
-              pendingFees,
-              { amount0: BigInt(position.collectedFeesToken0 || position.collected_fees_token0 || '0'), amount1: BigInt(position.collectedFeesToken1 || position.collected_fees_token1 || '0') },
-              parseInt(position.createdAtTimestamp || position.created_at_timestamp || '0')
-            );
+                const tickLower = position.tickLower || position.tick_lower || 0;
+                const tickUpper = position.tickUpper || position.tick_upper || 0;
 
-            const tvl = metrics.positionValueUSD || 0;
-            analyticsLogger.debug({ tokenId, tvl }, 'Position TVL calculated');
+                const metrics = await calculateUSDMetrics(
+                  BigInt(position.liquidity || '0'),
+                  slot0.sqrtPriceX96,
+                  tickLower,
+                  tickUpper,
+                  positionInfo.poolKey.currency0,
+                  positionInfo.poolKey.currency1,
+                  8453, // Base mainnet
+                  pendingFees,
+                  { amount0: BigInt(position.collectedFeesToken0 || position.collected_fees_token0 || '0'), amount1: BigInt(position.collectedFeesToken1 || position.collected_fees_token1 || '0') },
+                  parseInt(position.createdAtTimestamp || position.created_at_timestamp || '0')
+                );
 
-            return {
-              tvl,
-              fees: metrics.totalFeesEarnedUSD || 0,
-            };
-          } catch (e) {
-            analyticsLogger.debug({ error: (e as Error).message }, 'Failed to calculate position TVL');
-            return { tvl: 0, fees: 0 };
-          }
+                return {
+                  tvl: metrics.positionValueUSD || 0,
+                  fees: metrics.totalFeesEarnedUSD || 0,
+                };
+              } catch (e) {
+                analyticsLogger.debug({ error: (e as Error).message }, 'Failed to calculate position TVL');
+                return { tvl: 0, fees: 0 };
+              }
+            })().then((val) => {
+              clearTimeout(timeout);
+              resolve(val);
+            });
+          });
         })
       );
 
@@ -388,6 +417,14 @@ async function calculateProtocolTVL(): Promise<{ tvl: string; totalFees: string 
 
 // Get protocol-wide analytics
 export async function getProtocolAnalytics(): Promise<ProtocolAnalytics> {
+  // Check cache first (5 min TTL - TVL changes slowly)
+  const cacheKey = 'protocol_analytics';
+  const cached = memoryCache.get<ProtocolAnalytics>(cacheKey);
+  if (cached) {
+    analyticsLogger.debug('Protocol analytics cache hit');
+    return cached;
+  }
+
   try {
     const statsResult = await subgraph.getProtocolStats();
     const stats = (statsResult as any)?.protocolStats;
@@ -409,7 +446,7 @@ export async function getProtocolAnalytics(): Promise<ProtocolAnalytics> {
       }
     }
 
-    return {
+    const result: ProtocolAnalytics = {
       totalPositions: stats?.totalPositions || 0,
       activePositions: stats?.activePositions || 0,
       totalTVL,
@@ -421,6 +458,12 @@ export async function getProtocolAnalytics(): Promise<ProtocolAnalytics> {
       dailyActivePositions: 0, // Would need daily data
       weeklyGrowth: '0', // Would need historical data
     };
+
+    // Cache the result (5 min TTL)
+    memoryCache.set(cacheKey, result, PROTOCOL_ANALYTICS_TTL);
+    analyticsLogger.info({ totalTVL, totalPositions: result.totalPositions }, 'Protocol analytics cached');
+
+    return result;
   } catch (error) {
     analyticsLogger.error({ error }, 'Failed to get protocol analytics');
     return {
