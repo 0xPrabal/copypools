@@ -673,7 +673,7 @@ export function getHealthyClient(chainId: number): PublicClient {
 /**
  * Execute a non-RPC operation with rate limiting.
  *
- * Use this for external API calls (e.g., 0x API, subgraph) that should share
+ * Use this for external API calls (e.g., CoinGecko, KyberSwap, subgraph) that should share
  * the global rate limit pool. Do NOT use for RPC operations through
  * getHealthyClient() as those are already rate-limited at the transport layer.
  */
