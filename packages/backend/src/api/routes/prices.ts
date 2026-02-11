@@ -124,9 +124,6 @@ router.get('/info/stablecoins', async (req: Request, res: Response) => {
         '0x50c5725949a6f0c72e6c4a641f24049a917db0cb', // DAI
         '0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca', // USDbC
       ],
-      11155111: [
-        '0x1c7d4b196cb0c7b01d743fbc6116a902379c7238', // USDC
-      ],
     };
 
     res.json({
@@ -181,12 +178,6 @@ router.get('/info/chains', async (_req: Request, res: Response) => {
           name: 'Base Mainnet',
           usdcAddress: USDC_ADDRESSES[8453],
           tokenCount: Object.keys(TOKEN_INFO[8453] || {}).length,
-        },
-        {
-          chainId: 11155111,
-          name: 'Sepolia Testnet',
-          usdcAddress: USDC_ADDRESSES[11155111],
-          tokenCount: Object.keys(TOKEN_INFO[11155111] || {}).length,
         },
       ],
     });

@@ -67,7 +67,6 @@ export const config = loadConfig();
 // Default StateView addresses by chain
 const STATE_VIEW_DEFAULTS: Record<number, string> = {
   8453: '0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71', // Base Mainnet
-  11155111: '0xe1dd9c3fa50edb962e442f60dfbc432e24537e4c', // Sepolia
 };
 
 export const contracts = {

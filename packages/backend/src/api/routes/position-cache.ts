@@ -40,11 +40,10 @@ router.post('/index/:address/:chainId', validateAddress, validateChainId, async 
     // If we found tokens, save them to the database cache
     if (tokenIds.length > 0) {
       const { createPublicClient, http } = await import('viem');
-      const { base, sepolia } = await import('viem/chains');
+      const { base } = await import('viem/chains');
       const { config } = await import('../../config/index.js');
 
-      // Select chain based on chainIdNum
-      const chain = chainIdNum === 8453 ? base : chainIdNum === 11155111 ? sepolia : base;
+      const chain = base;
 
       const client = createPublicClient({
         chain,

@@ -3,7 +3,7 @@
  * Defines contracts and RPC URLs for each supported chain
  */
 
-export const SUPPORTED_CHAINS = [8453, 11155111] as const;
+export const SUPPORTED_CHAINS = [8453] as const;
 export type SupportedChainId = typeof SUPPORTED_CHAINS[number];
 
 export interface ChainConfig {
@@ -46,27 +46,6 @@ export const CHAIN_CONFIGS: Record<SupportedChainId, ChainConfig> = {
     ].filter(Boolean),
   },
 
-  // Sepolia Testnet
-  11155111: {
-    chainId: 11155111,
-    name: 'Sepolia',
-    contracts: {
-      POOL_MANAGER: '0xE03A1074c86CFeDd5C142C4F04F1a1536e203543',
-      POSITION_MANAGER: '0x429ba70129df741B2Ca2a85BC3A2a3328e5c09b4',
-      STATE_VIEW: '0xe1dd9c3fa50edb962e442f60dfbc432e24537e4c',
-      V4_UTILS: '0xff9C5B6F76444144a36de91F4d2F3289E37Cf956',
-      V4_COMPOUNDOR: '0xBA8bc095e0BEA3C6B1C6F5FfB56F67AaD76914Ad',
-      V4_AUTO_RANGE: '0xD6e1ED971f2A83EB94dDC0Ceb6841D6D7628EEfD',
-    },
-    rpcUrls: [
-      process.env.QUICKNODE_SEPOLIA_RPC_URL || '',
-      process.env.SEPOLIA_RPC_URL || '',
-      'https://rpc.sepolia.org',
-      'https://ethereum-sepolia-rpc.publicnode.com',
-      'https://sepolia.drpc.org',
-      'https://rpc2.sepolia.org',
-    ].filter(Boolean),
-  },
 };
 
 export function getChainConfig(chainId: number): ChainConfig | null {

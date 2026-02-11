@@ -5,8 +5,8 @@ import { Hex, encodeAbiParameters, parseAbiParameters } from 'viem';
 
 const swapLogger = logger.child({ service: 'swap' });
 
-// WETH address on Sepolia
-const WETH_SEPOLIA = '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14';
+// WETH address on Base Mainnet
+const WETH_BASE = '0x4200000000000000000000000000000000000006';
 
 interface SwapQuote {
   router: string;
@@ -189,10 +189,10 @@ export async function getRebalanceSwapData(
 
     // Convert native ETH (0x0) to WETH for swap APIs
     const sellToken = swapParams.fromToken === '0x0000000000000000000000000000000000000000'
-      ? WETH_SEPOLIA
+      ? WETH_BASE
       : swapParams.fromToken;
     const buyToken = swapParams.toToken === '0x0000000000000000000000000000000000000000'
-      ? WETH_SEPOLIA
+      ? WETH_BASE
       : swapParams.toToken;
 
     // Use 0x API for swap quote

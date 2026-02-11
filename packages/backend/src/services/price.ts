@@ -139,12 +139,40 @@ function isCircuitOpen(): boolean {
   return true;
 }
 
+// ============ CoinGecko Config ============
+
+// CoinGecko asset platform IDs per chain
+const COINGECKO_PLATFORM_IDS: Record<number, string> = {
+  8453: 'base',
+  1: 'ethereum',
+};
+
+// Emergency fallback prices (updated periodically, used only as last resort)
+const EMERGENCY_FALLBACK_PRICES: Record<string, number> = {
+  // WETH / ETH
+  '0x4200000000000000000000000000000000000006': 2700,
+  '0x0000000000000000000000000000000000000000': 2700,
+  // wstETH
+  '0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452': 3100,
+  // cbETH
+  '0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22': 2850,
+  // rETH
+  '0xb6fe221fe9eef5aba221c348ba20a1bf5e73624c': 3000,
+  // cbBTC
+  '0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf': 97000,
+  // ezETH
+  '0x2416092f143378750bb29b79ed961ab195cceea5': 2750,
+  // weETH
+  '0x04c0599ae5a44757c0af6f9ec3b93da8976c150a': 2850,
+  // AERO
+  '0x940181a94a35a4569e4529a3cdfb74e38fd98631': 0.80,
+};
+
 // ============ Cache Keys ============
 
 const PRICE_CACHE_KEY = (chainId: number, address: string) =>
   `price_${chainId}_${address.toLowerCase()}`;
 
-// Add to CACHE_TTL in cache.ts
 const PRICE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // ============ Helper Functions ============
@@ -246,6 +274,87 @@ async function fetch0xPrice(
 }
 
 /**
+ * Fetch token price from CoinGecko as fallback
+ */
+async function fetchCoinGeckoPrice(
+  tokenAddress: string,
+  chainId: number
+): Promise<number | null> {
+  const platformId = COINGECKO_PLATFORM_IDS[chainId];
+  if (!platformId) {
+    priceLogger.debug({ chainId }, 'CoinGecko platform not configured for chain');
+    return null;
+  }
+
+  // Convert native ETH to WETH for API call
+  const normalized = normalizeAddress(tokenAddress);
+  const apiAddress = normalized === NATIVE_ETH.toLowerCase()
+    ? WETH_ADDRESSES[chainId]?.toLowerCase()
+    : normalized;
+
+  if (!apiAddress) return null;
+
+  try {
+    const headers: Record<string, string> = {
+      'Accept': 'application/json',
+    };
+    // Use pro API if key is available, otherwise free tier
+    const baseUrl = config.COINGECKO_API_KEY
+      ? 'https://pro-api.coingecko.com/api/v3'
+      : 'https://api.coingecko.com/api/v3';
+
+    if (config.COINGECKO_API_KEY) {
+      headers['x-cg-pro-api-key'] = config.COINGECKO_API_KEY;
+    }
+
+    const response = await axios.get(
+      `${baseUrl}/simple/token_price/${platformId}`,
+      {
+        headers,
+        params: {
+          contract_addresses: apiAddress,
+          vs_currencies: 'usd',
+        },
+        timeout: 10_000,
+      }
+    );
+
+    const priceData = response.data[apiAddress];
+    if (priceData?.usd) {
+      const priceUSD = priceData.usd;
+      priceLogger.debug({ token: apiAddress, priceUSD, source: 'coingecko' }, 'Fetched price from CoinGecko');
+      return priceUSD;
+    }
+
+    return null;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      priceLogger.debug({
+        status: error.response?.status,
+        token: apiAddress,
+      }, 'CoinGecko price fetch failed');
+    } else {
+      priceLogger.debug({ error, token: apiAddress }, 'CoinGecko price fetch error');
+    }
+    return null;
+  }
+}
+
+/**
+ * Get emergency fallback price for well-known tokens
+ */
+function getEmergencyFallbackPrice(tokenAddress: string): number | null {
+  const normalized = normalizeAddress(tokenAddress);
+  const price = EMERGENCY_FALLBACK_PRICES[normalized];
+  if (price !== undefined) {
+    priceLogger.warn({ token: normalized, price, source: 'emergency-fallback' },
+      'Using emergency fallback price - may be stale');
+    return price;
+  }
+  return null;
+}
+
+/**
  * Get token price in USD with caching
  */
 export async function getTokenPriceUSD(
@@ -283,12 +392,26 @@ export async function getTokenPriceUSD(
     };
   }
 
-  // Fetch from 0x API
-  const priceUSD = await fetch0xPrice(tokenAddress, chainId);
+  // Fetch from 0x API (primary)
+  let priceUSD = await fetch0xPrice(tokenAddress, chainId);
+  let priceSource = '0x';
+
+  // Fallback 1: CoinGecko
+  if (priceUSD === null) {
+    priceUSD = await fetchCoinGeckoPrice(tokenAddress, chainId);
+    priceSource = 'coingecko';
+  }
+
+  // Fallback 2: Emergency hardcoded prices (last resort)
+  if (priceUSD === null) {
+    priceUSD = getEmergencyFallbackPrice(tokenAddress);
+    priceSource = 'emergency-fallback';
+  }
 
   // Cache the result (even if null, to avoid hammering API)
   if (priceUSD !== null) {
     memoryCache.set(cacheKey, priceUSD, PRICE_CACHE_TTL);
+    priceLogger.debug({ token: tokenInfo.symbol, priceUSD, source: priceSource }, 'Price resolved');
   }
 
   return {
@@ -298,7 +421,7 @@ export async function getTokenPriceUSD(
     priceUSD,
     cached: false,
     timestamp,
-    error: priceUSD === null ? 'Price unavailable' : undefined,
+    error: priceUSD === null ? 'Price unavailable from all sources' : undefined,
   };
 }
 

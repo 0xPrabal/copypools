@@ -231,6 +231,27 @@ swapRouter.get('/price', async (req: Request, res: Response) => {
       estimatedPriceImpact: response.data.estimatedPriceImpact,
     });
   } catch (error: any) {
+    if (axios.isAxiosError(error)) {
+      swapLogger.error({
+        status: error.response?.status,
+        data: error.response?.data,
+        url: error.config?.url,
+        params: error.config?.params,
+      }, '0x swap price API error');
+
+      if (error.response?.status === 400) {
+        return res.status(400).json({
+          error: error.response?.data?.reason || 'Invalid swap price parameters',
+          validationErrors: error.response?.data?.validationErrors,
+        });
+      }
+
+      return res.status(error.response?.status || 500).json({
+        error: 'Failed to get swap price',
+        details: error.response?.data?.reason || error.message,
+      });
+    }
+
     swapLogger.error({ error }, 'Swap price failed');
     return res.status(500).json({ error: 'Failed to get swap price' });
   }

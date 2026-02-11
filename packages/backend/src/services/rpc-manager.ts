@@ -9,7 +9,7 @@
  */
 
 import { createPublicClient, http, fallback, PublicClient, Chain } from 'viem';
-import { base, sepolia } from 'viem/chains';
+import { base } from 'viem/chains';
 import { logger } from '../utils/logger.js';
 import { rpcConfigsPerChain, RpcConfig } from '../config/rpc.js';
 
@@ -466,7 +466,6 @@ class RpcManager {
   private clientCache: ClientCache;
   private chainDefinitions: Record<number, Chain> = {
     8453: base,
-    11155111: sepolia,
   };
 
   constructor() {

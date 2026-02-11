@@ -14,7 +14,6 @@ type SortField = typeof VALID_SORT_FIELDS[number];
 // Chain name mapping
 const CHAIN_NAMES: Record<number, string> = {
   8453: 'Base',
-  11155111: 'Sepolia',
   1: 'Ethereum',
   42161: 'Arbitrum',
   10: 'Optimism',
