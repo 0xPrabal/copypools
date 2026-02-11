@@ -30,7 +30,7 @@ const BOT_NAME = 'auto-range';
 let knownRangePositions = new Set<string>();
 
 // Minimum position USD value to attempt rebalance (skip dust positions)
-const MIN_POSITION_VALUE_USD = 5;
+const MIN_POSITION_VALUE_USD = 2;
 
 // Contract deployment block - start scanning from here (Base Mainnet)
 const CONTRACT_START_BLOCK = BigInt(39369847);
