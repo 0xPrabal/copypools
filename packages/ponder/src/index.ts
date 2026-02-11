@@ -12,6 +12,11 @@ import {
   dailyStats
 } from "ponder:schema";
 
+// Contract addresses - use env vars with fallbacks to match ponder.config.ts
+const POSITION_MANAGER = (process.env.POSITION_MANAGER_ADDRESS || "0x7C5f5A4bBd8fD63184577525326123B519429bDc") as `0x${string}`;
+const V4_UTILS_ADDRESS = (process.env.V4_UTILS_ADDRESS || "0x37A199B0Baea8943AD493f04Cc2da8c4fa7C2cE1") as `0x${string}`;
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
 // Known token metadata (fallback for unknown tokens)
 const KNOWN_TOKENS: Record<string, { symbol: string; name: string; decimals: number }> = {
   "0x0000000000000000000000000000000000000000": { symbol: "ETH", name: "Ether", decimals: 18 },
@@ -330,6 +335,8 @@ ponder.on("V4Utils:LiquidityIncreased", async ({ event, context }) => {
         depositedToken0: newDeposited0.toString(),
         depositedToken1: newDeposited1.toString(),
       });
+    } else {
+      console.warn(`LiquidityIncreased: Position ${positionId} not found in DB, skipping update`);
     }
   } catch (error) {
     console.error(`Error handling V4Utils:LiquidityIncreased for tokenId ${event.args.tokenId}:`, error);
@@ -381,6 +388,8 @@ ponder.on("V4Utils:LiquidityDecreased", async ({ event, context }) => {
           });
         }
       }
+    } else {
+      console.warn(`LiquidityDecreased: Position ${positionId} not found in DB, skipping update`);
     }
   } catch (error) {
     console.error(`Error handling V4Utils:LiquidityDecreased for tokenId ${event.args.tokenId}:`, error);
@@ -415,6 +424,8 @@ ponder.on("V4Utils:FeesCollected", async ({ event, context }) => {
           lastActiveTimestamp: event.block.timestamp.toString(),
         });
       }
+    } else {
+      console.warn(`FeesCollected: Position ${positionId} not found in DB, skipping update`);
     }
   } catch (error) {
     console.error(`Error handling V4Utils:FeesCollected for tokenId ${event.args.tokenId}:`, error);
@@ -441,12 +452,9 @@ ponder.on("V4Utils:RangeMoved", async ({ event, context }) => {
     let owner = event.transaction.from.toLowerCase();
 
     try {
-      // Read position info from PositionManager
-      const POSITION_MANAGER = "0x7C5f5A4bBd8fD63184577525326123B519429bDc";
-
       // Get liquidity
       const liquidityResult = await context.client.readContract({
-        address: POSITION_MANAGER as `0x${string}`,
+        address: POSITION_MANAGER,
         abi: [{
           name: "getPositionLiquidity",
           type: "function",
@@ -462,7 +470,7 @@ ponder.on("V4Utils:RangeMoved", async ({ event, context }) => {
 
       // Get owner
       const ownerResult = await context.client.readContract({
-        address: POSITION_MANAGER as `0x${string}`,
+        address: POSITION_MANAGER,
         abi: [{
           name: "ownerOf",
           type: "function",
@@ -476,9 +484,8 @@ ponder.on("V4Utils:RangeMoved", async ({ event, context }) => {
       owner = String(ownerResult).toLowerCase();
 
       // Get pool info from V4Utils
-      const V4_UTILS = "0x37A199B0Baea8943AD493f04Cc2da8c4fa7C2cE1";
       const positionInfo = await context.client.readContract({
-        address: V4_UTILS as `0x${string}`,
+        address: V4_UTILS_ADDRESS,
         abi: [{
           name: "getPositionInfo",
           type: "function",
@@ -1049,8 +1056,6 @@ ponder.on("V4AutoRange:Rebalanced", async ({ event, context }) => {
 // ============ PositionManager Event Handlers ============
 // Index ERC721 Transfer events to track ALL position ownership
 
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-
 // Handle PositionManager Transfer events for comprehensive position tracking
 // This catches: mints (from = 0x0), transfers, and burns (to = 0x0)
 ponder.on("PositionManager:Transfer", async ({ event, context }) => {
@@ -1068,7 +1073,6 @@ ponder.on("PositionManager:Transfer", async ({ event, context }) => {
       if (!existing) {
         // Attempt to enrich with on-chain tick/pool data at index time
         // so we have complete data for ALL V4 positions, not just protocol ones
-        const POSITION_MANAGER = "0x7C5f5A4bBd8fD63184577525326123B519429bDc";
         let enrichedTickLower = 0;
         let enrichedTickUpper = 0;
         let enrichedLiquidity = "0";
@@ -1076,7 +1080,7 @@ ponder.on("PositionManager:Transfer", async ({ event, context }) => {
 
         try {
           const posInfo = await context.client.readContract({
-            address: POSITION_MANAGER as `0x${string}`,
+            address: POSITION_MANAGER,
             abi: [{
               name: "getPoolAndPositionInfo",
               type: "function",
@@ -1112,7 +1116,7 @@ ponder.on("PositionManager:Transfer", async ({ event, context }) => {
 
           // Also get liquidity
           const liqResult = await context.client.readContract({
-            address: POSITION_MANAGER as `0x${string}`,
+            address: POSITION_MANAGER,
             abi: [{
               name: "getPositionLiquidity",
               type: "function",

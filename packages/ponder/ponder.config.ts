@@ -19,14 +19,6 @@ const BASE_START_BLOCK = 40800000;
 // PositionManager start block - same as BASE_START_BLOCK for consistency
 const POSITION_MANAGER_START_BLOCK = 40800000;
 
-// ============ Sepolia Testnet (DISABLED) ============
-// const SEPOLIA_CONTRACTS = {
-//   V4_UTILS: process.env.SEPOLIA_V4_UTILS_ADDRESS || "0xff9C5B6F76444144a36de91F4d2F3289E37Cf956",
-//   V4_COMPOUNDOR: process.env.SEPOLIA_V4_COMPOUNDOR_ADDRESS || "0xBA8bc095e0BEA3C6B1C6F5FfB56F67AaD76914Ad",
-//   V4_AUTO_RANGE: process.env.SEPOLIA_V4_AUTO_RANGE_ADDRESS || "0xD6e1ED971f2A83EB94dDC0Ceb6841D6D7628EEfD",
-// };
-// const SEPOLIA_START_BLOCK = 7500000;
-
 // Base Mainnet RPC URLs - Prioritize paid/reliable RPCs first
 // IMPORTANT: Keep list short to avoid spreading requests across too many endpoints
 const BASE_RPCS = [
@@ -38,16 +30,6 @@ const BASE_RPCS = [
   "https://mainnet.base.org",
   "https://base-rpc.publicnode.com",
 ].filter(Boolean) as string[];
-
-// Sepolia RPC URLs - DISABLED
-// const SEPOLIA_RPCS = [
-//   process.env.QUICKNODE_SEPOLIA_RPC_URL,
-//   process.env.ALCHEMY_SEPOLIA_RPC_URL,
-//   process.env.INFURA_SEPOLIA_RPC_URL,
-//   process.env.PONDER_RPC_URL_11155111,
-//   "https://ethereum-sepolia-rpc.publicnode.com",
-//   "https://rpc.sepolia.org",
-// ].filter(Boolean) as string[];
 
 export default createConfig({
   database: {
@@ -61,13 +43,6 @@ export default createConfig({
       pollingInterval: 60_000, // Poll every 1 minute for faster position updates
       maxRequestsPerSecond: 3, // Increased for faster indexing
     },
-    // Sepolia chain - DISABLED to avoid RPC timeout issues
-    // sepolia: {
-    //   id: 11155111,
-    //   rpc: SEPOLIA_RPCS.length > 0 ? SEPOLIA_RPCS : "https://ethereum-sepolia-rpc.publicnode.com",
-    //   pollingInterval: 300_000, // Poll every 5 minutes (testnet)
-    //   maxRequestsPerSecond: 2,
-    // },
   },
   contracts: {
     // Base Mainnet contracts
@@ -98,25 +73,5 @@ export default createConfig({
       address: BASE_CONTRACTS.POSITION_MANAGER as `0x${string}`,
       startBlock: POSITION_MANAGER_START_BLOCK,
     },
-    // Sepolia contracts - DISABLED to avoid RPC timeout issues
-    // Uncomment when needed for testnet
-    // V4UtilsSepolia: {
-    //   chain: "sepolia",
-    //   abi: V4UtilsAbi,
-    //   address: SEPOLIA_CONTRACTS.V4_UTILS as `0x${string}`,
-    //   startBlock: SEPOLIA_START_BLOCK,
-    // },
-    // V4CompoundorSepolia: {
-    //   chain: "sepolia",
-    //   abi: V4CompoundorAbi,
-    //   address: SEPOLIA_CONTRACTS.V4_COMPOUNDOR as `0x${string}`,
-    //   startBlock: SEPOLIA_START_BLOCK,
-    // },
-    // V4AutoRangeSepolia: {
-    //   chain: "sepolia",
-    //   abi: V4AutoRangeAbi,
-    //   address: SEPOLIA_CONTRACTS.V4_AUTO_RANGE as `0x${string}`,
-    //   startBlock: SEPOLIA_START_BLOCK,
-    // },
   },
 });

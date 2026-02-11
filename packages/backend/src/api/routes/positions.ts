@@ -137,7 +137,7 @@ router.get('/:tokenId', checkRpcHealth, async (req: Request, res: Response) => {
     const chainId = req.query.chainId ? parseInt(req.query.chainId as string, 10) : config.CHAIN_ID;
 
     // LAYER 1: Check memory cache first (60 second TTL)
-    const cacheKey = `position_${tokenId}_${includeUSD}`;
+    const cacheKey = `position_${chainId}_${tokenId}_${includeUSD}`;
     if (!noCache) {
       const cached = memoryCache.get<any>(cacheKey);
       if (cached) {
@@ -887,7 +887,7 @@ router.get('/:tokenId/smart-analysis', checkRpcHealth, async (req: Request, res:
     const tokenIdBigInt = BigInt(tokenId);
 
     // Check cache first (30 second TTL for analysis data)
-    const cacheKey = `smart_analysis_${tokenId}`;
+    const cacheKey = `smart_analysis_${config.CHAIN_ID}_${tokenId}`;
     if (!noCache) {
       const cached = memoryCache.get<any>(cacheKey);
       if (cached) {

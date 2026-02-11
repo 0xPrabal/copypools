@@ -28,24 +28,26 @@ const apiLogger = logger.child({ module: 'api' });
 export function createServer() {
   const app = express();
 
-  // Handle OPTIONS preflight requests FIRST (before any other middleware)
-  app.options('*', (_req: Request, res: Response) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-    res.header('Access-Control-Max-Age', '86400');
-    res.sendStatus(204);
-  });
-
   // Production middleware
   app.use(correlationIdMiddleware); // Add correlation ID to all requests
   app.use(securityHeaders);
-  // CORS - allow all origins explicitly for production
+
+  // CORS - whitelist known frontend origins, fallback to permissive for development
+  const ALLOWED_ORIGINS = [
+    'https://copypools.com',
+    'https://www.copypools.com',
+    'https://copypools-frontend.vercel.app',
+    process.env.FRONTEND_URL,
+  ].filter(Boolean) as string[];
+
   app.use(cors({
-    origin: '*', // Allow all origins
-    credentials: false, // Must be false when origin is '*'
+    origin: ALLOWED_ORIGINS.length > 0 && process.env.NODE_ENV === 'production'
+      ? ALLOWED_ORIGINS
+      : '*',
+    credentials: ALLOWED_ORIGINS.length > 0 && process.env.NODE_ENV === 'production',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    maxAge: 86400, // Cache preflight for 24 hours
   }));
   app.use(compression() as unknown as RequestHandler); // Gzip compression for all responses
   app.use(express.json({ limit: '1mb' }));
@@ -104,9 +106,12 @@ export function createServer() {
   app.use('/api/exchange', swapRouter); // Named 'exchange' to avoid ad blocker blocking 'swap' URLs
 
   // Error handling
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    apiLogger.error({ error: err.message }, 'Request error');
-    res.status(500).json({ error: 'Internal server error' });
+  app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
+    const correlationId = (req as any).correlationId;
+    apiLogger.error({ error: err.message, stack: err.stack, correlationId, path: req.path }, 'Request error');
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal server error', requestId: correlationId });
+    }
   });
 
   // 404 handler

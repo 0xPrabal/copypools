@@ -7,11 +7,16 @@ const subgraphLogger = logger.child({ module: 'subgraph' });
 
 // Ponder schema name (must match ponder start --schema parameter)
 // Default changed to 'ponder_base' to match the current Ponder deployment
-const PONDER_SCHEMA = process.env.PONDER_SCHEMA || 'ponder_base';
+const RAW_PONDER_SCHEMA = process.env.PONDER_SCHEMA || 'ponder_base';
+
+// Sanitize schema name to prevent SQL injection - only allow alphanumeric and underscores
+const PONDER_SCHEMA = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(RAW_PONDER_SCHEMA)
+  ? RAW_PONDER_SCHEMA
+  : 'ponder_base';
 
 // PostgreSQL connection pool for Ponder database
 const pool = new pg.Pool({
-  connectionString: config.DATABASE_URL || 'postgresql://postgres:ljDlKglFvwICtZrhyJRrKXvTuaApKOCK@nozomi.proxy.rlwy.net:55145/railway',
+  connectionString: config.DATABASE_URL,
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
@@ -19,8 +24,9 @@ const pool = new pg.Pool({
 });
 
 // Set search_path to ponder schema on each connection
+// Schema name is sanitized above to prevent SQL injection
 pool.on('connect', (client) => {
-  client.query(`SET search_path TO ${PONDER_SCHEMA}, public`);
+  client.query(`SET search_path TO "${PONDER_SCHEMA}", public`);
 });
 
 // Helper to convert snake_case to camelCase

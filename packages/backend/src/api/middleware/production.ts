@@ -56,8 +56,8 @@ export function validateChainId(req: Request, res: Response, next: NextFunction)
     return;
   }
 
-  // Supported chains: Base (8453), Sepolia (11155111)
-  const supportedChains = [8453, 11155111];
+  // Supported chains: Base Mainnet (8453)
+  const supportedChains = [8453];
 
   if (!supportedChains.includes(chainId)) {
     res.status(400).json({ error: 'Unsupported chain ID', supportedChains });
@@ -111,6 +111,10 @@ export function requestTimeout(timeoutMs: number = 30000) {
 export function securityHeaders(_req: Request, res: Response, next: NextFunction): void {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('X-XSS-Protection', '0'); // Disabled in favor of CSP
+  res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   next();
 }

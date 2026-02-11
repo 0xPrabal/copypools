@@ -805,7 +805,7 @@ export async function getPositionTokenIds(ownerAddress: string, chainId: number 
   // If Ponder and position_cache are properly running, this should rarely be needed
   try {
     // Check memory cache first - positions don't change often
-    const cacheKey = `position_tokens_${ownerAddress.toLowerCase()}`;
+    const cacheKey = `position_tokens_${chainId}_${ownerAddress.toLowerCase()}`;
     const cached = memoryCache.get<bigint[]>(cacheKey);
     if (cached) {
       logger.debug({ owner: ownerAddress, count: cached.length }, 'Position tokens from memory cache');
