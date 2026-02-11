@@ -242,7 +242,10 @@ router.post('/batch-status', async (req: Request, res: Response) => {
 
           return {
             tokenId,
-            compound: compoundCheck,
+            compound: {
+              profitable: compoundCheck.profitable,
+              reward: compoundCheck.reward.toString(),
+            },
             exit: exitCheck,
             rebalance: rebalanceCheck,
           };
