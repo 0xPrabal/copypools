@@ -5,6 +5,7 @@ import * as subgraph from '../services/subgraph.js';
 import * as blockchain from '../services/blockchain.js';
 import { getRebalanceSwapData, calculateRebalanceSwap } from '../services/swap.js';
 import { publicClient, getLatestPositionInChain, getRebalancedTo } from '../services/blockchain.js';
+import { getTokenPriceUSD, getTokenInfo } from '../services/price.js';
 import { Address, parseAbiItem } from 'viem';
 import {
   analyzePosition,
@@ -27,6 +28,9 @@ const BOT_NAME = 'auto-range';
 
 // Track known position IDs with auto-range enabled (from on-chain events)
 let knownRangePositions = new Set<string>();
+
+// Minimum position USD value to attempt rebalance (skip dust positions)
+const MIN_POSITION_VALUE_USD = 5;
 
 // Contract deployment block - start scanning from here (Base Mainnet)
 const CONTRACT_START_BLOCK = BigInt(39369847);
@@ -319,6 +323,52 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     // Get V4AutoRange info for poolKey (needed for swap calculations)
     recordStatus(tokenId, 'Getting position info from V4AutoRange...');
     const positionInfo = await blockchain.getAutoRangePositionInfo(tokenIdBigInt);
+
+    // Estimate position USD value and skip dust positions
+    recordStatus(tokenId, 'Estimating position USD value...');
+    try {
+      const { amount0, amount1 } = estimatePositionAmounts(
+        posStatus.currentTick,
+        positionInfo.tickLower,
+        positionInfo.tickUpper,
+        realLiquidity
+      );
+
+      const token0Info = getTokenInfo(positionInfo.poolKey.currency0, config.CHAIN_ID);
+      const token1Info = getTokenInfo(positionInfo.poolKey.currency1, config.CHAIN_ID);
+
+      const [token0Price, token1Price] = await Promise.all([
+        getTokenPriceUSD(positionInfo.poolKey.currency0, config.CHAIN_ID),
+        getTokenPriceUSD(positionInfo.poolKey.currency1, config.CHAIN_ID),
+      ]);
+
+      const amount0Human = Number(amount0) / Math.pow(10, token0Info.decimals);
+      const amount1Human = Number(amount1) / Math.pow(10, token1Info.decimals);
+      const value0Usd = amount0Human * (token0Price.priceUSD ?? 0);
+      const value1Usd = amount1Human * (token1Price.priceUSD ?? 0);
+      const totalValueUsd = value0Usd + value1Usd;
+
+      if (totalValueUsd < MIN_POSITION_VALUE_USD) {
+        recordStatus(tokenId, `Skipped: dust position ($${totalValueUsd.toFixed(2)} < $${MIN_POSITION_VALUE_USD})`);
+        botLogger.info({
+          tokenId,
+          totalValueUsd: totalValueUsd.toFixed(2),
+          amount0Human: amount0Human.toFixed(8),
+          amount1Human: amount1Human.toFixed(8),
+          threshold: MIN_POSITION_VALUE_USD,
+        }, 'Skipping dust position - value below minimum threshold');
+        return { rebalanced: false, decision: null };
+      }
+
+      botLogger.debug({
+        tokenId,
+        totalValueUsd: totalValueUsd.toFixed(2),
+      }, 'Position value above dust threshold');
+    } catch (priceError) {
+      // If we can't estimate price, continue with rebalance attempt rather than blocking
+      botLogger.warn({ tokenId, error: priceError instanceof Error ? priceError.message : String(priceError) },
+        'Could not estimate position USD value, continuing with rebalance');
+    }
 
     recordStatus(tokenId, `Analyzing: tick=${posStatus.currentTick}, range=[${posStatus.tickLower},${posStatus.tickUpper}]`);
 
