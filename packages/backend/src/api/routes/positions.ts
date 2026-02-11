@@ -464,44 +464,65 @@ router.get('/owner/:address', checkRpcHealth, async (req: Request, res: Response
 
         // CRITICAL: Verify on-chain liquidity AND enrich unknown positions
         // Ponder may have stale data or incomplete data (poolId: "unknown")
-        // Use per-position timeout to prevent overall request timeout
-        const PONDER_ENRICHMENT_TIMEOUT = 8000; // 8s per position
-        const enrichmentPromises = ponderResult.positions.items.map(async (p: any) => {
-          try {
-            const needsEnrichment = !p.poolId || p.poolId === 'unknown' || p.tickLower === 0 && p.tickUpper === 0;
+        // Process in batches of 10 with overall 18s deadline (before 30s server timeout)
+        const ENRICHMENT_BATCH_SIZE = 10;
+        const ENRICHMENT_DEADLINE = Date.now() + 18000; // 18s overall deadline
+        const ponderPositionsEnriched: any[] = [];
+        let enrichmentTimedOut = 0;
 
-            if (needsEnrichment) {
-              routeLogger.debug({ tokenId: p.tokenId }, 'Position needs enrichment from chain (unknown poolId)');
-              const onChainInfo = await blockchain.getPositionInfo(BigInt(p.tokenId));
-              if (onChainInfo) {
-                return {
-                  ...p,
-                  poolId: onChainInfo.poolId,
-                  poolKey: onChainInfo.poolKey,
-                  tickLower: onChainInfo.tickLower,
-                  tickUpper: onChainInfo.tickUpper,
-                  liquidity: onChainInfo.liquidity,
-                  _enrichedFromChain: true,
-                  _verified: true,
-                };
-              }
+        const allItems = ponderResult.positions.items;
+        for (let i = 0; i < allItems.length; i += ENRICHMENT_BATCH_SIZE) {
+          // Check deadline - if running out of time, skip remaining enrichments
+          if (Date.now() > ENRICHMENT_DEADLINE) {
+            routeLogger.warn({ processed: i, total: allItems.length }, 'Enrichment deadline reached, using Ponder data for rest');
+            for (let j = i; j < allItems.length; j++) {
+              ponderPositionsEnriched.push({ ...allItems[j], _verified: false });
+              enrichmentTimedOut++;
             }
-
-            const onChainLiquidity = await blockchain.getPositionLiquidity(BigInt(p.tokenId));
-            return { ...p, liquidity: onChainLiquidity.toString(), _verified: true };
-          } catch (e) {
-            routeLogger.debug({ tokenId: p.tokenId, error: e }, 'Failed to verify/enrich position');
-            return { ...p, _verified: false };
+            break;
           }
-        });
 
-        const enrichmentResult = await promiseAllWithTimeout(enrichmentPromises, PONDER_ENRICHMENT_TIMEOUT);
-        const ponderPositionsEnriched = enrichmentResult.results.map((result, idx) =>
-          result !== null ? result : { ...ponderResult.positions.items[idx], _verified: false }
-        );
+          const batch = allItems.slice(i, i + ENRICHMENT_BATCH_SIZE);
+          const batchResult = await promiseAllWithTimeout(
+            batch.map(async (p: any) => {
+              try {
+                const needsEnrichment = !p.poolId || p.poolId === 'unknown' || p.tickLower === 0 && p.tickUpper === 0;
 
-        if (enrichmentResult.timedOutCount > 0) {
-          routeLogger.warn({ timedOut: enrichmentResult.timedOutCount, total: ponderResult.positions.items.length }, 'Ponder enrichment had timeouts');
+                if (needsEnrichment) {
+                  const onChainInfo = await blockchain.getPositionInfo(BigInt(p.tokenId));
+                  if (onChainInfo) {
+                    return {
+                      ...p,
+                      poolId: onChainInfo.poolId,
+                      poolKey: onChainInfo.poolKey,
+                      tickLower: onChainInfo.tickLower,
+                      tickUpper: onChainInfo.tickUpper,
+                      liquidity: onChainInfo.liquidity,
+                      _enrichedFromChain: true,
+                      _verified: true,
+                    };
+                  }
+                }
+
+                const onChainLiquidity = await blockchain.getPositionLiquidity(BigInt(p.tokenId));
+                return { ...p, liquidity: onChainLiquidity.toString(), _verified: true };
+              } catch (e) {
+                routeLogger.debug({ tokenId: p.tokenId, error: e }, 'Failed to verify/enrich position');
+                return { ...p, _verified: false };
+              }
+            }),
+            6000 // 6s per batch timeout
+          );
+
+          for (let j = 0; j < batch.length; j++) {
+            const result = batchResult.results[j];
+            ponderPositionsEnriched.push(result !== null ? result : { ...batch[j], _verified: false });
+          }
+          enrichmentTimedOut += batchResult.timedOutCount;
+        }
+
+        if (enrichmentTimedOut > 0) {
+          routeLogger.warn({ timedOut: enrichmentTimedOut, total: allItems.length }, 'Ponder enrichment had timeouts');
         }
 
         // Persist enriched positions back to database (async, don't wait)
@@ -555,35 +576,49 @@ router.get('/owner/:address', checkRpcHealth, async (req: Request, res: Response
 
         // Enrich with slot0 data (currentTick, sqrtPriceX96) for USD calculations
         // Group positions by unique poolKey to minimize RPC calls
+        // Check deadline before starting slot0 enrichment
         const poolSlot0Cache = new Map<string, { tick: number; sqrtPriceX96: bigint }>();
+        const SLOT0_DEADLINE = Date.now() + 8000; // 8s for slot0 step
 
-        const slot0Promises = rawPositions.map(async (pos: any) => {
-          try {
-            const poolCacheKey = `${pos.poolKey.currency0}-${pos.poolKey.currency1}-${pos.poolKey.fee}`;
-
-            let slot0 = poolSlot0Cache.get(poolCacheKey);
-            if (!slot0) {
-              slot0 = await blockchain.getPoolSlot0(pos.poolKey);
-              poolSlot0Cache.set(poolCacheKey, slot0);
+        const positions: any[] = [];
+        for (let i = 0; i < rawPositions.length; i += ENRICHMENT_BATCH_SIZE) {
+          if (Date.now() > SLOT0_DEADLINE) {
+            // Out of time - push remaining positions without slot0 data
+            routeLogger.warn({ remaining: rawPositions.length - i }, 'Slot0 deadline hit, skipping rest');
+            for (let j = i; j < rawPositions.length; j++) {
+              positions.push(rawPositions[j]);
             }
-
-            return {
-              ...pos,
-              currentTick: slot0.tick,
-              sqrtPriceX96: slot0.sqrtPriceX96.toString(),
-              inRange: slot0.tick >= pos.tickLower && slot0.tick < pos.tickUpper,
-            };
-          } catch (e) {
-            routeLogger.debug({ tokenId: pos.tokenId, error: e }, 'Failed to enrich Ponder position with slot0');
-            return pos;
+            break;
           }
-        });
 
-        // Use timeout for slot0 enrichment (5s per position)
-        const slot0Result = await promiseAllWithTimeout(slot0Promises, 5000);
-        const positions = slot0Result.results.map((result, idx) =>
-          result !== null ? result : rawPositions[idx]
-        );
+          const batch = rawPositions.slice(i, i + ENRICHMENT_BATCH_SIZE);
+          const batchResult = await promiseAllWithTimeout(
+            batch.map(async (pos: any) => {
+              try {
+                const poolCacheKey = `${pos.poolKey.currency0}-${pos.poolKey.currency1}-${pos.poolKey.fee}`;
+                let slot0 = poolSlot0Cache.get(poolCacheKey);
+                if (!slot0) {
+                  slot0 = await blockchain.getPoolSlot0(pos.poolKey);
+                  poolSlot0Cache.set(poolCacheKey, slot0);
+                }
+                return {
+                  ...pos,
+                  currentTick: slot0.tick,
+                  sqrtPriceX96: slot0.sqrtPriceX96.toString(),
+                  inRange: slot0.tick >= pos.tickLower && slot0.tick < pos.tickUpper,
+                };
+              } catch (e) {
+                routeLogger.debug({ tokenId: pos.tokenId, error: e }, 'Failed to enrich with slot0');
+                return pos;
+              }
+            }),
+            5000 // 5s per batch
+          );
+
+          for (let j = 0; j < batch.length; j++) {
+            positions.push(batchResult.results[j] !== null ? batchResult.results[j] : batch[j]);
+          }
+        }
 
         // Store in memory cache
         memoryCache.set(memoryCacheKey, positions, MEMORY_CACHE_TTL);

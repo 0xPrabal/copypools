@@ -313,7 +313,8 @@ export async function getPortfolioAnalytics(owner: string): Promise<PortfolioAna
 async function calculateProtocolTVL(): Promise<{ tvl: string; totalFees: string }> {
   try {
     // Get active positions directly from database (with filter in SQL)
-    const positionsResult = await subgraph.getAllPositions(100, 0, true); // activeOnly = true
+    // Limit to 30 to keep TVL calc under 20s (30 positions × 5 batch × ~2s each)
+    const positionsResult = await subgraph.getAllPositions(30, 0, true); // activeOnly = true
     const activePositions = (positionsResult as any)?.positions?.items || [];
 
     analyticsLogger.info({ activeCount: activePositions.length }, 'Fetched active positions for TVL calculation');
