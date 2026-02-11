@@ -2,11 +2,18 @@ import axios from 'axios';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { Hex, encodeAbiParameters, parseAbiParameters } from 'viem';
+import { getTokenPriceUSD, getTokenInfo } from './price.js';
 
 const swapLogger = logger.child({ service: 'swap' });
 
 // WETH address on Base Mainnet
 const WETH_BASE = '0x4200000000000000000000000000000000000006';
+
+// KyberSwap Aggregator API (free, no API key)
+const KYBERSWAP_CHAIN_MAP: Record<number, string> = {
+  8453: 'base',
+  1: 'ethereum',
+};
 
 interface SwapQuote {
   router: string;
@@ -122,7 +129,7 @@ export function calculateRebalanceSwap(
 }
 
 /**
- * Get optimal swap data using 0x API or similar aggregator
+ * Get optimal swap data using KyberSwap aggregator
  */
 export async function getSwapData(
   poolId: string,
@@ -137,16 +144,12 @@ export async function getSwapData(
       return '0x';
     }
 
-    // Use 0x API for swap quote
-    if (config.ZEROX_API_KEY) {
-      const quote = await get0xQuote(fromToken, toToken, amount0 > 0n ? amount0 : amount1);
-      if (quote) {
-        // Encode router and data for our contracts
-        return encodeAbiParameters(
-          parseAbiParameters('address router, bytes data'),
-          [quote.router as `0x${string}`, quote.data]
-        );
-      }
+    const quote = await getKyberSwapQuote(fromToken, toToken, amount0 > 0n ? amount0 : amount1);
+    if (quote) {
+      return encodeAbiParameters(
+        parseAbiParameters('address router, bytes data'),
+        [quote.router as `0x${string}`, quote.data]
+      );
     }
 
     // Fallback: return empty data (contract will use internal pool swap)
@@ -195,25 +198,22 @@ export async function getRebalanceSwapData(
       ? WETH_BASE
       : swapParams.toToken;
 
-    // Use 0x API for swap quote
-    if (config.ZEROX_API_KEY) {
-      const quote = await get0xQuote(sellToken, buyToken, swapParams.swapAmount);
-      if (quote) {
-        swapLogger.info({
-          router: quote.router,
-          expectedOutput: quote.expectedOutput.toString(),
-          priceImpact: quote.priceImpact,
-        }, 'Got 0x swap quote for rebalance');
+    const quote = await getKyberSwapQuote(sellToken, buyToken, swapParams.swapAmount);
+    if (quote) {
+      swapLogger.info({
+        router: quote.router,
+        expectedOutput: quote.expectedOutput.toString(),
+        priceImpact: quote.priceImpact,
+        source: 'kyberswap',
+      }, 'Got KyberSwap quote for rebalance');
 
-        // Encode router and data for our contracts
-        return encodeAbiParameters(
-          parseAbiParameters('address router, bytes data'),
-          [quote.router as `0x${string}`, quote.data]
-        );
-      }
+      return encodeAbiParameters(
+        parseAbiParameters('address router, bytes data'),
+        [quote.router as `0x${string}`, quote.data]
+      );
     }
 
-    swapLogger.warn('No swap API available, returning empty swap data');
+    swapLogger.warn('KyberSwap returned no quote, returning empty swap data');
     return '0x';
   } catch (error) {
     swapLogger.error({ error }, 'Failed to get rebalance swap data');
@@ -221,76 +221,110 @@ export async function getRebalanceSwapData(
   }
 }
 
-async function get0xQuote(
+/**
+ * Get a swap quote from KyberSwap Aggregator (free, no API key)
+ */
+async function getKyberSwapQuote(
   sellToken: string,
   buyToken: string,
   sellAmount: bigint,
   taker?: string
 ): Promise<SwapQuote | null> {
   try {
+    const kyberChain = KYBERSWAP_CHAIN_MAP[config.CHAIN_ID];
+    if (!kyberChain) {
+      swapLogger.warn({ chainId: config.CHAIN_ID }, 'KyberSwap not available for chain');
+      return null;
+    }
+
     // Use the V4Utils contract as default taker for bot operations
     const takerAddress = taker || config.V4_UTILS_ADDRESS;
 
-    // 0x API v2 quote endpoint returns executable transaction data
-    const response = await axios.get('https://api.0x.org/swap/permit2/quote', {
-      headers: {
-        '0x-api-key': config.ZEROX_API_KEY,
-        '0x-version': 'v2',
-      },
-      params: {
-        sellToken,
-        buyToken,
-        sellAmount: sellAmount.toString(),
-        chainId: config.CHAIN_ID,
-        taker: takerAddress,
-      },
-    });
+    // Step 1: Get route
+    const routeResponse = await axios.get(
+      `https://aggregator-api.kyberswap.com/${kyberChain}/api/v1/routes`,
+      {
+        params: {
+          tokenIn: sellToken,
+          tokenOut: buyToken,
+          amountIn: sellAmount.toString(),
+          saveGas: '0',
+          gasInclude: 'true',
+        },
+        timeout: 15_000,
+      }
+    );
 
-    const data = response.data;
+    const routeData = routeResponse.data?.data;
+    if (!routeData?.routeSummary) {
+      swapLogger.debug('KyberSwap returned no route');
+      return null;
+    }
+
+    // Step 2: Build transaction
+    const buildResponse = await axios.post(
+      `https://aggregator-api.kyberswap.com/${kyberChain}/api/v1/route/build`,
+      {
+        routeSummary: routeData.routeSummary,
+        sender: takerAddress,
+        recipient: takerAddress,
+        slippageTolerance: 100, // 1% = 100 bps
+      },
+      { timeout: 15_000 }
+    );
+
+    const buildData = buildResponse.data?.data;
+    if (!buildData?.data) {
+      swapLogger.debug('KyberSwap build returned no transaction data');
+      return null;
+    }
 
     return {
-      router: data.transaction?.to || data.allowanceTarget,
-      data: data.transaction?.data || '0x',
-      expectedOutput: BigInt(data.buyAmount),
-      priceImpact: parseFloat(data.estimatedPriceImpact || '0'),
+      router: buildData.routerAddress || routeData.routerAddress,
+      data: buildData.data as Hex,
+      expectedOutput: BigInt(routeData.routeSummary.amountOut),
+      priceImpact: parseFloat(routeData.routeSummary.priceImpact || '0'),
     };
   } catch (error: any) {
-    // Log more details for debugging
     if (axios.isAxiosError(error)) {
       swapLogger.error({
         status: error.response?.status,
-        message: error.response?.data?.reason || error.message,
-      }, '0x API v2 quote failed');
+        message: error.response?.data?.message || error.message,
+      }, 'KyberSwap quote failed');
     } else {
-      swapLogger.error({ error }, '0x API v2 quote failed');
+      swapLogger.error({ error }, 'KyberSwap quote failed');
     }
     return null;
   }
 }
 
-// Lightweight price check (no transaction data, for estimates only)
-async function get0xPrice(
-  sellToken: string,
-  buyToken: string,
-  sellAmount: bigint
+/**
+ * Estimate swap output using price service (lightweight, no tx data)
+ */
+async function estimateFromPriceService(
+  fromToken: string,
+  toToken: string,
+  amount: bigint
 ): Promise<bigint> {
   try {
-    const response = await axios.get('https://api.0x.org/swap/permit2/price', {
-      headers: {
-        '0x-api-key': config.ZEROX_API_KEY,
-        '0x-version': 'v2',
-      },
-      params: {
-        sellToken,
-        buyToken,
-        sellAmount: sellAmount.toString(),
-        chainId: config.CHAIN_ID,
-      },
-    });
+    const chainId = config.CHAIN_ID;
+    const [fromPrice, toPrice] = await Promise.all([
+      getTokenPriceUSD(fromToken, chainId),
+      getTokenPriceUSD(toToken, chainId),
+    ]);
 
-    return BigInt(response.data.buyAmount);
-  } catch (error) {
-    swapLogger.warn({ error }, '0x API v2 price check failed');
+    if (fromPrice.priceUSD === null || toPrice.priceUSD === null || toPrice.priceUSD === 0) {
+      return 0n;
+    }
+
+    const fromInfo = getTokenInfo(fromToken, chainId);
+    const toInfo = getTokenInfo(toToken, chainId);
+    const priceRatio = fromPrice.priceUSD / toPrice.priceUSD;
+    const decimalAdjustment = 10 ** (toInfo.decimals - fromInfo.decimals);
+    const outputFloat = Number(amount) * priceRatio * decimalAdjustment;
+
+    return BigInt(Math.floor(outputFloat));
+  } catch {
     return 0n;
   }
 }
@@ -330,7 +364,8 @@ export function calculateOptimalRatio(
 }
 
 /**
- * Estimate swap output amount (uses lightweight price endpoint)
+ * Estimate swap output amount
+ * Tries KyberSwap route API first, falls back to price service
  */
 export async function estimateSwapOutput(
   fromToken: string,
@@ -338,11 +373,34 @@ export async function estimateSwapOutput(
   amount: bigint
 ): Promise<bigint> {
   try {
-    if (config.ZEROX_API_KEY) {
-      // Use price endpoint for estimates (no taker required, faster)
-      return await get0xPrice(fromToken, toToken, amount);
+    // Try KyberSwap lightweight route (no build step needed)
+    const kyberChain = KYBERSWAP_CHAIN_MAP[config.CHAIN_ID];
+    if (kyberChain) {
+      try {
+        const routeResponse = await axios.get(
+          `https://aggregator-api.kyberswap.com/${kyberChain}/api/v1/routes`,
+          {
+            params: {
+              tokenIn: fromToken,
+              tokenOut: toToken,
+              amountIn: amount.toString(),
+              saveGas: '0',
+            },
+            timeout: 10_000,
+          }
+        );
+
+        const amountOut = routeResponse.data?.data?.routeSummary?.amountOut;
+        if (amountOut) {
+          return BigInt(amountOut);
+        }
+      } catch {
+        // Fall through to price service
+      }
     }
-    return 0n;
+
+    // Fallback: estimate from price service
+    return await estimateFromPriceService(fromToken, toToken, amount);
   } catch {
     return 0n;
   }

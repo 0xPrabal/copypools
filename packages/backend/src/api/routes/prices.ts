@@ -1,6 +1,6 @@
 /**
  * Price API endpoints
- * Provides token price information in USD using 0x API
+ * Provides token price information in USD via CoinGecko, DeFiLlama, Binance
  */
 
 import { Router, Request, Response } from 'express';

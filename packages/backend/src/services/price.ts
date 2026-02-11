@@ -1,12 +1,12 @@
 /**
- * Price Service - Token USD pricing using 0x API
+ * Price Service - Multi-source token USD pricing
  *
  * Features:
- * - Fetch token prices in USD via 0x API
+ * - Fetch token prices in USD via CoinGecko, DeFiLlama, Binance
  * - 5-minute price caching
  * - Stablecoin detection (no API call needed)
  * - Batch price fetching for efficiency
- * - Circuit breaker for API failures
+ * - Per-provider circuit breakers for resilience
  * - Liquidity math for position value calculation
  */
 
@@ -79,6 +79,7 @@ export interface TokenPrice {
   priceUSD: number | null;
   cached: boolean;
   timestamp: number;
+  source?: string;
   error?: string;
 }
 
@@ -94,7 +95,7 @@ export interface PositionUSDValues {
   collectedFeesUSD: number | null;
 }
 
-// ============ Circuit Breaker ============
+// ============ Per-Provider Circuit Breakers ============
 
 interface CircuitBreakerState {
   failures: number;
@@ -102,44 +103,44 @@ interface CircuitBreakerState {
   isOpen: boolean;
 }
 
-const circuitBreaker: CircuitBreakerState = {
-  failures: 0,
-  lastFailure: 0,
-  isOpen: false,
-};
-
 const CIRCUIT_BREAKER_THRESHOLD = 5;
 const CIRCUIT_BREAKER_RESET_MS = 60_000; // 60 seconds
 
-function recordSuccess(): void {
-  circuitBreaker.failures = 0;
-  circuitBreaker.isOpen = false;
+const providerCircuitBreakers: Record<string, CircuitBreakerState> = {
+  coingecko: { failures: 0, lastFailure: 0, isOpen: false },
+  defillama: { failures: 0, lastFailure: 0, isOpen: false },
+  binance: { failures: 0, lastFailure: 0, isOpen: false },
+};
+
+function recordProviderSuccess(provider: string): void {
+  const cb = providerCircuitBreakers[provider];
+  if (cb) { cb.failures = 0; cb.isOpen = false; }
 }
 
-function recordFailure(): void {
-  circuitBreaker.failures++;
-  circuitBreaker.lastFailure = Date.now();
-  if (circuitBreaker.failures >= CIRCUIT_BREAKER_THRESHOLD) {
-    circuitBreaker.isOpen = true;
-    priceLogger.warn({ failures: circuitBreaker.failures }, 'Circuit breaker opened for 0x API');
+function recordProviderFailure(provider: string): void {
+  const cb = providerCircuitBreakers[provider];
+  if (!cb) return;
+  cb.failures++;
+  cb.lastFailure = Date.now();
+  if (cb.failures >= CIRCUIT_BREAKER_THRESHOLD) {
+    cb.isOpen = true;
+    priceLogger.warn({ provider, failures: cb.failures }, `Circuit breaker opened for ${provider}`);
   }
 }
 
-function isCircuitOpen(): boolean {
-  if (!circuitBreaker.isOpen) return false;
-
-  // Check if reset timeout has passed
-  if (Date.now() - circuitBreaker.lastFailure > CIRCUIT_BREAKER_RESET_MS) {
-    circuitBreaker.isOpen = false;
-    circuitBreaker.failures = 0;
-    priceLogger.info('Circuit breaker reset');
+function isProviderCircuitOpen(provider: string): boolean {
+  const cb = providerCircuitBreakers[provider];
+  if (!cb || !cb.isOpen) return false;
+  if (Date.now() - cb.lastFailure > CIRCUIT_BREAKER_RESET_MS) {
+    cb.isOpen = false;
+    cb.failures = 0;
+    priceLogger.info({ provider }, `Circuit breaker reset for ${provider}`);
     return false;
   }
-
   return true;
 }
 
-// ============ CoinGecko Config ============
+// ============ Provider Configuration ============
 
 // CoinGecko asset platform IDs per chain
 const COINGECKO_PLATFORM_IDS: Record<number, string> = {
@@ -147,25 +148,17 @@ const COINGECKO_PLATFORM_IDS: Record<number, string> = {
   1: 'ethereum',
 };
 
-// Emergency fallback prices (updated periodically, used only as last resort)
-const EMERGENCY_FALLBACK_PRICES: Record<string, number> = {
-  // WETH / ETH
-  '0x4200000000000000000000000000000000000006': 2700,
-  '0x0000000000000000000000000000000000000000': 2700,
-  // wstETH
-  '0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452': 3100,
-  // cbETH
-  '0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22': 2850,
-  // rETH
-  '0xb6fe221fe9eef5aba221c348ba20a1bf5e73624c': 3000,
-  // cbBTC
-  '0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf': 97000,
-  // ezETH
-  '0x2416092f143378750bb29b79ed961ab195cceea5': 2750,
-  // weETH
-  '0x04c0599ae5a44757c0af6f9ec3b93da8976c150a': 2850,
-  // AERO
-  '0x940181a94a35a4569e4529a3cdfb74e38fd98631': 0.80,
+// DeFiLlama chain identifiers
+const DEFILLAMA_CHAIN_IDS: Record<number, string> = {
+  8453: 'base',
+  1: 'ethereum',
+};
+
+// Binance symbol mapping for major tokens (lowercase address → trading pair)
+const BINANCE_SYMBOL_MAP: Record<string, string> = {
+  '0x4200000000000000000000000000000000000006': 'ETHUSDT',  // WETH (Base)
+  '0x0000000000000000000000000000000000000000': 'ETHUSDT',  // Native ETH
+  '0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf': 'BTCUSDT', // cbBTC ≈ BTC
 };
 
 // ============ Cache Keys ============
@@ -193,112 +186,39 @@ function normalizeAddress(address: string): string {
   return address.toLowerCase();
 }
 
-// ============ Price Fetching ============
-
 /**
- * Fetch token price in USD using 0x API
+ * Convert native ETH address to WETH for API lookups
  */
-async function fetch0xPrice(
-  tokenAddress: string,
-  chainId: number
-): Promise<number | null> {
-  // Circuit breaker check
-  if (isCircuitOpen()) {
-    priceLogger.debug('Circuit breaker open, skipping 0x API call');
-    return null;
+function toApiAddress(tokenAddress: string, chainId: number): string | null {
+  const normalized = normalizeAddress(tokenAddress);
+  if (normalized === NATIVE_ETH.toLowerCase()) {
+    return WETH_ADDRESSES[chainId]?.toLowerCase() || null;
   }
-
-  // No API key configured
-  if (!config.ZEROX_API_KEY) {
-    priceLogger.warn('0x API key not configured');
-    return null;
-  }
-
-  const usdcAddress = USDC_ADDRESSES[chainId];
-  if (!usdcAddress) {
-    priceLogger.warn({ chainId }, 'USDC address not configured for chain');
-    return null;
-  }
-
-  // Convert native ETH to WETH for API call
-  const apiAddress = normalizeAddress(tokenAddress) === NATIVE_ETH.toLowerCase()
-    ? WETH_ADDRESSES[chainId]
-    : tokenAddress;
-
-  if (!apiAddress) {
-    return null;
-  }
-
-  const tokenInfo = getTokenInfo(tokenAddress, chainId);
-
-  // Query: 1 token worth in USDC
-  const sellAmount = (10n ** BigInt(tokenInfo.decimals)).toString();
-
-  try {
-    // 0x API v2 requires permit2 endpoint and version header
-    const response = await axios.get('https://api.0x.org/swap/permit2/price', {
-      headers: {
-        '0x-api-key': config.ZEROX_API_KEY,
-        '0x-version': 'v2',
-      },
-      params: {
-        sellToken: apiAddress,
-        buyToken: usdcAddress,
-        sellAmount,
-        chainId,
-      },
-      timeout: 10_000, // 10 second timeout
-    });
-
-    // buyAmount is in USDC (6 decimals)
-    const priceUSD = Number(response.data.buyAmount) / 1e6;
-
-    recordSuccess();
-    priceLogger.debug({ token: tokenInfo.symbol, priceUSD }, 'Fetched price from 0x');
-
-    return priceUSD;
-  } catch (error) {
-    recordFailure();
-
-    if (axios.isAxiosError(error)) {
-      priceLogger.warn({
-        status: error.response?.status,
-        token: tokenInfo.symbol,
-      }, '0x price fetch failed');
-    } else {
-      priceLogger.warn({ error, token: tokenInfo.symbol }, '0x price fetch error');
-    }
-
-    return null;
-  }
+  return normalized;
 }
 
+// ============ Price Providers ============
+
 /**
- * Fetch token price from CoinGecko as fallback
+ * Fetch token price from CoinGecko (primary source)
  */
 async function fetchCoinGeckoPrice(
   tokenAddress: string,
   chainId: number
 ): Promise<number | null> {
+  if (isProviderCircuitOpen('coingecko')) return null;
+
   const platformId = COINGECKO_PLATFORM_IDS[chainId];
   if (!platformId) {
     priceLogger.debug({ chainId }, 'CoinGecko platform not configured for chain');
     return null;
   }
 
-  // Convert native ETH to WETH for API call
-  const normalized = normalizeAddress(tokenAddress);
-  const apiAddress = normalized === NATIVE_ETH.toLowerCase()
-    ? WETH_ADDRESSES[chainId]?.toLowerCase()
-    : normalized;
-
+  const apiAddress = toApiAddress(tokenAddress, chainId);
   if (!apiAddress) return null;
 
   try {
-    const headers: Record<string, string> = {
-      'Accept': 'application/json',
-    };
-    // Use pro API if key is available, otherwise free tier
+    const headers: Record<string, string> = { 'Accept': 'application/json' };
     const baseUrl = config.COINGECKO_API_KEY
       ? 'https://pro-api.coingecko.com/api/v3'
       : 'https://api.coingecko.com/api/v3';
@@ -321,18 +241,16 @@ async function fetchCoinGeckoPrice(
 
     const priceData = response.data[apiAddress];
     if (priceData?.usd) {
-      const priceUSD = priceData.usd;
-      priceLogger.debug({ token: apiAddress, priceUSD, source: 'coingecko' }, 'Fetched price from CoinGecko');
-      return priceUSD;
+      recordProviderSuccess('coingecko');
+      priceLogger.debug({ token: apiAddress, price: priceData.usd, source: 'coingecko' }, 'CoinGecko price fetched');
+      return priceData.usd;
     }
 
     return null;
   } catch (error) {
+    recordProviderFailure('coingecko');
     if (axios.isAxiosError(error)) {
-      priceLogger.debug({
-        status: error.response?.status,
-        token: apiAddress,
-      }, 'CoinGecko price fetch failed');
+      priceLogger.debug({ status: error.response?.status, token: apiAddress }, 'CoinGecko price fetch failed');
     } else {
       priceLogger.debug({ error, token: apiAddress }, 'CoinGecko price fetch error');
     }
@@ -341,21 +259,93 @@ async function fetchCoinGeckoPrice(
 }
 
 /**
- * Get emergency fallback price for well-known tokens
+ * Fetch token price from DeFiLlama (fallback 1)
+ * Free, no API key, supports any on-chain token
  */
-function getEmergencyFallbackPrice(tokenAddress: string): number | null {
-  const normalized = normalizeAddress(tokenAddress);
-  const price = EMERGENCY_FALLBACK_PRICES[normalized];
-  if (price !== undefined) {
-    priceLogger.warn({ token: normalized, price, source: 'emergency-fallback' },
-      'Using emergency fallback price - may be stale');
-    return price;
+async function fetchDeFiLlamaPrice(
+  tokenAddress: string,
+  chainId: number
+): Promise<number | null> {
+  if (isProviderCircuitOpen('defillama')) return null;
+
+  const chainName = DEFILLAMA_CHAIN_IDS[chainId];
+  if (!chainName) return null;
+
+  const apiAddress = toApiAddress(tokenAddress, chainId);
+  if (!apiAddress) return null;
+
+  try {
+    const coinKey = `${chainName}:${apiAddress}`;
+    const response = await axios.get(
+      `https://coins.llama.fi/prices/current/${coinKey}`,
+      { timeout: 10_000 }
+    );
+
+    const priceData = response.data?.coins?.[coinKey];
+    if (priceData?.price && priceData.confidence > 0.5) {
+      recordProviderSuccess('defillama');
+      priceLogger.debug({ token: apiAddress, price: priceData.price, source: 'defillama' }, 'DeFiLlama price fetched');
+      return priceData.price;
+    }
+
+    return null;
+  } catch (error) {
+    recordProviderFailure('defillama');
+    if (axios.isAxiosError(error)) {
+      priceLogger.debug({ status: error.response?.status, token: apiAddress }, 'DeFiLlama price fetch failed');
+    } else {
+      priceLogger.debug({ error, token: apiAddress }, 'DeFiLlama price fetch error');
+    }
+    return null;
   }
-  return null;
 }
 
 /**
- * Get token price in USD with caching
+ * Fetch token price from Binance (fallback 2)
+ * Free, no API key. Only works for tokens with known Binance trading pairs.
+ */
+async function fetchBinancePrice(
+  tokenAddress: string
+): Promise<number | null> {
+  if (isProviderCircuitOpen('binance')) return null;
+
+  const normalized = normalizeAddress(tokenAddress);
+  const symbol = BINANCE_SYMBOL_MAP[normalized];
+  if (!symbol) return null;
+
+  try {
+    const response = await axios.get(
+      'https://api.binance.com/api/v3/ticker/price',
+      {
+        params: { symbol },
+        timeout: 5_000,
+      }
+    );
+
+    const price = parseFloat(response.data?.price);
+    if (price > 0) {
+      recordProviderSuccess('binance');
+      priceLogger.debug({ symbol, price, source: 'binance' }, 'Binance price fetched');
+      return price;
+    }
+
+    return null;
+  } catch (error) {
+    recordProviderFailure('binance');
+    if (axios.isAxiosError(error)) {
+      priceLogger.debug({ status: error.response?.status, symbol }, 'Binance price fetch failed');
+    } else {
+      priceLogger.debug({ error, symbol }, 'Binance price fetch error');
+    }
+    return null;
+  }
+}
+
+// ============ Main Price Functions ============
+
+/**
+ * Get token price in USD with caching and multi-source fallback
+ * Tries: CoinGecko → DeFiLlama → Binance
  */
 export async function getTokenPriceUSD(
   tokenAddress: string,
@@ -374,6 +364,7 @@ export async function getTokenPriceUSD(
       priceUSD: 1.0,
       cached: false,
       timestamp,
+      source: 'stablecoin',
     };
   }
 
@@ -392,23 +383,27 @@ export async function getTokenPriceUSD(
     };
   }
 
-  // Fetch from 0x API (primary)
-  let priceUSD = await fetch0xPrice(tokenAddress, chainId);
-  let priceSource = '0x';
+  // Try providers in order: CoinGecko → DeFiLlama → Binance
+  let priceUSD: number | null = null;
+  let priceSource = '';
 
-  // Fallback 1: CoinGecko
+  // Provider 1: CoinGecko
+  priceUSD = await fetchCoinGeckoPrice(tokenAddress, chainId);
+  priceSource = 'coingecko';
+
+  // Provider 2: DeFiLlama
   if (priceUSD === null) {
-    priceUSD = await fetchCoinGeckoPrice(tokenAddress, chainId);
-    priceSource = 'coingecko';
+    priceUSD = await fetchDeFiLlamaPrice(tokenAddress, chainId);
+    priceSource = 'defillama';
   }
 
-  // Fallback 2: Emergency hardcoded prices (last resort)
+  // Provider 3: Binance (for major tokens only)
   if (priceUSD === null) {
-    priceUSD = getEmergencyFallbackPrice(tokenAddress);
-    priceSource = 'emergency-fallback';
+    priceUSD = await fetchBinancePrice(tokenAddress);
+    priceSource = 'binance';
   }
 
-  // Cache the result (even if null, to avoid hammering API)
+  // Cache the result
   if (priceUSD !== null) {
     memoryCache.set(cacheKey, priceUSD, PRICE_CACHE_TTL);
     priceLogger.debug({ token: tokenInfo.symbol, priceUSD, source: priceSource }, 'Price resolved');
@@ -421,7 +416,8 @@ export async function getTokenPriceUSD(
     priceUSD,
     cached: false,
     timestamp,
-    error: priceUSD === null ? 'Price unavailable from all sources' : undefined,
+    source: priceUSD !== null ? priceSource : undefined,
+    error: priceUSD === null ? 'Price unavailable from all sources (CoinGecko, DeFiLlama, Binance)' : undefined,
   };
 }
 
