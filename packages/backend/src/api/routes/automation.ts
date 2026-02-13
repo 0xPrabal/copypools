@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import * as subgraph from '../../services/subgraph.js';
 import * as blockchain from '../../services/blockchain.js';
 import { walletClient } from '../../services/blockchain.js';
@@ -11,10 +11,20 @@ import { getKnownPositions, getLastScannedBlock, getRecentErrors, getPositionSta
 const router = Router();
 const routeLogger = logger.child({ route: 'automation' });
 
+// Validate tokenId param is a numeric string
+function validateTokenId(req: Request, res: Response, next: NextFunction): void {
+  const { tokenId } = req.params;
+  if (tokenId && !/^\d+$/.test(tokenId)) {
+    res.status(400).json({ error: 'Invalid tokenId format - must be numeric' });
+    return;
+  }
+  next();
+}
+
 // ========== Auto-Compound Endpoints ==========
 
 // Get compound config for a position
-router.get('/compound/:tokenId', async (req: Request, res: Response) => {
+router.get('/compound/:tokenId', validateTokenId, async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
     const result = await subgraph.getPosition(tokenId);
@@ -78,7 +88,7 @@ router.get('/compound', async (req: Request, res: Response) => {
 // ========== Auto-Exit Endpoints ==========
 
 // Get exit config for a position
-router.get('/exit/:tokenId', async (req: Request, res: Response) => {
+router.get('/exit/:tokenId', validateTokenId, async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
     const result = await subgraph.getPosition(tokenId);
@@ -148,7 +158,7 @@ router.get('/exit', async (req: Request, res: Response) => {
 // ========== Auto-Range Endpoints ==========
 
 // Get range config for a position
-router.get('/range/:tokenId', async (req: Request, res: Response) => {
+router.get('/range/:tokenId', validateTokenId, async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
     const result = await subgraph.getPosition(tokenId);
@@ -233,6 +243,17 @@ router.post('/batch-status', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'tokenIds must be an array' });
     }
 
+    if (tokenIds.length > 50) {
+      return res.status(400).json({ error: 'Too many tokenIds (max 50)' });
+    }
+
+    // Validate each tokenId is a numeric string
+    for (const id of tokenIds) {
+      if (typeof id !== 'string' || !/^\d+$/.test(id)) {
+        return res.status(400).json({ error: 'Invalid tokenId format - must be numeric string' });
+      }
+    }
+
     const statuses = await Promise.all(
       tokenIds.map(async (tokenId: string) => {
         try {
@@ -303,8 +324,7 @@ router.get('/status', async (req: Request, res: Response) => {
       botEnabled: config.BOT_ENABLED,
       walletConfigured,
       walletAddress: walletAddress ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : null,
-      walletAddressFull: walletAddress,
-      walletBalance,
+      walletBalance: walletBalance ? 'funded' : null,
       chainId: config.CHAIN_ID,
       intervals: {
         compound: config.COMPOUND_INTERVAL_MS,
@@ -320,8 +340,7 @@ router.get('/status', async (req: Request, res: Response) => {
         knownPositionsCount: knownPositions.length,
         knownPositions: knownPositions,
         lastScannedBlock: lastScannedBlock,
-        recentErrors: getRecentErrors(),
-        processingLog: getPositionStatus(),
+        recentErrorCount: getRecentErrors().length,
       },
     });
   } catch (error) {
@@ -334,7 +353,7 @@ router.get('/status', async (req: Request, res: Response) => {
 // ========== Manual Trigger Endpoint (for debugging) ==========
 
 // Manually trigger rebalance check for a position
-router.post('/range/:tokenId/trigger', async (req: Request, res: Response) => {
+router.post('/range/:tokenId/trigger', validateTokenId, async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params;
     const tokenIdBigInt = BigInt(tokenId);

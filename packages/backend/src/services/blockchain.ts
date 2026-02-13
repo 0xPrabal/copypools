@@ -97,6 +97,13 @@ const StateViewABI = parseAbi([
 
 // Compound functions
 export async function checkCompoundProfitable(tokenId: bigint): Promise<{ profitable: boolean; reward: bigint }> {
+  // Check cache first
+  const cacheKey = CACHE_KEYS.compoundProfitable(tokenId.toString());
+  const cached = memoryCache.get<{ profitable: boolean; reward: string }>(cacheKey);
+  if (cached) {
+    return { profitable: cached.profitable, reward: BigInt(cached.reward) };
+  }
+
   const result = await publicClient.readContract({
     address: contracts.v4Compoundor as Address,
     abi: V4CompoundorABI,
@@ -104,10 +111,22 @@ export async function checkCompoundProfitable(tokenId: bigint): Promise<{ profit
     args: [tokenId],
   }) as [boolean, bigint];
 
-  return { profitable: result[0], reward: result[1] };
+  const value = { profitable: result[0], reward: result[1] };
+
+  // Cache for 60 seconds
+  memoryCache.set(cacheKey, { profitable: value.profitable, reward: value.reward.toString() }, CACHE_TTL.COMPOUND_PROFITABLE);
+
+  return value;
 }
 
 export async function getPendingFees(tokenId: bigint): Promise<{ amount0: bigint; amount1: bigint }> {
+  // Check cache first
+  const cacheKey = CACHE_KEYS.pendingFees(tokenId.toString());
+  const cached = memoryCache.get<{ amount0: string; amount1: string }>(cacheKey);
+  if (cached) {
+    return { amount0: BigInt(cached.amount0), amount1: BigInt(cached.amount1) };
+  }
+
   const result = await publicClient.readContract({
     address: contracts.v4Compoundor as Address,
     abi: V4CompoundorABI,
@@ -115,7 +134,12 @@ export async function getPendingFees(tokenId: bigint): Promise<{ amount0: bigint
     args: [tokenId],
   }) as [bigint, bigint];
 
-  return { amount0: result[0], amount1: result[1] };
+  const value = { amount0: result[0], amount1: result[1] };
+
+  // Cache for 30 seconds
+  memoryCache.set(cacheKey, { amount0: value.amount0.toString(), amount1: value.amount1.toString() }, CACHE_TTL.PENDING_FEES);
+
+  return value;
 }
 
 export async function executeCompound(tokenId: bigint, swapData: Hex): Promise<Hex> {
@@ -173,6 +197,13 @@ export async function executeExit(tokenId: bigint, swapData: Hex): Promise<Hex> 
 
 // Auto-range functions
 export async function checkRebalance(tokenId: bigint): Promise<{ needsRebalance: boolean; reason: number }> {
+  // Check cache first
+  const cacheKey = CACHE_KEYS.checkRebalance(tokenId.toString());
+  const cached = memoryCache.get<{ needsRebalance: boolean; reason: number }>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const result = await publicClient.readContract({
     address: contracts.v4AutoRange as Address,
     abi: V4AutoRangeABI,
@@ -180,7 +211,12 @@ export async function checkRebalance(tokenId: bigint): Promise<{ needsRebalance:
     args: [tokenId],
   }) as [boolean, number];
 
-  return { needsRebalance: result[0], reason: result[1] };
+  const value = { needsRebalance: result[0], reason: result[1] };
+
+  // Cache for 30 seconds
+  memoryCache.set(cacheKey, value, CACHE_TTL.CHECK_REBALANCE);
+
+  return value;
 }
 
 // Position info type for caching
@@ -239,7 +275,7 @@ export async function getAutoRangePositionInfo(tokenId: bigint): Promise<{
     liquidity: result[3],
   };
 
-  // Cache for 60 seconds (position tick range doesn't change often)
+  // Cache for 2 minutes (position tick range doesn't change often)
   memoryCache.set(cacheKey, {
     ...positionInfo,
     liquidity: positionInfo.liquidity.toString(),
@@ -313,13 +349,13 @@ export async function getPoolCurrentTick(poolKey: {
 
   const tick = result[1];
 
-  // Cache for 15 seconds
+  // Cache for 30 seconds (also populate slot0 cache for shared data)
   memoryCache.set(cacheKey, tick, CACHE_TTL.POOL_TICK);
 
   return tick;
 }
 
-// Get pool slot0 data including sqrtPriceX96 and tick
+// Get pool slot0 data including sqrtPriceX96 and tick (with caching)
 export async function getPoolSlot0(poolKey: {
   currency0: string;
   currency1: string;
@@ -329,6 +365,13 @@ export async function getPoolSlot0(poolKey: {
 }): Promise<{ sqrtPriceX96: bigint; tick: number }> {
   const poolId = computePoolId(poolKey);
 
+  // Check cache first
+  const cacheKey = CACHE_KEYS.poolSlot0(poolId);
+  const cached = memoryCache.get<{ sqrtPriceX96: string; tick: number }>(cacheKey);
+  if (cached) {
+    return { sqrtPriceX96: BigInt(cached.sqrtPriceX96), tick: cached.tick };
+  }
+
   const result = await publicClient.readContract({
     address: contracts.stateView as Address,
     abi: StateViewABI,
@@ -336,19 +379,35 @@ export async function getPoolSlot0(poolKey: {
     args: [poolId as `0x${string}`],
   }) as [bigint, number, number, number];
 
-  return {
+  const value = {
     sqrtPriceX96: result[0],
     tick: result[1],
   };
+
+  // Cache for 30 seconds
+  memoryCache.set(cacheKey, { sqrtPriceX96: value.sqrtPriceX96.toString(), tick: value.tick }, CACHE_TTL.POOL_SLOT0);
+
+  // Also update the pool tick cache (shares same underlying data)
+  const tickCacheKey = CACHE_KEYS.poolTick(poolId);
+  memoryCache.set(tickCacheKey, value.tick, CACHE_TTL.POOL_TICK);
+
+  return value;
 }
 
-// Get position status (in range, current tick, ticks)
+// Get position status (in range, current tick, ticks) - with caching
 export async function getPositionStatus(tokenId: bigint): Promise<{
   inRange: boolean;
   currentTick: number;
   tickLower: number;
   tickUpper: number;
 }> {
+  // Check cache first
+  const cacheKey = CACHE_KEYS.positionStatus(tokenId.toString());
+  const cached = memoryCache.get<{ inRange: boolean; currentTick: number; tickLower: number; tickUpper: number }>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const result = await publicClient.readContract({
     address: contracts.v4AutoRange as Address,
     abi: V4AutoRangeABI,
@@ -356,12 +415,17 @@ export async function getPositionStatus(tokenId: bigint): Promise<{
     args: [tokenId],
   }) as [boolean, number, number, number];
 
-  return {
+  const value = {
     inRange: result[0],
     currentTick: result[1],
     tickLower: result[2],
     tickUpper: result[3],
   };
+
+  // Cache for 30 seconds
+  memoryCache.set(cacheKey, value, CACHE_TTL.POSITION_STATUS);
+
+  return value;
 }
 
 export async function executeRebalance(tokenId: bigint, swapData: Hex): Promise<Hex> {
@@ -381,8 +445,15 @@ export async function executeRebalance(tokenId: bigint, swapData: Hex): Promise<
   return hash;
 }
 
-// Get the position that a given position was rebalanced to (0 if not rebalanced)
+// Get the position that a given position was rebalanced to (0 if not rebalanced) - with caching
 export async function getRebalancedTo(tokenId: bigint): Promise<bigint> {
+  // Check cache first (immutable once set, so long TTL is safe)
+  const cacheKey = CACHE_KEYS.rebalancedTo(tokenId.toString());
+  const cached = memoryCache.get<string>(cacheKey);
+  if (cached !== null) {
+    return BigInt(cached);
+  }
+
   const result = await publicClient.readContract({
     address: contracts.v4AutoRange as Address,
     abi: V4AutoRangeABI,
@@ -390,7 +461,12 @@ export async function getRebalancedTo(tokenId: bigint): Promise<bigint> {
     args: [tokenId],
   });
 
-  return result as bigint;
+  const value = result as bigint;
+
+  // Cache for 5 minutes (immutable once set, 0 means not yet rebalanced)
+  memoryCache.set(cacheKey, value.toString(), CACHE_TTL.REBALANCED_TO);
+
+  return value;
 }
 
 // Follow the rebalance chain to get the latest position ID
@@ -567,8 +643,15 @@ export async function getCompoundConfig(tokenId: bigint): Promise<{ enabled: boo
   };
 }
 
-// Get on-chain range config
+// Get on-chain range config (with caching)
 export async function getRangeConfig(tokenId: bigint): Promise<{ enabled: boolean; lowerDelta: number; upperDelta: number; rebalanceThreshold: number } | null> {
+  // Check cache first
+  const cacheKey = CACHE_KEYS.rangeConfig(tokenId.toString());
+  const cached = memoryCache.get<{ enabled: boolean; lowerDelta: number; upperDelta: number; rebalanceThreshold: number } | null>(cacheKey);
+  if (cached !== null) {
+    return cached;
+  }
+
   try {
     const result = await publicClient.readContract({
       address: contracts.v4AutoRange as Address,
@@ -577,20 +660,41 @@ export async function getRangeConfig(tokenId: bigint): Promise<{ enabled: boolea
       args: [tokenId],
     }) as unknown as [boolean, number, number, number, number, boolean, bigint];
 
-    return {
+    const value = {
       enabled: result[0],
       lowerDelta: result[1],
       upperDelta: result[2],
       rebalanceThreshold: result[3],
     };
+
+    // Cache for 2 minutes (config rarely changes)
+    memoryCache.set(cacheKey, value, CACHE_TTL.RANGE_CONFIG);
+
+    return value;
   } catch {
     return null;
   }
 }
 
-// Gas estimation
+// Gas estimation (with caching)
 export async function getGasPrice(): Promise<bigint> {
+  // Check cache first
+  const cacheKey = CACHE_KEYS.gasPrice();
+  const cached = memoryCache.get<string>(cacheKey);
+  if (cached) {
+    const gasPrice = BigInt(cached);
+    const maxGasPrice = BigInt(config.MAX_GAS_PRICE_GWEI) * BigInt(1e9);
+    if (gasPrice > maxGasPrice) {
+      throw new Error('Gas price too high');
+    }
+    return gasPrice;
+  }
+
   const gasPrice = await publicClient.getGasPrice();
+
+  // Cache for 15 seconds
+  memoryCache.set(cacheKey, gasPrice.toString(), CACHE_TTL.GAS_PRICE);
+
   const maxGasPrice = BigInt(config.MAX_GAS_PRICE_GWEI) * BigInt(1e9);
 
   if (gasPrice > maxGasPrice) {
@@ -1019,6 +1123,13 @@ export async function getPositionInfo(tokenId: bigint): Promise<OnChainPosition 
  * Used to verify Ponder data is not stale
  */
 export async function getPositionLiquidity(tokenId: bigint): Promise<bigint> {
+  // Check cache first
+  const cacheKey = CACHE_KEYS.positionLiquidity(tokenId.toString());
+  const cached = memoryCache.get<string>(cacheKey);
+  if (cached !== null) {
+    return BigInt(cached);
+  }
+
   try {
     const liquidity = await publicClient.readContract({
       address: POSITION_MANAGER_ADDRESS,
@@ -1026,7 +1137,12 @@ export async function getPositionLiquidity(tokenId: bigint): Promise<bigint> {
       functionName: 'getPositionLiquidity',
       args: [tokenId],
     });
-    return liquidity as bigint;
+    const value = liquidity as bigint;
+
+    // Cache for 30 seconds
+    memoryCache.set(cacheKey, value.toString(), CACHE_TTL.POSITION_LIQUIDITY);
+
+    return value;
   } catch (error) {
     logger.debug({ error, tokenId: tokenId.toString() }, 'Failed to get position liquidity');
     throw error;

@@ -1,8 +1,8 @@
-import { createPublicClient, http, parseAbiItem } from 'viem';
-import { base } from 'viem/chains';
+import { parseAbiItem } from 'viem';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import * as database from '../services/database.js';
+import { publicClient } from '../services/blockchain.js';
 
 const indexerLogger = logger.child({ module: 'position-indexer' });
 
@@ -17,11 +17,7 @@ interface IndexerState {
   chainId: number;
 }
 
-// Create public client for reading blockchain
-const publicClient = createPublicClient({
-  chain: base,
-  transport: http(config.RPC_URL),
-});
+// Reuse the shared public client from blockchain service (with multicall batching and rate limiting)
 
 // Get indexer state from database
 async function getIndexerState(): Promise<IndexerState | null> {

@@ -301,17 +301,35 @@ export const CACHE_KEYS = {
     `position_cache_${address.toLowerCase()}_${chainId}`,
   indexerState: () => 'indexer_state',
   poolTick: (poolId: string) => `pool_tick_${poolId}`,
+  poolSlot0: (poolId: string) => `pool_slot0_${poolId}`,
   positionInfo: (tokenId: string) => `position_info_${tokenId}`,
   tokenPrice: (chainId: number, address: string) =>
     `price_${chainId}_${address.toLowerCase()}`,
+  compoundProfitable: (tokenId: string) => `compound_profitable_${tokenId}`,
+  pendingFees: (tokenId: string) => `pending_fees_${tokenId}`,
+  gasPrice: () => 'gas_price',
+  checkRebalance: (tokenId: string) => `check_rebalance_${tokenId}`,
+  positionStatus: (tokenId: string) => `position_status_${tokenId}`,
+  rangeConfig: (tokenId: string) => `range_config_${tokenId}`,
+  rebalancedTo: (tokenId: string) => `rebalanced_to_${tokenId}`,
+  positionLiquidity: (tokenId: string) => `position_liquidity_${tokenId}`,
 };
 
-// Default TTLs
+// Default TTLs (optimized to reduce RPC calls)
 export const CACHE_TTL = {
-  POSITION_CACHE: 60 * 1000, // 60 seconds - increased from 30s
+  POSITION_CACHE: 60 * 1000, // 60 seconds
   INDEXER_STATE: 60 * 1000, // 1 minute
   POOL_DATA: 5 * 60 * 1000, // 5 minutes - pools don't change often
-  POOL_TICK: 15 * 1000, // 15 seconds - current tick changes frequently but not every call
-  POSITION_INFO: 60 * 1000, // 60 seconds - position tick range doesn't change
+  POOL_TICK: 30 * 1000, // 30 seconds (was 15s) - tick updates per block but bots run every 15min
+  POOL_SLOT0: 30 * 1000, // 30 seconds - same data as pool tick
+  POSITION_INFO: 2 * 60 * 1000, // 2 minutes (was 60s) - position tick range doesn't change
   TOKEN_PRICE: 5 * 60 * 1000, // 5 minutes - prices don't need real-time accuracy
+  COMPOUND_PROFITABLE: 60 * 1000, // 60 seconds - profitability doesn't change rapidly
+  PENDING_FEES: 30 * 1000, // 30 seconds - fees accrue slowly per block
+  GAS_PRICE: 15 * 1000, // 15 seconds - gas price changes but not every call
+  CHECK_REBALANCE: 30 * 1000, // 30 seconds - rebalance state changes slowly
+  POSITION_STATUS: 30 * 1000, // 30 seconds - tick position changes per block
+  RANGE_CONFIG: 2 * 60 * 1000, // 2 minutes - config rarely changes
+  REBALANCED_TO: 5 * 60 * 1000, // 5 minutes - immutable once set
+  POSITION_LIQUIDITY: 30 * 1000, // 30 seconds - only changes on user actions
 };

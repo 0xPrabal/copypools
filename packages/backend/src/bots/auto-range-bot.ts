@@ -266,7 +266,7 @@ async function scanForRangeConfiguredEvents(): Promise<void> {
  * Process a position using SMART rebalancing logic
  * This is the core of the improved auto-range system
  */
-async function processPositionSmart(tokenId: string): Promise<{ rebalanced: boolean; decision: RebalanceDecision | null }> {
+async function processPositionSmart(tokenId: string): Promise<{ rebalanced: boolean; decision: RebalanceDecision | null; analysis: PositionAnalysis | null }> {
   try {
     const tokenIdBigInt = BigInt(tokenId);
     recordStatus(tokenId, 'Processing started');
@@ -275,7 +275,7 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     if (!(await canRebalanceInCurrentBlock(tokenId))) {
       recordStatus(tokenId, 'Skipped: Already processed in this block');
       botLogger.debug({ tokenId }, 'Already processed in this block');
-      return { rebalanced: false, decision: null };
+      return { rebalanced: false, decision: null, analysis: null };
     }
 
     // Verify range config is enabled on-chain
@@ -284,7 +284,7 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
       recordStatus(tokenId, 'Skipped: Range config not enabled on-chain');
       botLogger.debug({ tokenId }, 'Range config not enabled on-chain');
       knownRangePositions.delete(tokenId);
-      return { rebalanced: false, decision: null };
+      return { rebalanced: false, decision: null, analysis: null };
     }
 
     // Check if already rebalanced to newer position
@@ -293,7 +293,7 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     if (rebalancedTo > 0n) {
       recordStatus(tokenId, `Skipped: Already rebalanced to ${rebalancedTo}`);
       botLogger.debug({ tokenId, rebalancedTo: rebalancedTo.toString() }, 'Position already rebalanced');
-      return { rebalanced: false, decision: null };
+      return { rebalanced: false, decision: null, analysis: null };
     }
 
     // Get position status
@@ -308,14 +308,14 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     } catch (error) {
       recordStatus(tokenId, 'Error: Could not get liquidity from PositionManager');
       botLogger.error({ tokenId, error }, 'Failed to get position liquidity');
-      return { rebalanced: false, decision: null };
+      return { rebalanced: false, decision: null, analysis: null };
     }
 
     // Skip empty positions
     if (realLiquidity === 0n) {
       recordStatus(tokenId, 'Skipped: 0 liquidity (verified from PositionManager)');
       botLogger.debug({ tokenId }, 'Position has 0 liquidity');
-      return { rebalanced: false, decision: null };
+      return { rebalanced: false, decision: null, analysis: null };
     }
 
     recordStatus(tokenId, `Liquidity: ${realLiquidity.toString()}`);
@@ -357,7 +357,7 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
           amount1Human: amount1Human.toFixed(8),
           threshold: MIN_POSITION_VALUE_USD,
         }, 'Skipping dust position - value below minimum threshold');
-        return { rebalanced: false, decision: null };
+        return { rebalanced: false, decision: null, analysis: null };
       }
 
       botLogger.debug({
@@ -423,7 +423,7 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
 
     if (!decision.shouldRebalance) {
       recordStatus(tokenId, `Decision: No rebalance needed - ${decision.reason}`);
-      return { rebalanced: false, decision };
+      return { rebalanced: false, decision, analysis };
     }
 
     recordStatus(tokenId, `Decision: Should rebalance - ${decision.reason}`);
@@ -435,7 +435,7 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     if (!contractAllows) {
       recordStatus(tokenId, 'Blocked: Contract checkRebalance returned false');
       botLogger.debug({ tokenId }, 'Contract checkRebalance returned false, respecting cooldown');
-      return { rebalanced: false, decision };
+      return { rebalanced: false, decision, analysis };
     }
 
     recordStatus(tokenId, 'Executing rebalance...');
@@ -505,12 +505,12 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
       estimatedSavingsBps: decision.estimatedSavings,
     }, 'Smart rebalance executed successfully');
 
-    return { rebalanced: true, decision };
+    return { rebalanced: true, decision, analysis };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     botLogger.error({ tokenId, errorMessage }, 'Smart rebalance failed');
     recordError(tokenId, errorMessage);
-    return { rebalanced: false, decision: null };
+    return { rebalanced: false, decision: null, analysis: null };
   }
 }
 
@@ -548,7 +548,7 @@ async function runAutoRangeBot(): Promise<void> {
 
     // Process all known positions with smart logic
     for (const tokenId of knownRangePositions) {
-      const { rebalanced, decision } = await processPositionSmart(tokenId);
+      const { rebalanced, decision, analysis } = await processPositionSmart(tokenId);
 
       if (rebalanced) {
         successCount++;
@@ -558,14 +558,9 @@ async function runAutoRangeBot(): Promise<void> {
         failCount++;
       }
 
-      // Collect analysis for summary
-      if (decision) {
-        try {
-          const status = await blockchain.getPositionStatus(BigInt(tokenId));
-          analyses.push(analyzePosition(tokenId, status.currentTick, status.tickLower, status.tickUpper));
-        } catch {
-          // Skip if can't get status
-        }
+      // Collect analysis for summary (reuse analysis from processPositionSmart - no extra RPC call)
+      if (analysis) {
+        analyses.push(analysis);
       }
 
       // Rate limiting - but faster than before since we're smarter about decisions

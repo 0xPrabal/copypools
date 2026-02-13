@@ -539,6 +539,9 @@ class RpcManager {
     const client = createPublicClient({
       chain,
       transport,
+      batch: {
+        multicall: true, // Automatically batch readContract calls into multicall (reduces RPC by ~60%)
+      },
     });
 
     // Cache the client

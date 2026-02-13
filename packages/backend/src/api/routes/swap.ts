@@ -313,8 +313,12 @@ swapRouter.post('/zap-calculate', async (req: Request, res: Response) => {
 
     if (!inputToken || !inputAmount || !token0 || !token1 || !sqrtPriceX96 || tickLower === undefined || tickUpper === undefined || !chainId) {
       return res.status(400).json({
-        error: 'Missing required fields',
+        error: 'Missing required fields: inputToken, inputAmount, token0, token1, sqrtPriceX96, tickLower, tickUpper, chainId',
       });
+    }
+
+    if (!SUPPORTED_CHAINS.includes(chainId)) {
+      return res.status(400).json({ error: `Unsupported chain ID: ${chainId}` });
     }
 
     // Calculate optimal ratio based on current price and range
@@ -345,6 +349,9 @@ swapRouter.post('/zap-calculate', async (req: Request, res: Response) => {
 
     // Determine if input is token0 or token1
     const weth = WETH_ADDRESSES[chainId];
+    if (!weth) {
+      return res.status(400).json({ error: `WETH address not configured for chain ${chainId}` });
+    }
 
     const normalizedInput = inputToken.toLowerCase() === ZERO_ADDRESS.toLowerCase()
       ? weth.toLowerCase()

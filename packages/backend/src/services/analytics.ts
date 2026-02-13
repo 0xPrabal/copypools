@@ -7,8 +7,8 @@ import { memoryCache } from './cache.js';
 const analyticsLogger = logger.child({ module: 'analytics' });
 
 // Cache TTLs for expensive analytics operations
-const PROTOCOL_ANALYTICS_TTL = 5 * 60 * 1000; // 5 minutes
-const PORTFOLIO_ANALYTICS_TTL = 2 * 60 * 1000; // 2 minutes
+const PROTOCOL_ANALYTICS_TTL = 10 * 60 * 1000; // 10 minutes (was 5min) - TVL changes slowly
+const PORTFOLIO_ANALYTICS_TTL = 5 * 60 * 1000; // 5 minutes (was 2min) - reduces per-user RPC
 const TVL_POSITION_TIMEOUT = 8000; // 8s per position in TVL calc
 
 // Types
@@ -89,36 +89,41 @@ export async function getPositionAnalytics(
       return null;
     }
 
+    // Fetch on-chain position info once (reused for enrichment and USD metrics)
+    let onChainInfo: Awaited<ReturnType<typeof blockchain.getPositionInfo>> = null;
+
     // CRITICAL: Check if position needs enrichment from chain
     // poolId === 'unknown' or tickLower/tickUpper === 0 means Ponder has incomplete data
     const needsEnrichment = !position.poolId || position.poolId === 'unknown' ||
       (position.tickLower === 0 && position.tickUpper === 0);
 
-    if (needsEnrichment) {
-      analyticsLogger.debug({ tokenId }, 'Position needs enrichment from chain (unknown poolId)');
-      const onChainInfo = await blockchain.getPositionInfo(BigInt(tokenId));
-      if (onChainInfo) {
-        // Merge on-chain data with Ponder data
-        position = {
-          ...position,
-          poolId: onChainInfo.poolId,
-          poolKey: onChainInfo.poolKey,
-          tickLower: onChainInfo.tickLower,
-          tickUpper: onChainInfo.tickUpper,
-          liquidity: onChainInfo.liquidity,
-        };
+    if (needsEnrichment || includeUSD) {
+      // Fetch once and reuse for both enrichment and USD metrics
+      onChainInfo = await blockchain.getPositionInfo(BigInt(tokenId));
+    }
 
-        // Persist to database for future requests (async, don't wait)
-        subgraph.updatePositionFromChain(
-          tokenId,
-          onChainInfo.poolId,
-          onChainInfo.tickLower,
-          onChainInfo.tickUpper,
-          onChainInfo.liquidity
-        ).catch(err => {
-          analyticsLogger.warn({ error: err, tokenId }, 'Failed to persist enriched position');
-        });
-      }
+    if (needsEnrichment && onChainInfo) {
+      analyticsLogger.debug({ tokenId }, 'Position needs enrichment from chain (unknown poolId)');
+      // Merge on-chain data with Ponder data
+      position = {
+        ...position,
+        poolId: onChainInfo.poolId,
+        poolKey: onChainInfo.poolKey,
+        tickLower: onChainInfo.tickLower,
+        tickUpper: onChainInfo.tickUpper,
+        liquidity: onChainInfo.liquidity,
+      };
+
+      // Persist to database for future requests (async, don't wait)
+      subgraph.updatePositionFromChain(
+        tokenId,
+        onChainInfo.poolId,
+        onChainInfo.tickLower,
+        onChainInfo.tickUpper,
+        onChainInfo.liquidity
+      ).catch(err => {
+        analyticsLogger.warn({ error: err, tokenId }, 'Failed to persist enriched position');
+      });
     }
 
     // Get on-chain pending fees
@@ -164,29 +169,24 @@ export async function getPositionAnalytics(
     // Check if in range (would need current tick from pool)
     const isInRange = position.tickLower <= 0 && position.tickUpper >= 0; // Placeholder
 
-    // Calculate USD metrics if requested
+    // Calculate USD metrics if requested (reuses onChainInfo fetched above - no duplicate RPC)
     let usdMetrics: USDMetrics | undefined = undefined;
-    if (includeUSD) {
+    if (includeUSD && onChainInfo?.poolKey) {
       try {
-        // Get pool data for sqrtPriceX96 from blockchain (doesn't require subgraph pool data)
-        const positionInfo = await blockchain.getPositionInfo(BigInt(tokenId));
+        const slot0 = await blockchain.getPoolSlot0(onChainInfo.poolKey);
 
-        if (positionInfo?.poolKey) {
-          const slot0 = await blockchain.getPoolSlot0(positionInfo.poolKey);
-
-          usdMetrics = await calculateUSDMetrics(
-            BigInt(position.liquidity || '0'),
-            slot0.sqrtPriceX96,
-            position.tickLower,
-            position.tickUpper,
-            positionInfo.poolKey.currency0,
-            positionInfo.poolKey.currency1,
-            chainId,
-            pendingFeesBigInt,
-            { amount0: collectedFees0, amount1: collectedFees1 },
-            createdAt
-          );
-        }
+        usdMetrics = await calculateUSDMetrics(
+          BigInt(position.liquidity || '0'),
+          slot0.sqrtPriceX96,
+          position.tickLower,
+          position.tickUpper,
+          onChainInfo.poolKey.currency0,
+          onChainInfo.poolKey.currency1,
+          chainId,
+          pendingFeesBigInt,
+          { amount0: collectedFees0, amount1: collectedFees1 },
+          createdAt
+        );
       } catch (e) {
         analyticsLogger.debug({ tokenId, error: e }, 'Could not calculate USD metrics');
       }

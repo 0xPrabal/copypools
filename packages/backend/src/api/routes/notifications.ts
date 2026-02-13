@@ -1,17 +1,19 @@
 import { Router, Request, Response } from 'express';
 import * as notifications from '../../services/notifications.js';
 import { logger } from '../../utils/logger.js';
+import { validateAddress } from '../middleware/production.js';
 
 const router = Router();
 const routeLogger = logger.child({ route: 'notifications' });
 
 // Get notifications for a user
-router.get('/:address', async (req: Request, res: Response) => {
+router.get('/:address', validateAddress, async (req: Request, res: Response) => {
   try {
     const { address } = req.params;
     const { limit = '50' } = req.query;
+    const parsedLimit = Math.min(Math.max(parseInt(limit as string, 10) || 50, 1), 200);
 
-    const userNotifications = await notifications.getNotifications(address, parseInt(limit as string));
+    const userNotifications = await notifications.getNotifications(address, parsedLimit);
     const unreadCount = await notifications.getUnreadCount(address);
 
     res.json({
@@ -25,7 +27,7 @@ router.get('/:address', async (req: Request, res: Response) => {
 });
 
 // Mark notification as read
-router.post('/:address/read/:notificationId', async (req: Request, res: Response) => {
+router.post('/:address/read/:notificationId', validateAddress, async (req: Request, res: Response) => {
   try {
     const { address, notificationId } = req.params;
     const success = await notifications.markAsRead(address, notificationId);
@@ -42,7 +44,7 @@ router.post('/:address/read/:notificationId', async (req: Request, res: Response
 });
 
 // Mark all notifications as read
-router.post('/:address/read-all', async (req: Request, res: Response) => {
+router.post('/:address/read-all', validateAddress, async (req: Request, res: Response) => {
   try {
     const { address } = req.params;
     const count = await notifications.markAllAsRead(address);
@@ -55,7 +57,7 @@ router.post('/:address/read-all', async (req: Request, res: Response) => {
 });
 
 // Subscribe to webhooks
-router.post('/:address/webhooks', async (req: Request, res: Response) => {
+router.post('/:address/webhooks', validateAddress, async (req: Request, res: Response) => {
   try {
     const { address } = req.params;
     const { url, events, secret } = req.body;
@@ -64,9 +66,26 @@ router.post('/:address/webhooks', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'url and events array are required' });
     }
 
-    // Validate URL
+    // Validate URL and prevent SSRF
     try {
-      new URL(url);
+      const parsedUrl = new URL(url);
+      // Only allow HTTPS webhooks
+      if (parsedUrl.protocol !== 'https:') {
+        return res.status(400).json({ error: 'Webhook URL must use HTTPS' });
+      }
+      // Block private/internal hostnames
+      const blockedHosts = ['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'];
+      if (blockedHosts.includes(parsedUrl.hostname)) {
+        return res.status(400).json({ error: 'Webhook URL cannot point to localhost or internal addresses' });
+      }
+      // Block private IP ranges (10.x, 172.16-31.x, 192.168.x, 169.254.x)
+      const ipMatch = parsedUrl.hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+      if (ipMatch) {
+        const [, a, b] = ipMatch.map(Number);
+        if (a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254)) {
+          return res.status(400).json({ error: 'Webhook URL cannot point to private/internal IP addresses' });
+        }
+      }
     } catch {
       return res.status(400).json({ error: 'Invalid webhook URL' });
     }
@@ -107,7 +126,7 @@ router.post('/:address/webhooks', async (req: Request, res: Response) => {
 });
 
 // Get webhook subscriptions
-router.get('/:address/webhooks', async (req: Request, res: Response) => {
+router.get('/:address/webhooks', validateAddress, async (req: Request, res: Response) => {
   try {
     const { address } = req.params;
     const subscriptions = notifications.getWebhookSubscriptions(address);
@@ -126,7 +145,7 @@ router.get('/:address/webhooks', async (req: Request, res: Response) => {
 });
 
 // Delete webhook subscription
-router.delete('/:address/webhooks/:webhookId', async (req: Request, res: Response) => {
+router.delete('/:address/webhooks/:webhookId', validateAddress, async (req: Request, res: Response) => {
   try {
     const { address, webhookId } = req.params;
     const success = notifications.unsubscribeWebhook(address, webhookId);
@@ -143,7 +162,7 @@ router.delete('/:address/webhooks/:webhookId', async (req: Request, res: Respons
 });
 
 // Test webhook (send test notification)
-router.post('/:address/webhooks/:webhookId/test', async (req: Request, res: Response) => {
+router.post('/:address/webhooks/:webhookId/test', validateAddress, async (req: Request, res: Response) => {
   try {
     const { address, webhookId } = req.params;
     const subscriptions = notifications.getWebhookSubscriptions(address);
@@ -197,7 +216,7 @@ router.get('/types/available', async (_req: Request, res: Response) => {
 });
 
 // Create a user action notification
-router.post('/:address/activity', async (req: Request, res: Response) => {
+router.post('/:address/activity', validateAddress, async (req: Request, res: Response) => {
   try {
     const { address } = req.params;
     const { type, title, message, positionId, txHash, data } = req.body;

@@ -138,9 +138,9 @@ export async function startServer() {
 
   apiLogger.info({ port, host, envPort: process.env.PORT, configPort: config.PORT }, 'Starting HTTP server...');
 
-  app.listen(port, host, () => {
+  const server = app.listen(port, host, () => {
     apiLogger.info({ port, host }, 'API server started and listening');
   });
 
-  return app;
+  return server;
 }
