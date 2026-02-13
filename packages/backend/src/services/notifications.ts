@@ -2,6 +2,7 @@ import { logger } from '../utils/logger.js';
 import * as subgraph from './subgraph.js';
 import * as blockchain from './blockchain.js';
 import * as analytics from './analytics.js';
+import { memoryCache } from './cache.js';
 import {
   createDbNotification,
   getDbNotifications,
@@ -379,8 +380,23 @@ async function triggerWebhooks(notification: Notification): Promise<void> {
 }
 
 // Notification service runner (to be called periodically)
+// Deduplicates with bot runs - if bots recently checked the same positions,
+// the blockchain calls will hit cache instead of making fresh RPC calls
+const NOTIFICATION_CHECK_CACHE_KEY = 'notification_check_last_run';
+const NOTIFICATION_CHECK_MIN_INTERVAL = 5 * 60 * 1000; // 5 minutes minimum between runs
+
 export async function runNotificationChecks(): Promise<void> {
+  // Skip if we ran recently (prevents overlapping with bot cycles)
+  const lastRun = memoryCache.get<number>(NOTIFICATION_CHECK_CACHE_KEY);
+  if (lastRun && Date.now() - lastRun < NOTIFICATION_CHECK_MIN_INTERVAL) {
+    notificationLogger.debug('Skipping notification checks - ran recently');
+    return;
+  }
+
   notificationLogger.info('Running notification checks');
+
+  // Mark as running to prevent overlap
+  memoryCache.set(NOTIFICATION_CHECK_CACHE_KEY, Date.now(), NOTIFICATION_CHECK_MIN_INTERVAL);
 
   await Promise.all([
     checkCompoundOpportunities(),
