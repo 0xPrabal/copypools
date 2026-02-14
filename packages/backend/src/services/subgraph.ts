@@ -322,6 +322,8 @@ export async function getCompoundablePositions(minReward: string, limit = 100) {
      FROM compound_config cc
      JOIN position p ON cc.position_id = p.token_id
      WHERE cc.enabled = true
+       AND p.liquidity != '0'
+       AND p.closed_at_timestamp IS NULL
      LIMIT $1`,
     [limit]
   );
@@ -363,6 +365,8 @@ export async function getRebalanceablePositions(limit = 100) {
      FROM range_config rc
      JOIN position p ON rc.position_id = p.token_id
      WHERE rc.enabled = true
+       AND p.liquidity != '0'
+       AND p.closed_at_timestamp IS NULL
      LIMIT $1`,
     [limit]
   );

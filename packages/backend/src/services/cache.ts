@@ -315,21 +315,23 @@ export const CACHE_KEYS = {
   positionLiquidity: (tokenId: string) => `position_liquidity_${tokenId}`,
 };
 
-// Default TTLs (optimized to reduce RPC calls)
+// Default TTLs (aligned with bot intervals - bots run every 15 min, so short TTLs waste RPC)
 export const CACHE_TTL = {
-  POSITION_CACHE: 60 * 1000, // 60 seconds
+  POSITION_CACHE: 2 * 60 * 1000, // 2 minutes
   INDEXER_STATE: 60 * 1000, // 1 minute
   POOL_DATA: 5 * 60 * 1000, // 5 minutes - pools don't change often
-  POOL_TICK: 30 * 1000, // 30 seconds (was 15s) - tick updates per block but bots run every 15min
-  POOL_SLOT0: 30 * 1000, // 30 seconds - same data as pool tick
-  POSITION_INFO: 2 * 60 * 1000, // 2 minutes (was 60s) - position tick range doesn't change
+  POOL_TICK: 3 * 60 * 1000, // 3 minutes (was 30s) - bots run every 15min, tick drift is gradual
+  POOL_SLOT0: 3 * 60 * 1000, // 3 minutes (was 30s) - same data as pool tick
+  POSITION_INFO: 5 * 60 * 1000, // 5 minutes (was 2min) - position tick range doesn't change
   TOKEN_PRICE: 5 * 60 * 1000, // 5 minutes - prices don't need real-time accuracy
-  COMPOUND_PROFITABLE: 60 * 1000, // 60 seconds - profitability doesn't change rapidly
-  PENDING_FEES: 30 * 1000, // 30 seconds - fees accrue slowly per block
-  GAS_PRICE: 15 * 1000, // 15 seconds - gas price changes but not every call
-  CHECK_REBALANCE: 30 * 1000, // 30 seconds - rebalance state changes slowly
-  POSITION_STATUS: 30 * 1000, // 30 seconds - tick position changes per block
-  RANGE_CONFIG: 2 * 60 * 1000, // 2 minutes - config rarely changes
-  REBALANCED_TO: 5 * 60 * 1000, // 5 minutes - immutable once set
-  POSITION_LIQUIDITY: 30 * 1000, // 30 seconds - only changes on user actions
+  COMPOUND_PROFITABLE: 5 * 60 * 1000, // 5 minutes (was 60s) - aligns with bot interval
+  PENDING_FEES: 3 * 60 * 1000, // 3 minutes (was 30s) - fees accrue slowly per block
+  GAS_PRICE: 60 * 1000, // 1 minute (was 15s) - gas on Base is stable
+  CHECK_REBALANCE: 5 * 60 * 1000, // 5 minutes (was 30s) - aligns with bot interval
+  POSITION_STATUS: 3 * 60 * 1000, // 3 minutes (was 30s) - tick position changes slowly
+  RANGE_CONFIG: 10 * 60 * 1000, // 10 minutes (was 2min) - config rarely changes
+  REBALANCED_TO: 30 * 60 * 1000, // 30 minutes (was 5min) - immutable once set
+  POSITION_LIQUIDITY: 3 * 60 * 1000, // 3 minutes (was 30s) - only changes on user actions
+  CALCULATE_OPTIMAL_RANGE: 5 * 60 * 1000, // 5 minutes - depends on current tick, cached per bot run
+  LAST_REBALANCE_TIME: 10 * 60 * 1000, // 10 minutes - only changes on rebalance
 };

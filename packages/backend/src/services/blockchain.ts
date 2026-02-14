@@ -284,8 +284,14 @@ export async function getAutoRangePositionInfo(tokenId: bigint): Promise<{
   return positionInfo;
 }
 
-// Get optimal range for a position
+// Get optimal range for a position (with caching)
 export async function calculateOptimalRange(tokenId: bigint): Promise<{ tickLower: number; tickUpper: number }> {
+  const cacheKey = `calc_optimal_range_${tokenId.toString()}`;
+  const cached = memoryCache.get<{ tickLower: number; tickUpper: number }>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const result = await publicClient.readContract({
     address: contracts.v4AutoRange as Address,
     abi: V4AutoRangeABI,
@@ -293,7 +299,12 @@ export async function calculateOptimalRange(tokenId: bigint): Promise<{ tickLowe
     args: [tokenId],
   }) as [number, number];
 
-  return { tickLower: result[0], tickUpper: result[1] };
+  const value = { tickLower: result[0], tickUpper: result[1] };
+
+  // Cache for 5 minutes (depends on current tick, refreshed each bot run)
+  memoryCache.set(cacheKey, value, CACHE_TTL.CALCULATE_OPTIMAL_RANGE);
+
+  return value;
 }
 
 // Compute poolId from poolKey
@@ -479,8 +490,14 @@ export async function getLatestPositionInChain(tokenId: bigint): Promise<bigint>
   }
 }
 
-// Get last rebalance time for a position
+// Get last rebalance time for a position (with caching)
 export async function getLastRebalanceTime(tokenId: bigint): Promise<number> {
+  const cacheKey = `last_rebalance_time_${tokenId.toString()}`;
+  const cached = memoryCache.get<number>(cacheKey);
+  if (cached !== null) {
+    return cached;
+  }
+
   const result = await publicClient.readContract({
     address: contracts.v4AutoRange as Address,
     abi: V4AutoRangeABI,
@@ -488,7 +505,12 @@ export async function getLastRebalanceTime(tokenId: bigint): Promise<number> {
     args: [tokenId],
   });
 
-  return Number(result as bigint);
+  const value = Number(result as bigint);
+
+  // Cache for 10 minutes (only changes on rebalance)
+  memoryCache.set(cacheKey, value, CACHE_TTL.LAST_REBALANCE_TIME);
+
+  return value;
 }
 
 // Export contracts for use in other modules

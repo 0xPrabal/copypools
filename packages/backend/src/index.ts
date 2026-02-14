@@ -1,14 +1,8 @@
 import { startServer } from './api/server.js';
 import { startAllBots, stopAllBots } from './bots/index.js';
-import { runNotificationChecks } from './services/notifications.js';
 import { closeConnection as closePonderDb } from './services/subgraph.js';
 import { logger } from './utils/logger.js';
 
-// Notification check interval (5 minutes)
-const NOTIFICATION_CHECK_INTERVAL = 5 * 60 * 1000;
-
-// Track intervals for cleanup
-let notificationInterval: ReturnType<typeof setInterval> | null = null;
 let server: any = null;
 
 async function main() {
@@ -17,21 +11,8 @@ async function main() {
   // Start API server (wait for database initialization to complete)
   server = await startServer();
 
-  // Start automation bots
+  // Start automation bots (includes notification service on 10-min CronJob)
   startAllBots();
-
-  // Start notification checker
-  logger.info('Starting notification checker...');
-  runNotificationChecks().catch(err => {
-    logger.error({ err }, 'Initial notification check failed');
-  });
-
-  // Schedule periodic notification checks
-  notificationInterval = setInterval(() => {
-    runNotificationChecks().catch(err => {
-      logger.error({ err }, 'Periodic notification check failed');
-    });
-  }, NOTIFICATION_CHECK_INTERVAL);
 
   logger.info('Copypools Backend started successfully');
 }
@@ -40,13 +21,7 @@ async function main() {
 async function shutdown(signal: string) {
   logger.info({ signal }, 'Shutdown signal received, draining...');
 
-  // Clear intervals
-  if (notificationInterval) {
-    clearInterval(notificationInterval);
-    notificationInterval = null;
-  }
-
-  // Stop bots
+  // Stop bots (includes notification CronJob)
   stopAllBots();
 
   // Close HTTP server (stop accepting new connections, drain existing)

@@ -383,9 +383,16 @@ async function triggerWebhooks(notification: Notification): Promise<void> {
 // Deduplicates with bot runs - if bots recently checked the same positions,
 // the blockchain calls will hit cache instead of making fresh RPC calls
 const NOTIFICATION_CHECK_CACHE_KEY = 'notification_check_last_run';
-const NOTIFICATION_CHECK_MIN_INTERVAL = 5 * 60 * 1000; // 5 minutes minimum between runs
+const NOTIFICATION_CHECK_MIN_INTERVAL = 8 * 60 * 1000; // 8 minutes minimum between runs
+let notificationCheckRunning = false; // Atomic lock to prevent concurrent runs
 
 export async function runNotificationChecks(): Promise<void> {
+  // Atomic lock — prevent concurrent execution from overlapping schedulers
+  if (notificationCheckRunning) {
+    notificationLogger.debug('Skipping notification checks - already running');
+    return;
+  }
+
   // Skip if we ran recently (prevents overlapping with bot cycles)
   const lastRun = memoryCache.get<number>(NOTIFICATION_CHECK_CACHE_KEY);
   if (lastRun && Date.now() - lastRun < NOTIFICATION_CHECK_MIN_INTERVAL) {
@@ -393,16 +400,21 @@ export async function runNotificationChecks(): Promise<void> {
     return;
   }
 
-  notificationLogger.info('Running notification checks');
+  notificationCheckRunning = true;
+  try {
+    notificationLogger.info('Running notification checks');
 
-  // Mark as running to prevent overlap
-  memoryCache.set(NOTIFICATION_CHECK_CACHE_KEY, Date.now(), NOTIFICATION_CHECK_MIN_INTERVAL);
+    // Mark as running to prevent overlap
+    memoryCache.set(NOTIFICATION_CHECK_CACHE_KEY, Date.now(), NOTIFICATION_CHECK_MIN_INTERVAL);
 
-  await Promise.all([
-    checkCompoundOpportunities(),
-    checkRebalanceNeeds(),
-    cleanup(30), // Clean up notifications older than 30 days
-  ]);
+    await Promise.all([
+      checkCompoundOpportunities(),
+      checkRebalanceNeeds(),
+      cleanup(30), // Clean up notifications older than 30 days
+    ]);
 
-  notificationLogger.info('Notification checks completed');
+    notificationLogger.info('Notification checks completed');
+  } finally {
+    notificationCheckRunning = false;
+  }
 }

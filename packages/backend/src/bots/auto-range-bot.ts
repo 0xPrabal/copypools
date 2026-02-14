@@ -116,13 +116,27 @@ function estimatePositionAmounts(
 
 // Scan a block range for RangeConfigured, RangeRemoved, and Rebalanced events
 async function scanBlockRange(fromBlock: bigint, toBlock: bigint): Promise<void> {
-  // Scan for RangeConfigured events
-  const configuredLogs = await publicClient.getLogs({
-    address: contracts.v4AutoRange as Address,
-    event: parseAbiItem('event RangeConfigured(uint256 indexed tokenId, address indexed owner, int24 lowerDelta, int24 upperDelta, uint32 rebalanceThreshold)'),
-    fromBlock,
-    toBlock,
-  });
+  // Batch all 3 getLogs calls in parallel to reduce wall-clock time
+  const [configuredLogs, removedLogs, rebalancedLogs] = await Promise.all([
+    publicClient.getLogs({
+      address: contracts.v4AutoRange as Address,
+      event: parseAbiItem('event RangeConfigured(uint256 indexed tokenId, address indexed owner, int24 lowerDelta, int24 upperDelta, uint32 rebalanceThreshold)'),
+      fromBlock,
+      toBlock,
+    }),
+    publicClient.getLogs({
+      address: contracts.v4AutoRange as Address,
+      event: parseAbiItem('event RangeRemoved(uint256 indexed tokenId)'),
+      fromBlock,
+      toBlock,
+    }),
+    publicClient.getLogs({
+      address: contracts.v4AutoRange as Address,
+      event: parseAbiItem('event Rebalanced(uint256 indexed oldTokenId, uint256 indexed newTokenId, int24 newTickLower, int24 newTickUpper, uint128 liquidity, uint256 fee0, uint256 fee1)'),
+      fromBlock,
+      toBlock,
+    }),
+  ]);
 
   for (const log of configuredLogs) {
     const tokenId = (log.args as any).tokenId?.toString();
@@ -132,14 +146,6 @@ async function scanBlockRange(fromBlock: bigint, toBlock: bigint): Promise<void>
     }
   }
 
-  // Scan for RangeRemoved events
-  const removedLogs = await publicClient.getLogs({
-    address: contracts.v4AutoRange as Address,
-    event: parseAbiItem('event RangeRemoved(uint256 indexed tokenId)'),
-    fromBlock,
-    toBlock,
-  });
-
   for (const log of removedLogs) {
     const tokenId = (log.args as any).tokenId?.toString();
     if (tokenId) {
@@ -148,14 +154,8 @@ async function scanBlockRange(fromBlock: bigint, toBlock: bigint): Promise<void>
     }
   }
 
-  // Scan for Rebalanced events to track new positions and update last rebalance time
-  const rebalancedLogs = await publicClient.getLogs({
-    address: contracts.v4AutoRange as Address,
-    event: parseAbiItem('event Rebalanced(uint256 indexed oldTokenId, uint256 indexed newTokenId, int24 newTickLower, int24 newTickUpper, uint128 liquidity, uint256 fee0, uint256 fee1)'),
-    fromBlock,
-    toBlock,
-  });
-
+  // Deduplicate block fetches for Rebalanced events
+  const blockTimestampCache = new Map<bigint, number>();
   for (const log of rebalancedLogs) {
     const oldTokenId = (log.args as any).oldTokenId?.toString();
     const newTokenId = (log.args as any).newTokenId?.toString();
@@ -163,13 +163,18 @@ async function scanBlockRange(fromBlock: bigint, toBlock: bigint): Promise<void>
       knownRangePositions.delete(oldTokenId);
       knownRangePositions.add(newTokenId);
 
-      // Get block timestamp for last rebalance time
-      try {
-        const block = await publicClient.getBlock({ blockNumber: log.blockNumber });
-        lastRebalanceTimeCache.set(newTokenId, Number(block.timestamp));
-      } catch {
-        lastRebalanceTimeCache.set(newTokenId, Math.floor(Date.now() / 1000));
+      // Use cached block timestamp to avoid duplicate getBlock calls
+      let timestamp = blockTimestampCache.get(log.blockNumber);
+      if (timestamp === undefined) {
+        try {
+          const block = await publicClient.getBlock({ blockNumber: log.blockNumber });
+          timestamp = Number(block.timestamp);
+          blockTimestampCache.set(log.blockNumber, timestamp);
+        } catch {
+          timestamp = Math.floor(Date.now() / 1000);
+        }
       }
+      lastRebalanceTimeCache.set(newTokenId, timestamp);
 
       botLogger.info({ oldTokenId, newTokenId, block: log.blockNumber.toString() }, 'Found Rebalanced event');
     }
@@ -212,6 +217,10 @@ async function saveStateToDb(): Promise<void> {
   }
 }
 
+// Max blocks to scan per bot run to cap RPC usage (10 chunks × 3 parallel getLogs = 30 RPC calls max)
+const MAX_CHUNKS_PER_RUN = 10;
+const CHUNK_SIZE = BigInt(10000);
+
 // Scan blockchain for RangeConfigured events
 async function scanForRangeConfiguredEvents(): Promise<void> {
   try {
@@ -219,30 +228,48 @@ async function scanForRangeConfiguredEvents(): Promise<void> {
     const currentBlock = await publicClient.getBlockNumber();
 
     if (lastScannedBlock <= CONTRACT_START_BLOCK) {
-      botLogger.info({ fromBlock: CONTRACT_START_BLOCK.toString(), toBlock: currentBlock.toString() }, 'Starting initial full scan for events');
+      // If we have positions from DB already, skip the full historical scan
+      // and only scan recent blocks. The DB is the primary source of truth.
+      if (knownRangePositions.size > 0) {
+        // We already have positions from the DB — just scan recent blocks for new events
+        const recentStart = currentBlock > BigInt(50000) ? currentBlock - BigInt(50000) : CONTRACT_START_BLOCK;
+        botLogger.info({
+          positionsFromDb: knownRangePositions.size,
+          scanFrom: recentStart.toString(),
+        }, 'Skipping full historical scan — positions loaded from DB, scanning recent blocks only');
+        lastScannedBlock = recentStart;
+      } else {
+        // No DB positions — need full scan, but cap chunks per run to limit RPC
+        botLogger.info({ fromBlock: CONTRACT_START_BLOCK.toString(), toBlock: currentBlock.toString() }, 'Starting initial scan (capped per run)');
+        let scanFrom = CONTRACT_START_BLOCK;
+        let chunksScanned = 0;
 
-      const chunkSize = BigInt(10000);
-      let scanFrom = CONTRACT_START_BLOCK;
+        while (scanFrom < currentBlock && chunksScanned < MAX_CHUNKS_PER_RUN) {
+          const scanTo = scanFrom + CHUNK_SIZE > currentBlock ? currentBlock : scanFrom + CHUNK_SIZE;
+          botLogger.debug({ fromBlock: scanFrom.toString(), toBlock: scanTo.toString() }, 'Scanning chunk');
+          await scanBlockRange(scanFrom, scanTo);
+          scanFrom = scanTo + BigInt(1);
+          chunksScanned++;
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
 
-      while (scanFrom < currentBlock) {
-        const scanTo = scanFrom + chunkSize > currentBlock ? currentBlock : scanFrom + chunkSize;
-        botLogger.debug({ fromBlock: scanFrom.toString(), toBlock: scanTo.toString() }, 'Scanning chunk');
-        await scanBlockRange(scanFrom, scanTo);
-        scanFrom = scanTo + BigInt(1);
-        await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay to reduce RPC load
+        lastScannedBlock = scanFrom;
+        botLogger.info({
+          positionsFound: knownRangePositions.size,
+          chunksScanned,
+          scanProgress: `${lastScannedBlock.toString()} / ${currentBlock.toString()}`,
+        }, chunksScanned >= MAX_CHUNKS_PER_RUN ? 'Scan paused (chunk limit reached, will continue next run)' : 'Initial scan complete');
+        await saveStateToDb();
+        return;
       }
-
-      lastScannedBlock = currentBlock + BigInt(1);
-      botLogger.info({ positionsFound: knownRangePositions.size, positions: Array.from(knownRangePositions) }, 'Initial scan complete');
-      await saveStateToDb();
-      return;
     }
 
     if (currentBlock < lastScannedBlock) {
       return;
     }
 
-    const maxBlocksPerScan = BigInt(10000);
+    // Incremental scan — cap at MAX_CHUNKS_PER_RUN chunks
+    const maxBlocksPerScan = CHUNK_SIZE * BigInt(MAX_CHUNKS_PER_RUN);
     const toBlock = lastScannedBlock + maxBlocksPerScan > currentBlock
       ? currentBlock
       : lastScannedBlock + maxBlocksPerScan;
@@ -292,7 +319,9 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     const rebalancedTo = await getRebalancedTo(tokenIdBigInt);
     if (rebalancedTo > 0n) {
       recordStatus(tokenId, `Skipped: Already rebalanced to ${rebalancedTo}`);
-      botLogger.debug({ tokenId, rebalancedTo: rebalancedTo.toString() }, 'Position already rebalanced');
+      botLogger.debug({ tokenId, rebalancedTo: rebalancedTo.toString() }, 'Position already rebalanced, removing from tracking');
+      // Permanently remove stale position — the new tokenId is tracked instead
+      knownRangePositions.delete(tokenId);
       return { rebalanced: false, decision: null, analysis: null };
     }
 
@@ -311,10 +340,11 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
       return { rebalanced: false, decision: null, analysis: null };
     }
 
-    // Skip empty positions
+    // Skip empty positions and remove from tracking
     if (realLiquidity === 0n) {
       recordStatus(tokenId, 'Skipped: 0 liquidity (verified from PositionManager)');
-      botLogger.debug({ tokenId }, 'Position has 0 liquidity');
+      botLogger.debug({ tokenId }, 'Position has 0 liquidity, removing from tracking');
+      knownRangePositions.delete(tokenId);
       return { rebalanced: false, decision: null, analysis: null };
     }
 
@@ -390,18 +420,11 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     const priceHistory = getPriceHistory(poolId);
     const volatility = calculateVolatility(priceHistory);
 
-    // Get last rebalance time
+    // Get last rebalance time (uses cached blockchain call)
     let lastRebalanceTime = lastRebalanceTimeCache.get(tokenId) || 0;
     if (lastRebalanceTime === 0) {
-      // Try to get from contract
       try {
-        const contractTime = await publicClient.readContract({
-          address: contracts.v4AutoRange as Address,
-          abi: [{ name: 'lastRebalanceTime', type: 'function', stateMutability: 'view', inputs: [{ name: 'tokenId', type: 'uint256' }], outputs: [{ name: '', type: 'uint256' }] }],
-          functionName: 'lastRebalanceTime',
-          args: [tokenIdBigInt],
-        }) as bigint;
-        lastRebalanceTime = Number(contractTime);
+        lastRebalanceTime = await blockchain.getLastRebalanceTime(tokenIdBigInt);
         lastRebalanceTimeCache.set(tokenId, lastRebalanceTime);
       } catch {
         // Not found, use 0
@@ -427,17 +450,6 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
     }
 
     recordStatus(tokenId, `Decision: Should rebalance - ${decision.reason}`);
-
-    // Double-check contract's checkRebalance (it enforces cooldown)
-    const { needsRebalance: contractAllows } = await blockchain.checkRebalance(tokenIdBigInt);
-
-    // Always respect the contract's decision - it enforces cooldown and other constraints
-    if (!contractAllows) {
-      recordStatus(tokenId, 'Blocked: Contract checkRebalance returned false');
-      botLogger.debug({ tokenId }, 'Contract checkRebalance returned false, respecting cooldown');
-      return { rebalanced: false, decision, analysis };
-    }
-
     recordStatus(tokenId, 'Executing rebalance...');
 
     // Get new range
@@ -563,8 +575,8 @@ async function runAutoRangeBot(): Promise<void> {
         analyses.push(analysis);
       }
 
-      // Rate limiting - but faster than before since we're smarter about decisions
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Rate limiting between positions (100ms is enough with proper caching)
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
     // Log summary
