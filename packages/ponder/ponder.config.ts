@@ -35,6 +35,7 @@ export default createConfig({
   database: {
     kind: "postgres",
     connectionString: process.env.DATABASE_URL,
+    schema: process.env.PONDER_SCHEMA || "ponder",
   },
   chains: {
     base: {
