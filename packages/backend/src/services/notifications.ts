@@ -10,6 +10,12 @@ import {
   markAllNotificationsAsRead,
   getUnreadNotificationCount,
   cleanupOldNotifications,
+  createWebhookSubscription,
+  getAllActiveWebhooks,
+  deleteWebhookSubscription,
+  upsertWebhookDelivery,
+  cleanupOldDeliveries,
+  cleanupOldPriceSamples,
   type DbNotification,
   type NotificationType,
 } from './database.js';
@@ -33,7 +39,7 @@ export interface Notification {
   read: boolean;
 }
 
-// Webhook subscriptions still in-memory (can be migrated to DB later if needed)
+// Webhook subscriptions: in-memory Map backed by PostgreSQL for persistence across restarts
 const webhookSubscriptions: Map<string, WebhookSubscription[]> = new Map();
 
 export interface WebhookSubscription {
@@ -44,6 +50,33 @@ export interface WebhookSubscription {
   secret?: string;
   active: boolean;
   createdAt: number;
+}
+
+/**
+ * Load all active webhook subscriptions from the database into memory.
+ * Call this on startup after initializeDatabase().
+ */
+export async function initializeWebhooks(): Promise<void> {
+  try {
+    const dbSubs = await getAllActiveWebhooks();
+    for (const dbSub of dbSubs) {
+      const sub: WebhookSubscription = {
+        id: dbSub.id,
+        url: dbSub.url,
+        events: dbSub.events as NotificationType[],
+        owner: dbSub.owner,
+        secret: dbSub.secret,
+        active: dbSub.active,
+        createdAt: dbSub.createdAt.getTime(),
+      };
+      const existing = webhookSubscriptions.get(sub.owner) || [];
+      existing.push(sub);
+      webhookSubscriptions.set(sub.owner, existing);
+    }
+    notificationLogger.info({ count: dbSubs.length }, 'Webhook subscriptions loaded from database');
+  } catch (error) {
+    notificationLogger.warn({ error }, 'Failed to load webhook subscriptions from database');
+  }
 }
 
 // Create notification - stores in database
@@ -186,14 +219,25 @@ export async function checkRebalanceNeeds(): Promise<void> {
   }
 }
 
-// Webhook management
-export function subscribeWebhook(subscription: Omit<WebhookSubscription, 'id' | 'createdAt'>): WebhookSubscription {
+// Webhook management (write-through: DB first, then in-memory)
+export async function subscribeWebhook(subscription: Omit<WebhookSubscription, 'id' | 'createdAt'>): Promise<WebhookSubscription> {
   const newSubscription: WebhookSubscription = {
     ...subscription,
     id: `wh-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     createdAt: Date.now(),
   };
 
+  // Persist to database first
+  await createWebhookSubscription({
+    id: newSubscription.id,
+    url: newSubscription.url,
+    events: newSubscription.events as string[],
+    owner: newSubscription.owner,
+    secret: newSubscription.secret,
+    active: newSubscription.active,
+  });
+
+  // Then update in-memory Map
   const existing = webhookSubscriptions.get(subscription.owner) || [];
   existing.push(newSubscription);
   webhookSubscriptions.set(subscription.owner, existing);
@@ -203,7 +247,11 @@ export function subscribeWebhook(subscription: Omit<WebhookSubscription, 'id' | 
   return newSubscription;
 }
 
-export function unsubscribeWebhook(owner: string, webhookId: string): boolean {
+export async function unsubscribeWebhook(owner: string, webhookId: string): Promise<boolean> {
+  // Delete from database first
+  await deleteWebhookSubscription(webhookId, owner);
+
+  // Then remove from in-memory Map
   const subscriptions = webhookSubscriptions.get(owner);
   if (!subscriptions) return false;
 
@@ -279,6 +327,14 @@ async function deliverWebhookWithRetry(
           status: 'success',
         });
 
+        // Fire-and-forget: persist to DB
+        upsertWebhookDelivery({
+          webhookId: subscription.id,
+          notificationId,
+          attempts: attempt,
+          status: 'success',
+        }).catch(() => {});
+
         notificationLogger.debug(
           { webhookId: subscription.id, notificationId, attempt },
           'Webhook delivered successfully'
@@ -324,6 +380,15 @@ async function deliverWebhookWithRetry(
     status: 'failed',
     lastError,
   });
+
+  // Fire-and-forget: persist failure to DB
+  upsertWebhookDelivery({
+    webhookId: subscription.id,
+    notificationId,
+    attempts: WEBHOOK_RETRY_CONFIG.maxAttempts,
+    status: 'failed',
+    lastError,
+  }).catch(() => {});
 
   notificationLogger.error(
     {
@@ -411,6 +476,8 @@ export async function runNotificationChecks(): Promise<void> {
       checkCompoundOpportunities(),
       checkRebalanceNeeds(),
       cleanup(30), // Clean up notifications older than 30 days
+      cleanupOldDeliveries(7), // Clean up webhook deliveries older than 7 days
+      cleanupOldPriceSamples(24), // Clean up price samples older than 24 hours
     ]);
 
     notificationLogger.info('Notification checks completed');

@@ -81,6 +81,8 @@ router.get('/cache', async (_req: Request, res: Response) => {
       memoryEstimateBytes: metrics.memoryEstimateBytes,
       memoryEstimateMB: Math.round(metrics.memoryEstimateBytes / 1024 / 1024 * 100) / 100,
       uptimeMs: metrics.uptimeMs,
+      redisConnected: metrics.redisConnected,
+      cacheMode: metrics.cacheMode,
     });
   } catch (error) {
     healthLogger.error({ error }, 'Failed to get cache metrics');
@@ -285,6 +287,8 @@ router.get('/full', async (_req: Request, res: Response) => {
           maxSize: cacheMetrics.maxSize,
           hitRate: cacheMetrics.hitRate,
           evictions: cacheMetrics.evictions,
+          redisConnected: cacheMetrics.redisConnected,
+          cacheMode: cacheMetrics.cacheMode,
         },
         rateLimit: {
           status: rateLimitStats.queueLength < 20 ? 'normal' : 'congested',

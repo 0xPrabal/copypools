@@ -15,6 +15,8 @@ import { pricesRouter } from './routes/prices.js';
 import { swapRouter } from './routes/swap.js';
 import { initializeDatabase, healthCheck as dbHealthCheck, getStats as dbStats } from '../services/database.js';
 import { memoryCache } from '../services/cache.js';
+import { initializeWebhooks } from '../services/notifications.js';
+import { initializePriceHistory } from '../services/smart-rebalance.js';
 import { rpcManager } from '../services/rpc-manager.js';
 import {
   apiRateLimiter,
@@ -129,6 +131,27 @@ export async function startServer() {
     apiLogger.info('Database initialized for position caching');
   } catch (error) {
     apiLogger.warn({ error }, 'Database initialization failed - position caching disabled');
+  }
+
+  // Connect Redis cache (graceful: warns on failure, falls back to in-memory)
+  try {
+    await memoryCache.connect(config.REDIS_URL);
+  } catch (error) {
+    apiLogger.warn({ error }, 'Redis connection failed - using in-memory cache only');
+  }
+
+  // Load persisted webhook subscriptions from DB into memory
+  try {
+    await initializeWebhooks();
+  } catch (error) {
+    apiLogger.warn({ error }, 'Failed to load webhook subscriptions');
+  }
+
+  // Load persisted price history from DB into memory
+  try {
+    await initializePriceHistory();
+  } catch (error) {
+    apiLogger.warn({ error }, 'Failed to load price history');
   }
 
   const app = createServer();

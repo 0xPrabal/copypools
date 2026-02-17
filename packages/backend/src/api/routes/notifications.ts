@@ -110,7 +110,7 @@ router.post('/:address/webhooks', validateAddress, async (req: Request, res: Res
       });
     }
 
-    const subscription = notifications.subscribeWebhook({
+    const subscription = await notifications.subscribeWebhook({
       url,
       events,
       owner: address,
@@ -148,7 +148,7 @@ router.get('/:address/webhooks', validateAddress, async (req: Request, res: Resp
 router.delete('/:address/webhooks/:webhookId', validateAddress, async (req: Request, res: Response) => {
   try {
     const { address, webhookId } = req.params;
-    const success = notifications.unsubscribeWebhook(address, webhookId);
+    const success = await notifications.unsubscribeWebhook(address, webhookId);
 
     if (success) {
       res.json({ success: true });

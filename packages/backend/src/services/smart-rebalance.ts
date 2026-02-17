@@ -14,6 +14,10 @@
  */
 
 import { logger } from '../utils/logger.js';
+import {
+  insertPriceSample as dbInsertPriceSample,
+  getRecentPriceSamplesForAllPools,
+} from './database.js';
 
 const smartLogger = logger.child({ service: 'smart-rebalance' });
 
@@ -80,6 +84,24 @@ export interface RebalanceDecision {
 const priceHistoryCache = new Map<string, PriceHistory[]>();
 const PRICE_HISTORY_MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours
 const PRICE_HISTORY_SAMPLE_INTERVAL = 60 * 1000; // 1 minute between samples
+
+/**
+ * Load recent price history from the database into the in-memory cache.
+ * Call this on startup after initializeDatabase().
+ */
+export async function initializePriceHistory(): Promise<void> {
+  try {
+    const allSamples = await getRecentPriceSamplesForAllPools(24);
+    let totalSamples = 0;
+    for (const [poolId, samples] of allSamples) {
+      priceHistoryCache.set(poolId, samples.map(s => ({ tick: s.tick, timestamp: s.timestamp })));
+      totalSamples += samples.length;
+    }
+    smartLogger.info({ pools: allSamples.size, samples: totalSamples }, 'Price history loaded from database');
+  } catch (error) {
+    smartLogger.warn({ error }, 'Failed to load price history from database');
+  }
+}
 
 // ============ Core Analysis Functions ============
 
@@ -254,6 +276,9 @@ export function recordPriceSample(poolId: string, tick: number): void {
   }
 
   history.push({ tick, timestamp: now });
+
+  // Fire-and-forget: persist to database
+  dbInsertPriceSample(poolId, tick).catch(() => {});
 
   // Clean old samples
   const cutoff = now - PRICE_HISTORY_MAX_AGE;

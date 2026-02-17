@@ -1,6 +1,7 @@
 import { startServer } from './api/server.js';
 import { startAllBots, stopAllBots } from './bots/index.js';
 import { closeConnection as closePonderDb } from './services/subgraph.js';
+import { memoryCache } from './services/cache.js';
 import { logger } from './utils/logger.js';
 
 let server: any = null;
@@ -37,6 +38,13 @@ async function shutdown(signal: string) {
         resolve();
       }, 10_000);
     });
+  }
+
+  // Disconnect Redis cache
+  try {
+    await memoryCache.disconnect();
+  } catch (err) {
+    logger.error({ err }, 'Error disconnecting Redis cache');
   }
 
   // Close database connections

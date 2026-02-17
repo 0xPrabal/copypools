@@ -20,6 +20,10 @@ import {
   PositionAnalysis,
   RebalanceDecision,
 } from '../services/smart-rebalance.js';
+import {
+  insertEventCacheBatch,
+  getActiveRangeTokenIds,
+} from '../services/database.js';
 
 const botLogger = logger.child({ bot: 'auto-range' });
 
@@ -138,10 +142,20 @@ async function scanBlockRange(fromBlock: bigint, toBlock: bigint): Promise<void>
     }),
   ]);
 
+  // Collect events for batch insert into event_cache
+  const eventsToCache: Array<{ eventType: string; tokenId: string; blockNumber: bigint; logIndex: number; data?: Record<string, unknown> }> = [];
+
   for (const log of configuredLogs) {
     const tokenId = (log.args as any).tokenId?.toString();
     if (tokenId) {
       knownRangePositions.add(tokenId);
+      eventsToCache.push({
+        eventType: 'RangeConfigured',
+        tokenId,
+        blockNumber: log.blockNumber,
+        logIndex: log.logIndex ?? 0,
+        data: { owner: (log.args as any).owner },
+      });
       botLogger.info({ tokenId, block: log.blockNumber.toString() }, 'Found RangeConfigured event');
     }
   }
@@ -150,6 +164,12 @@ async function scanBlockRange(fromBlock: bigint, toBlock: bigint): Promise<void>
     const tokenId = (log.args as any).tokenId?.toString();
     if (tokenId) {
       knownRangePositions.delete(tokenId);
+      eventsToCache.push({
+        eventType: 'RangeRemoved',
+        tokenId,
+        blockNumber: log.blockNumber,
+        logIndex: log.logIndex ?? 0,
+      });
       botLogger.info({ tokenId, block: log.blockNumber.toString() }, 'Found RangeRemoved event');
     }
   }
@@ -162,6 +182,14 @@ async function scanBlockRange(fromBlock: bigint, toBlock: bigint): Promise<void>
     if (oldTokenId && newTokenId) {
       knownRangePositions.delete(oldTokenId);
       knownRangePositions.add(newTokenId);
+
+      eventsToCache.push({
+        eventType: 'Rebalanced',
+        tokenId: newTokenId,
+        blockNumber: log.blockNumber,
+        logIndex: log.logIndex ?? 0,
+        data: { oldTokenId, newTokenId },
+      });
 
       // Use cached block timestamp to avoid duplicate getBlock calls
       let timestamp = blockTimestampCache.get(log.blockNumber);
@@ -178,6 +206,13 @@ async function scanBlockRange(fromBlock: bigint, toBlock: bigint): Promise<void>
 
       botLogger.info({ oldTokenId, newTokenId, block: log.blockNumber.toString() }, 'Found Rebalanced event');
     }
+  }
+
+  // Fire-and-forget: persist events to database
+  if (eventsToCache.length > 0) {
+    insertEventCacheBatch(eventsToCache).catch((err) => {
+      botLogger.debug({ err, count: eventsToCache.length }, 'Failed to cache events to database');
+    });
   }
 }
 
@@ -198,6 +233,23 @@ async function loadStateFromDb(): Promise<void> {
       }, 'Loaded bot state from database');
     } else {
       botLogger.info('No saved state found, will scan from contract deployment block');
+    }
+
+    // Supplement with event_cache table (catches events persisted between restarts)
+    try {
+      const cachedTokenIds = await getActiveRangeTokenIds();
+      if (cachedTokenIds.size > 0) {
+        const beforeCount = knownRangePositions.size;
+        for (const tokenId of cachedTokenIds) {
+          knownRangePositions.add(tokenId);
+        }
+        const added = knownRangePositions.size - beforeCount;
+        if (added > 0) {
+          botLogger.info({ added, total: knownRangePositions.size }, 'Supplemented positions from event_cache');
+        }
+      }
+    } catch (ecError) {
+      botLogger.debug({ error: ecError }, 'Could not supplement from event_cache');
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

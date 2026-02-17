@@ -335,6 +335,66 @@ export async function initializeDatabase(): Promise<void> {
     // Initialize notifications table
     await initializeNotificationsTable();
 
+    // Initialize webhook subscriptions table (persists webhooks across restarts)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+        id VARCHAR(64) PRIMARY KEY,
+        url VARCHAR(2048) NOT NULL,
+        events TEXT[] NOT NULL DEFAULT '{}',
+        owner VARCHAR(42) NOT NULL,
+        secret VARCHAR(256),
+        active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_ws_owner ON webhook_subscriptions(LOWER(owner))`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_ws_active ON webhook_subscriptions(active) WHERE active = true`);
+
+    // Initialize webhook deliveries table (tracks delivery attempts and status)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS webhook_deliveries (
+        id SERIAL PRIMARY KEY,
+        webhook_id VARCHAR(64) NOT NULL,
+        notification_id VARCHAR(64) NOT NULL,
+        attempts INTEGER DEFAULT 0,
+        last_attempt TIMESTAMP WITH TIME ZONE,
+        status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        last_error TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_wd_status ON webhook_deliveries(status) WHERE status = 'failed'`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_wd_created ON webhook_deliveries(created_at DESC)`);
+
+    // Initialize price samples table (persists price history for volatility calculations)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS price_samples (
+        id BIGSERIAL PRIMARY KEY,
+        pool_id VARCHAR(256) NOT NULL,
+        tick INTEGER NOT NULL,
+        timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_ps_pool_ts ON price_samples(pool_id, timestamp DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_ps_cleanup ON price_samples(timestamp)`);
+
+    // Initialize event cache table (persists blockchain events for fast recovery)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS event_cache (
+        id BIGSERIAL PRIMARY KEY,
+        event_type VARCHAR(32) NOT NULL,
+        token_id VARCHAR(78) NOT NULL,
+        block_number BIGINT NOT NULL,
+        log_index INTEGER NOT NULL DEFAULT 0,
+        data JSONB,
+        timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        UNIQUE(event_type, block_number, log_index)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_ec_type_token ON event_cache(event_type, token_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_ec_block ON event_cache(block_number DESC)`);
+
     dbLogger.info('Database schema initialized successfully');
   } catch (error) {
     dbLogger.error({ error }, 'Failed to initialize database schema');
@@ -1347,6 +1407,323 @@ export async function getUnreadNotificationCount(owner: string): Promise<number>
   } catch (error) {
     dbLogger.error({ error, owner }, 'Failed to get unread notification count');
     return 0;
+  }
+}
+
+// ============ Webhook Subscription Functions ============
+
+export interface DbWebhookSubscription {
+  id: string;
+  url: string;
+  events: string[];
+  owner: string;
+  secret?: string;
+  active: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export async function createWebhookSubscription(sub: {
+  id: string;
+  url: string;
+  events: string[];
+  owner: string;
+  secret?: string;
+  active: boolean;
+}): Promise<void> {
+  if (!pool) return;
+
+  try {
+    await pool.query(
+      `INSERT INTO webhook_subscriptions (id, url, events, owner, secret, active)
+       VALUES ($1, $2, $3, LOWER($4), $5, $6)
+       ON CONFLICT (id) DO UPDATE SET
+         url = $2, events = $3, secret = $5, active = $6, updated_at = NOW()`,
+      [sub.id, sub.url, sub.events, sub.owner, sub.secret || null, sub.active]
+    );
+  } catch (error) {
+    dbLogger.error({ error, id: sub.id }, 'Failed to create webhook subscription');
+  }
+}
+
+export async function getWebhooksByOwner(owner: string): Promise<DbWebhookSubscription[]> {
+  if (!pool) return [];
+
+  try {
+    const result = await pool.query(
+      `SELECT id, url, events, owner, secret, active, created_at, updated_at
+       FROM webhook_subscriptions
+       WHERE LOWER(owner) = LOWER($1) AND active = true`,
+      [owner]
+    );
+    return result.rows.map(row => ({
+      id: row.id,
+      url: row.url,
+      events: row.events || [],
+      owner: row.owner,
+      secret: row.secret || undefined,
+      active: row.active,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  } catch (error) {
+    dbLogger.error({ error, owner }, 'Failed to get webhooks by owner');
+    return [];
+  }
+}
+
+export async function deleteWebhookSubscription(id: string, owner: string): Promise<boolean> {
+  if (!pool) return false;
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM webhook_subscriptions WHERE id = $1 AND LOWER(owner) = LOWER($2)`,
+      [id, owner]
+    );
+    return (result.rowCount ?? 0) > 0;
+  } catch (error) {
+    dbLogger.error({ error, id }, 'Failed to delete webhook subscription');
+    return false;
+  }
+}
+
+export async function getAllActiveWebhooks(): Promise<DbWebhookSubscription[]> {
+  if (!pool) return [];
+
+  try {
+    const result = await pool.query(
+      `SELECT id, url, events, owner, secret, active, created_at, updated_at
+       FROM webhook_subscriptions WHERE active = true`
+    );
+    return result.rows.map(row => ({
+      id: row.id,
+      url: row.url,
+      events: row.events || [],
+      owner: row.owner,
+      secret: row.secret || undefined,
+      active: row.active,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to get all active webhooks');
+    return [];
+  }
+}
+
+// ============ Webhook Delivery Functions ============
+
+export async function upsertWebhookDelivery(delivery: {
+  webhookId: string;
+  notificationId: string;
+  attempts: number;
+  status: 'pending' | 'success' | 'failed';
+  lastError?: string;
+}): Promise<void> {
+  if (!pool) return;
+
+  try {
+    await pool.query(
+      `INSERT INTO webhook_deliveries (webhook_id, notification_id, attempts, last_attempt, status, last_error)
+       VALUES ($1, $2, $3, NOW(), $4, $5)`,
+      [delivery.webhookId, delivery.notificationId, delivery.attempts, delivery.status, delivery.lastError || null]
+    );
+  } catch (error) {
+    dbLogger.error({ error, webhookId: delivery.webhookId }, 'Failed to upsert webhook delivery');
+  }
+}
+
+export async function getRecentFailedDeliveries(limit: number = 20): Promise<Array<{
+  webhookId: string;
+  notificationId: string;
+  attempts: number;
+  lastAttempt: Date;
+  status: string;
+  lastError?: string;
+}>> {
+  if (!pool) return [];
+
+  try {
+    const result = await pool.query(
+      `SELECT webhook_id, notification_id, attempts, last_attempt, status, last_error
+       FROM webhook_deliveries
+       WHERE status = 'failed'
+       ORDER BY last_attempt DESC
+       LIMIT $1`,
+      [limit]
+    );
+    return result.rows.map(row => ({
+      webhookId: row.webhook_id,
+      notificationId: row.notification_id,
+      attempts: row.attempts,
+      lastAttempt: row.last_attempt,
+      status: row.status,
+      lastError: row.last_error || undefined,
+    }));
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to get recent failed deliveries');
+    return [];
+  }
+}
+
+export async function cleanupOldDeliveries(daysOld: number = 7): Promise<number> {
+  if (!pool) return 0;
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM webhook_deliveries WHERE created_at < NOW() - make_interval(days => $1)`,
+      [daysOld]
+    );
+    return result.rowCount ?? 0;
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to cleanup old deliveries');
+    return 0;
+  }
+}
+
+// ============ Price Sample Functions ============
+
+export async function insertPriceSample(poolId: string, tick: number): Promise<void> {
+  if (!pool) return;
+
+  try {
+    await pool.query(
+      `INSERT INTO price_samples (pool_id, tick) VALUES ($1, $2)`,
+      [poolId, tick]
+    );
+  } catch (error) {
+    dbLogger.error({ error, poolId }, 'Failed to insert price sample');
+  }
+}
+
+export async function getPriceSamples(poolId: string, hoursBack: number = 24): Promise<Array<{ tick: number; timestamp: number }>> {
+  if (!pool) return [];
+
+  try {
+    const result = await pool.query(
+      `SELECT tick, timestamp
+       FROM price_samples
+       WHERE pool_id = $1 AND timestamp > NOW() - make_interval(hours => $2)
+       ORDER BY timestamp ASC`,
+      [poolId, hoursBack]
+    );
+    return result.rows.map(row => ({
+      tick: row.tick,
+      timestamp: new Date(row.timestamp).getTime(),
+    }));
+  } catch (error) {
+    dbLogger.error({ error, poolId }, 'Failed to get price samples');
+    return [];
+  }
+}
+
+export async function cleanupOldPriceSamples(hoursOld: number = 24): Promise<number> {
+  if (!pool) return 0;
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM price_samples WHERE timestamp < NOW() - make_interval(hours => $1)`,
+      [hoursOld]
+    );
+    return result.rowCount ?? 0;
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to cleanup old price samples');
+    return 0;
+  }
+}
+
+export async function getRecentPriceSamplesForAllPools(hoursBack: number = 24): Promise<Map<string, Array<{ tick: number; timestamp: number }>>> {
+  if (!pool) return new Map();
+
+  try {
+    const result = await pool.query(
+      `SELECT pool_id, tick, timestamp
+       FROM price_samples
+       WHERE timestamp > NOW() - make_interval(hours => $1)
+       ORDER BY pool_id, timestamp ASC`,
+      [hoursBack]
+    );
+
+    const map = new Map<string, Array<{ tick: number; timestamp: number }>>();
+    for (const row of result.rows) {
+      const poolId = row.pool_id;
+      if (!map.has(poolId)) map.set(poolId, []);
+      map.get(poolId)!.push({
+        tick: row.tick,
+        timestamp: new Date(row.timestamp).getTime(),
+      });
+    }
+    return map;
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to get recent price samples for all pools');
+    return new Map();
+  }
+}
+
+// ============ Event Cache Functions ============
+
+export async function insertEventCacheBatch(events: Array<{
+  eventType: string;
+  tokenId: string;
+  blockNumber: bigint;
+  logIndex: number;
+  data?: Record<string, unknown>;
+}>): Promise<void> {
+  if (!pool || events.length === 0) return;
+
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const evt of events) {
+        await client.query(
+          `INSERT INTO event_cache (event_type, token_id, block_number, log_index, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (event_type, block_number, log_index) DO NOTHING`,
+          [evt.eventType, evt.tokenId, Number(evt.blockNumber), evt.logIndex, evt.data ? JSON.stringify(evt.data) : null]
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    dbLogger.error({ error, count: events.length }, 'Failed to insert event cache batch');
+  }
+}
+
+export async function getLatestEventBlock(): Promise<bigint> {
+  if (!pool) return 0n;
+
+  try {
+    const result = await pool.query(
+      `SELECT MAX(block_number) as max_block FROM event_cache`
+    );
+    const maxBlock = result.rows[0]?.max_block;
+    return maxBlock ? BigInt(maxBlock) : 0n;
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to get latest event block');
+    return 0n;
+  }
+}
+
+export async function getActiveRangeTokenIds(): Promise<Set<string>> {
+  if (!pool) return new Set();
+
+  try {
+    // Get all tokens with RangeConfigured events minus those with RangeRemoved
+    const result = await pool.query(
+      `SELECT DISTINCT token_id FROM event_cache WHERE event_type = 'RangeConfigured'
+       EXCEPT
+       SELECT DISTINCT token_id FROM event_cache WHERE event_type = 'RangeRemoved'`
+    );
+    return new Set(result.rows.map(row => row.token_id));
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to get active range token IDs');
+    return new Set();
   }
 }
 

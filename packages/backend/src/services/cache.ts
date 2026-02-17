@@ -1,6 +1,9 @@
+import Redis from 'ioredis';
 import { logger } from '../utils/logger.js';
 
 const cacheLogger = logger.child({ module: 'cache' });
+
+const REDIS_PREFIX = 'copypools:';
 
 interface CacheEntry<T> {
   data: T;
@@ -27,6 +30,8 @@ const DEFAULT_CONFIG: CacheConfig = {
   cleanupIntervalMs: 60000,
 };
 
+// ============ L1: In-Memory Cache (sync reads, fast) ============
+
 class InMemoryCache {
   private cache = new Map<string, CacheEntry<unknown>>();
   private cleanupInterval: NodeJS.Timeout | null = null;
@@ -41,7 +46,6 @@ class InMemoryCache {
 
   constructor(config: Partial<CacheConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
-    // Clean up expired entries periodically
     this.cleanupInterval = setInterval(
       () => this.cleanup(),
       this.config.cleanupIntervalMs
@@ -63,7 +67,6 @@ class InMemoryCache {
       return null;
     }
 
-    // Update access tracking for LRU
     entry.lastAccessed = Date.now();
     entry.accessCount++;
     this.metrics.hits++;
@@ -74,7 +77,6 @@ class InMemoryCache {
   set<T>(key: string, data: T, ttlMs: number): void {
     const now = Date.now();
 
-    // Check if we need to evict entries before adding
     if (this.cache.size >= this.config.maxSize && !this.cache.has(key)) {
       this.evictLRU();
     }
@@ -92,7 +94,6 @@ class InMemoryCache {
     this.cache.delete(key);
   }
 
-  // Delete all keys matching a pattern (e.g., "position_cache_0x...")
   deletePattern(pattern: string): void {
     const regex = new RegExp(pattern);
     for (const key of this.cache.keys()) {
@@ -102,9 +103,6 @@ class InMemoryCache {
     }
   }
 
-  /**
-   * Evict the least recently used entry
-   */
   private evictLRU(): void {
     let oldestKey: string | null = null;
     let oldestAccess = Infinity;
@@ -123,9 +121,6 @@ class InMemoryCache {
     }
   }
 
-  /**
-   * Clean up expired entries
-   */
   private cleanup(): void {
     const now = Date.now();
     let cleaned = 0;
@@ -146,9 +141,6 @@ class InMemoryCache {
     }
   }
 
-  /**
-   * Get basic stats for health checks
-   */
   getStats(): { size: number; keys: string[] } {
     return {
       size: this.cache.size,
@@ -156,9 +148,6 @@ class InMemoryCache {
     };
   }
 
-  /**
-   * Get detailed metrics for observability
-   */
   getDetailedMetrics(): {
     size: number;
     maxSize: number;
@@ -178,7 +167,6 @@ class InMemoryCache {
     const hitRate = totalRequests > 0 ? this.metrics.hits / totalRequests : 0;
     const missRate = totalRequests > 0 ? this.metrics.misses / totalRequests : 0;
 
-    // Find oldest and newest entries
     let oldestEntry: { key: string; time: number } | null = null;
     let newestEntry: { key: string; time: number } | null = null;
 
@@ -191,10 +179,8 @@ class InMemoryCache {
       }
     }
 
-    // Count entries by prefix
     const entriesByPrefix: Record<string, number> = {};
     for (const key of this.cache.keys()) {
-      // Extract prefix (everything before the first underscore or first 20 chars)
       const underscoreIndex = key.indexOf('_');
       const prefix =
         underscoreIndex > 0
@@ -204,16 +190,13 @@ class InMemoryCache {
       entriesByPrefix[prefix] = (entriesByPrefix[prefix] || 0) + 1;
     }
 
-    // Rough memory estimate (very approximate)
     let memoryEstimate = 0;
     for (const [key, entry] of this.cache.entries()) {
-      // Key size + overhead
       memoryEstimate += key.length * 2 + 50;
-      // Value size estimate
       try {
         memoryEstimate += JSON.stringify(entry.data).length * 2;
       } catch {
-        memoryEstimate += 100; // fallback
+        memoryEstimate += 100;
       }
     }
 
@@ -238,9 +221,6 @@ class InMemoryCache {
     };
   }
 
-  /**
-   * Reset metrics (useful for monitoring windows)
-   */
   resetMetrics(): void {
     this.metrics = {
       hits: 0,
@@ -251,9 +231,6 @@ class InMemoryCache {
     cacheLogger.info('Cache metrics reset');
   }
 
-  /**
-   * Check if a key exists without updating access time
-   */
   has(key: string): boolean {
     const entry = this.cache.get(key);
     if (!entry) return false;
@@ -264,10 +241,6 @@ class InMemoryCache {
     return true;
   }
 
-  /**
-   * Get time until a key expires (in ms)
-   * Returns -1 if key doesn't exist
-   */
   getTTL(key: string): number {
     const entry = this.cache.get(key);
     if (!entry) return -1;
@@ -275,9 +248,6 @@ class InMemoryCache {
     return remaining > 0 ? remaining : -1;
   }
 
-  /**
-   * Clear all entries
-   */
   clear(): void {
     const size = this.cache.size;
     this.cache.clear();
@@ -292,8 +262,232 @@ class InMemoryCache {
   }
 }
 
+// ============ L2: Redis-Backed Cache (L1 in-memory + L2 Redis) ============
+
+class RedisBackedCache {
+  private l1: InMemoryCache;
+  private redis: Redis | null = null;
+  private connected: boolean = false;
+
+  constructor() {
+    this.l1 = new InMemoryCache();
+  }
+
+  async connect(url?: string): Promise<void> {
+    if (!url) {
+      cacheLogger.info('No REDIS_URL configured — using in-memory cache only');
+      return;
+    }
+
+    try {
+      this.redis = new Redis(url, {
+        maxRetriesPerRequest: 3,
+        retryStrategy(times) {
+          if (times > 10) return null; // Stop retrying after 10 attempts
+          return Math.min(times * 200, 5000);
+        },
+        lazyConnect: true,
+      });
+
+      this.redis.on('connect', () => {
+        this.connected = true;
+        cacheLogger.info('Redis cache connected');
+      });
+
+      this.redis.on('error', (err) => {
+        cacheLogger.warn({ err: err.message }, 'Redis error — falling back to in-memory');
+        this.connected = false;
+      });
+
+      this.redis.on('close', () => {
+        this.connected = false;
+        cacheLogger.warn('Redis connection closed');
+      });
+
+      this.redis.on('reconnecting', () => {
+        cacheLogger.info('Redis reconnecting...');
+      });
+
+      await this.redis.connect();
+      this.connected = true;
+    } catch (err) {
+      cacheLogger.warn({ err }, 'Redis connection failed — using in-memory cache only');
+      this.redis = null;
+      this.connected = false;
+    }
+  }
+
+  async disconnect(): Promise<void> {
+    if (this.redis) {
+      try {
+        await this.redis.quit();
+      } catch {
+        // Ignore errors on shutdown
+      }
+      this.redis = null;
+      this.connected = false;
+      cacheLogger.info('Redis cache disconnected');
+    }
+    this.l1.destroy();
+  }
+
+  isRedisConnected(): boolean {
+    return this.connected;
+  }
+
+  // ---- Sync API (reads L1 only — no caller changes needed) ----
+
+  get<T>(key: string): T | null {
+    return this.l1.get<T>(key);
+  }
+
+  // ---- Async API (L1 first, then L2 on miss) ----
+
+  async getAsync<T>(key: string): Promise<T | null> {
+    // Try L1 first
+    const l1Value = this.l1.get<T>(key);
+    if (l1Value !== null) return l1Value;
+
+    // Try L2 (Redis)
+    if (!this.connected || !this.redis) return null;
+
+    try {
+      const raw = await this.redis.get(REDIS_PREFIX + key);
+      if (raw === null) return null;
+
+      const data = JSON.parse(raw) as T;
+      // Warm L1 with remaining TTL
+      const ttl = await this.redis.pttl(REDIS_PREFIX + key);
+      if (ttl > 0) {
+        this.l1.set(key, data, ttl);
+      }
+      return data;
+    } catch (err) {
+      cacheLogger.debug({ err, key }, 'Redis getAsync error');
+      return null;
+    }
+  }
+
+  // ---- Write API (writes to both L1 and L2) ----
+
+  set<T>(key: string, data: T, ttlMs: number): void {
+    // Always write L1 (sync)
+    this.l1.set(key, data, ttlMs);
+
+    // Write L2 (fire-and-forget)
+    if (this.connected && this.redis) {
+      try {
+        const serialized = JSON.stringify(data);
+        this.redis.set(REDIS_PREFIX + key, serialized, 'PX', ttlMs).catch((err) => {
+          cacheLogger.debug({ err, key }, 'Redis set error');
+        });
+      } catch (err) {
+        cacheLogger.debug({ err, key }, 'Redis serialization error');
+      }
+    }
+  }
+
+  delete(key: string): void {
+    this.l1.delete(key);
+
+    if (this.connected && this.redis) {
+      this.redis.del(REDIS_PREFIX + key).catch((err) => {
+        cacheLogger.debug({ err, key }, 'Redis delete error');
+      });
+    }
+  }
+
+  deletePattern(pattern: string): void {
+    // L1: regex-based
+    this.l1.deletePattern(pattern);
+
+    // L2: SCAN-based
+    if (this.connected && this.redis) {
+      const redisPattern = REDIS_PREFIX + pattern.replace(/\.\*/g, '*').replace(/\.\+/g, '*');
+      const stream = this.redis.scanStream({ match: redisPattern, count: 100 });
+      const keysToDelete: string[] = [];
+
+      stream.on('data', (keys: string[]) => {
+        keysToDelete.push(...keys);
+      });
+
+      stream.on('end', () => {
+        if (keysToDelete.length > 0) {
+          const pipeline = this.redis!.pipeline();
+          for (const key of keysToDelete) {
+            pipeline.del(key);
+          }
+          pipeline.exec().catch((err) => {
+            cacheLogger.debug({ err, pattern }, 'Redis deletePattern pipeline error');
+          });
+        }
+      });
+    }
+  }
+
+  has(key: string): boolean {
+    return this.l1.has(key);
+  }
+
+  getTTL(key: string): number {
+    return this.l1.getTTL(key);
+  }
+
+  clear(): void {
+    this.l1.clear();
+
+    if (this.connected && this.redis) {
+      const stream = this.redis.scanStream({ match: REDIS_PREFIX + '*', count: 100 });
+      const keysToDelete: string[] = [];
+
+      stream.on('data', (keys: string[]) => {
+        keysToDelete.push(...keys);
+      });
+
+      stream.on('end', () => {
+        if (keysToDelete.length > 0 && this.redis) {
+          const pipeline = this.redis.pipeline();
+          for (const key of keysToDelete) {
+            pipeline.del(key);
+          }
+          pipeline.exec().catch((err) => {
+            cacheLogger.debug({ err }, 'Redis clear pipeline error');
+          });
+        }
+      });
+    }
+  }
+
+  destroy(): void {
+    this.l1.destroy();
+  }
+
+  // ---- Metrics ----
+
+  getStats(): { size: number; keys: string[]; redisConnected: boolean } {
+    const l1Stats = this.l1.getStats();
+    return {
+      ...l1Stats,
+      redisConnected: this.connected,
+    };
+  }
+
+  getDetailedMetrics() {
+    const l1Metrics = this.l1.getDetailedMetrics();
+    return {
+      ...l1Metrics,
+      redisConnected: this.connected,
+      cacheMode: this.connected ? 'redis+memory' : 'memory-only',
+    };
+  }
+
+  resetMetrics(): void {
+    this.l1.resetMetrics();
+  }
+}
+
 // Singleton cache instance
-export const memoryCache = new InMemoryCache();
+export const memoryCache = new RedisBackedCache();
 
 // Cache keys
 export const CACHE_KEYS = {
