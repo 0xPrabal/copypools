@@ -25,6 +25,12 @@ interface IV4AutoRange {
         uint256 fee1
     );
 
+    /// @notice Emitted when protocol fee is updated
+    event ProtocolFeeUpdated(uint256 oldFee, uint256 newFee);
+
+    /// @notice Emitted when fees are withdrawn
+    event FeesWithdrawn(address indexed recipient, Currency currency, uint256 amount);
+
     /// @notice Rebalance configuration for a position
     struct RangeConfig {
         bool enabled;
@@ -63,8 +69,9 @@ interface IV4AutoRange {
     /// @notice Execute rebalance for a position
     /// @param tokenId The position token ID
     /// @param swapData Swap data for rebalancing tokens
+    /// @param deadline Transaction deadline timestamp
     /// @return result The rebalance result
-    function executeRebalance(uint256 tokenId, bytes calldata swapData)
+    function executeRebalance(uint256 tokenId, bytes calldata swapData, uint256 deadline)
         external
         returns (RebalanceResult memory result);
 
@@ -105,4 +112,18 @@ interface IV4AutoRange {
         external
         view
         returns (bool inRange, int24 currentTick, int24 tickLower, int24 tickUpper);
+
+    /// @notice Set protocol fee (owner only)
+    /// @param newFee New protocol fee in basis points
+    function setProtocolFee(uint256 newFee) external;
+
+    /// @notice Withdraw accumulated protocol fees
+    /// @param currency The currency to withdraw
+    /// @param recipient The recipient address
+    function withdrawFees(Currency currency, address recipient) external;
+
+    /// @notice Get accumulated fees for a currency
+    /// @param currency The currency to check
+    /// @return amount The accumulated fee amount
+    function accumulatedFees(Currency currency) external view returns (uint256 amount);
 }

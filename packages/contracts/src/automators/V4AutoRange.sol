@@ -32,7 +32,7 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
     using StateLibrary for IPoolManager;
 
     /// @notice Contract version
-    string public constant VERSION = "1.2.0";
+    string public constant VERSION = "1.3.0";
 
     /// @notice Error when calculated liquidity is zero (usually means swap is needed)
     error ZeroLiquidityAfterRebalance();
@@ -42,6 +42,9 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
 
     /// @notice Minimum rebalance interval (1 hour)
     uint32 public constant MIN_REBALANCE_INTERVAL = 3600;
+
+    /// @notice Maximum protocol fee (10%)
+    uint256 public constant MAX_PROTOCOL_FEE = 1000;
 
     /// @notice Protocol fee for rebalancing (0.65%)
     uint256 public protocolFee = 65;
@@ -55,8 +58,11 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
     /// @notice Mapping from old token ID to new token ID after rebalance
     mapping(uint256 => uint256) public rebalancedTo;
 
+    /// @notice Accumulated protocol fees by currency
+    mapping(Currency => uint256) public accumulatedFees;
+
     /// @notice Storage gap for upgrades
-    uint256[45] private __gap;
+    uint256[44] private __gap;
 
     /// @notice Constructor
     constructor(
@@ -112,11 +118,12 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
     }
 
     /// @inheritdoc IV4AutoRange
-    function executeRebalance(uint256 tokenId, bytes calldata swapData)
+    function executeRebalance(uint256 tokenId, bytes calldata swapData, uint256 deadline)
         external
         override
         nonReentrant
         whenNotPaused
+        checkDeadline(deadline)
         returns (RebalanceResult memory result)
     {
         RangeConfig memory config = rangeConfigs[tokenId];
@@ -179,6 +186,7 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
                 (amount0, amount1) = _executeInternalSwap(
                     poolKey,
                     currentTick,
+                    sqrtPriceX96,
                     newTickLower,
                     newTickUpper,
                     amount0,
@@ -188,9 +196,11 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
             }
         }
 
-        // Take protocol fee
+        // Take protocol fee and track it
         uint256 fee0 = amount0 * protocolFee / 10000;
         uint256 fee1 = amount1 * protocolFee / 10000;
+        accumulatedFees[poolKey.currency0] += fee0;
+        accumulatedFees[poolKey.currency1] += fee1;
         amount0 -= fee0;
         amount1 -= fee1;
 
@@ -239,9 +249,9 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         rangeConfigs[result.newTokenId] = config;
         delete rangeConfigs[tokenId];
 
-        // Transfer any remaining dust to owner
-        uint256 remaining0 = _getBalance(poolKey.currency0);
-        uint256 remaining1 = _getBalance(poolKey.currency1);
+        // Transfer any remaining dust to owner (excluding accumulated fees)
+        uint256 remaining0 = _getAvailableBalance(poolKey.currency0);
+        uint256 remaining1 = _getAvailableBalance(poolKey.currency1);
         if (remaining0 > 0) _transferCurrency(poolKey.currency0, owner, remaining0);
         if (remaining1 > 0) _transferCurrency(poolKey.currency1, owner, remaining1);
 
@@ -364,6 +374,24 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         inRange = currentTick >= tickLower && currentTick < tickUpper;
     }
 
+    /// @inheritdoc IV4AutoRange
+    function setProtocolFee(uint256 newFee) external override onlyOwner {
+        require(newFee <= MAX_PROTOCOL_FEE, "Fee too high");
+        emit ProtocolFeeUpdated(protocolFee, newFee);
+        protocolFee = newFee;
+    }
+
+    /// @inheritdoc IV4AutoRange
+    function withdrawFees(Currency currency, address recipient) external override onlyOwner {
+        uint256 amount = accumulatedFees[currency];
+        require(amount > 0, "No fees");
+
+        accumulatedFees[currency] = 0;
+        _transferCurrency(currency, recipient, amount);
+
+        emit FeesWithdrawn(recipient, currency, amount);
+    }
+
     // ============ External Helper for Try-Catch ============
 
     /// @notice External wrapper for fee collection to enable try-catch pattern
@@ -374,6 +402,13 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
     }
 
     // ============ Internal Functions ============
+
+    /// @notice Get available balance excluding accumulated protocol fees
+    function _getAvailableBalance(Currency currency) internal view returns (uint256) {
+        uint256 total = _getBalance(currency);
+        uint256 reserved = accumulatedFees[currency];
+        return total > reserved ? total - reserved : 0;
+    }
 
     function _collectFees(uint256 tokenId) internal returns (uint256 amount0, uint256 amount1) {
         (PoolKey memory poolKey,,,) = getPositionInfo(tokenId);
@@ -434,8 +469,8 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         address recipient
     ) internal returns (uint256 tokenId) {
         // Get current balances to calculate max amounts
-        uint256 balance0 = _getBalance(poolKey.currency0);
-        uint256 balance1 = _getBalance(poolKey.currency1);
+        uint256 balance0 = _getAvailableBalance(poolKey.currency0);
+        uint256 balance1 = _getAvailableBalance(poolKey.currency1);
 
         // Transfer tokens to PositionManager (not PoolManager)
         // PositionManager will then handle the settlement using its own balance
@@ -466,9 +501,13 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         params[3] = abi.encode(poolKey.currency0, address(this));
         params[4] = abi.encode(poolKey.currency1, address(this));
 
-        uint256 ethValue = poolKey.currency0.isAddressZero() || poolKey.currency1.isAddressZero()
-            ? address(this).balance
-            : 0;
+        uint256 ethValue;
+        if (poolKey.currency0.isAddressZero() || poolKey.currency1.isAddressZero()) {
+            Currency nativeCurrency = Currency.wrap(address(0));
+            uint256 nativeBal = address(this).balance;
+            uint256 reserved = accumulatedFees[nativeCurrency];
+            ethValue = nativeBal > reserved ? nativeBal - reserved : 0;
+        }
 
         positionManager.modifyLiquidities{value: ethValue}(
             abi.encode(actions, params),
@@ -502,11 +541,14 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         );
 
         if (swapAmount > 0) {
+            // Use price-based slippage calculation (not simple percentage)
+            uint256 minAmountOut = SwapLib.calculateMinOutput(swapAmount, sqrtPriceX96, maxSlippage, zeroForOne);
+
             SwapLib.SwapParams memory swapParams = SwapLib.SwapParams({
                 fromCurrency: zeroForOne ? poolKey.currency0 : poolKey.currency1,
                 toCurrency: zeroForOne ? poolKey.currency1 : poolKey.currency0,
                 amountIn: swapAmount,
-                minAmountOut: (swapAmount * (10000 - maxSlippage)) / 10000,
+                minAmountOut: minAmountOut,
                 router: router,
                 swapData: routerData,
                 weth9: WETH9
@@ -525,18 +567,10 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
 
     /// @notice Execute an internal swap using the pool's native swap
     /// @dev Used when no external router swap data is provided but a swap is needed
-    /// @param poolKey The pool key
-    /// @param currentTick Current pool tick
-    /// @param newTickLower New position lower tick
-    /// @param newTickUpper New position upper tick
-    /// @param amount0 Current amount of token0
-    /// @param amount1 Current amount of token1
-    /// @param maxSlippage Maximum slippage in basis points (e.g., 100 = 1%)
-    /// @return newAmount0 Amount of token0 after swap
-    /// @return newAmount1 Amount of token1 after swap
     function _executeInternalSwap(
         PoolKey memory poolKey,
         int24 currentTick,
+        uint160 sqrtPriceX96,
         int24 newTickLower,
         int24 newTickUpper,
         uint256 amount0,
@@ -549,8 +583,6 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         int24 tickPosition = currentTick - newTickLower;
 
         // Calculate approximate ratio needed for token1 (0 to 1 scaled by 10000)
-        // When tick is at lower bound, need mostly token0
-        // When tick is at upper bound, need mostly token1
         uint256 ratio1Bps = uint256(int256(tickPosition) * 10000 / int256(rangeWidth));
         if (ratio1Bps > 10000) ratio1Bps = 10000;
 
@@ -560,8 +592,6 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         if (amount0 > 0 && amount1 == 0) {
             // Have only token0, need to swap some to token1
             zeroForOne = true;
-            // Swap ratio1Bps percent of token0 to get token1
-            // Clamp between 30% and 70% to ensure we have enough of both
             uint256 swapRatio = ratio1Bps;
             if (swapRatio < 3000) swapRatio = 3000;
             if (swapRatio > 7000) swapRatio = 7000;
@@ -569,7 +599,6 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         } else if (amount1 > 0 && amount0 == 0) {
             // Have only token1, need to swap some to token0
             zeroForOne = false;
-            // Swap (1 - ratio1Bps) percent of token1 to get token0
             uint256 swapRatio = 10000 - ratio1Bps;
             if (swapRatio < 3000) swapRatio = 3000;
             if (swapRatio > 7000) swapRatio = 7000;
@@ -583,19 +612,14 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
             return (amount0, amount1);
         }
 
+        // Calculate minimum output using price-based slippage protection
+        uint256 minOutput = SwapLib.calculateMinOutput(swapAmount, sqrtPriceX96, maxSlippage, zeroForOne);
+
         // Execute swap through the pool
-        // We need to use the PoolManager's swap function via unlock callback
         uint256 balance0Before = _getBalance(poolKey.currency0);
         uint256 balance1Before = _getBalance(poolKey.currency1);
 
-        // For internal swaps, use very low minOutput to avoid failures
-        // The rebalance will still work and user gets the market rate
-        // The protocol fee provides protection against sandwich attacks
-        // Using 0 as minOutput - the actual slippage is bounded by pool liquidity
-        uint256 minOutput = 0;
-
         // Perform the swap using PoolManager's swap function
-        // This requires unlocking first
         _performPoolSwap(poolKey, zeroForOne, int256(swapAmount), minOutput);
 
         newAmount0 = _getBalance(poolKey.currency0);
@@ -650,12 +674,11 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
             PoolKey memory poolKey,
             bool zeroForOne,
             int256 amountSpecified,
-            // minOutput not used - we accept market rate for internal swaps
+            // minOutput not used here - validated after swap completes
         ) = abi.decode(data, (PoolKey, bool, int256, uint256));
 
         // Execute the swap
         // In V4: negative amountSpecified = exact input
-        // For exact input: we specify how much to put in (negative), get some amount out
         BalanceDelta delta = poolManager.swap(
             poolKey,
             SwapParams({
@@ -667,24 +690,15 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         );
 
         // Get the delta amounts
-        // In V4 swap deltas:
-        // - Negative delta = we owe the pool (need to pay/settle)
-        // - Positive delta = pool owes us (need to receive/take)
         int128 delta0 = delta.amount0();
         int128 delta1 = delta.amount1();
-
-        // For zeroForOne=true with exact input:
-        // - delta0 < 0 (we pay token0)
-        // - delta1 > 0 (we receive token1)
 
         // Settle what we owe (negative deltas)
         if (delta0 < 0) {
             uint256 amountToSettle = uint256(int256(-delta0));
             if (poolKey.currency0.isAddressZero()) {
-                // Native ETH
                 poolManager.settle{value: amountToSettle}();
             } else {
-                // ERC20 - sync, transfer, then settle
                 poolManager.sync(poolKey.currency0);
                 IERC20(Currency.unwrap(poolKey.currency0)).safeTransfer(address(poolManager), amountToSettle);
                 poolManager.settle();
@@ -694,10 +708,8 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         if (delta1 < 0) {
             uint256 amountToSettle = uint256(int256(-delta1));
             if (poolKey.currency1.isAddressZero()) {
-                // Native ETH
                 poolManager.settle{value: amountToSettle}();
             } else {
-                // ERC20 - sync, transfer, then settle
                 poolManager.sync(poolKey.currency1);
                 IERC20(Currency.unwrap(poolKey.currency1)).safeTransfer(address(poolManager), amountToSettle);
                 poolManager.settle();

@@ -254,6 +254,11 @@
         "name": "swapData",
         "type": "bytes",
         "internalType": "bytes"
+      },
+      {
+        "name": "deadline",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [

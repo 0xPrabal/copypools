@@ -9,7 +9,9 @@ import {
   rebalanceEvent,
   account,
   protocolStats,
-  dailyStats
+  dailyStats,
+  protocolFeeUpdate,
+  feeWithdrawal,
 } from "ponder:schema";
 
 // Contract addresses - use env vars with fallbacks to match ponder.config.ts
@@ -617,6 +619,7 @@ ponder.on("V4Utils:RangeMoved", async ({ event, context }) => {
             minCompoundInterval: oldCompoundConfig.minCompoundInterval,
             minRewardAmount: oldCompoundConfig.minRewardAmount,
             totalCompounds: 0,
+            maxCompoundSlippage: oldCompoundConfig.maxCompoundSlippage,
             lastCompoundTimestamp: timestamp,
           });
           console.log(`Transferred compound config from ${oldPosId} to ${newPosId}`);
@@ -643,6 +646,63 @@ ponder.on("V4Utils:RangeMoved", async ({ event, context }) => {
 
   } catch (error) {
     console.error(`Error handling V4Utils:RangeMoved for oldTokenId ${event.args.oldTokenId}:`, error);
+    throw error;
+  }
+});
+
+// Handle V4Utils protocol fee update
+// Event: ProtocolFeeUpdated(uint256 oldFee, uint256 newFee)
+ponder.on("V4Utils:ProtocolFeeUpdated", async ({ event, context }) => {
+  try {
+    const { oldFee, newFee } = event.args;
+    const eventId = `${event.transaction.hash}-${event.log.logIndex}`;
+
+    try {
+      await context.db.insert(protocolFeeUpdate).values({
+        id: eventId,
+        contract: "V4Utils",
+        oldFee: oldFee.toString(),
+        newFee: newFee.toString(),
+        timestamp: event.block.timestamp.toString(),
+        blockNumber: event.block.number.toString(),
+        transactionHash: event.transaction.hash,
+      });
+    } catch (err: any) {
+      if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
+        throw err;
+      }
+    }
+  } catch (error) {
+    console.error("Error handling V4Utils:ProtocolFeeUpdated:", error);
+    throw error;
+  }
+});
+
+// Handle V4Utils fee withdrawal
+// Event: FeesWithdrawn(address indexed recipient, address currency, uint256 amount)
+ponder.on("V4Utils:FeesWithdrawn", async ({ event, context }) => {
+  try {
+    const { recipient, currency, amount } = event.args;
+    const eventId = `${event.transaction.hash}-${event.log.logIndex}`;
+
+    try {
+      await context.db.insert(feeWithdrawal).values({
+        id: eventId,
+        contract: "V4Utils",
+        recipient: recipient.toLowerCase(),
+        currency: currency.toLowerCase(),
+        amount: amount.toString(),
+        timestamp: event.block.timestamp.toString(),
+        blockNumber: event.block.number.toString(),
+        transactionHash: event.transaction.hash,
+      });
+    } catch (err: any) {
+      if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
+        throw err;
+      }
+    }
+  } catch (error) {
+    console.error("Error handling V4Utils:FeesWithdrawn:", error);
     throw error;
   }
 });
@@ -701,6 +761,7 @@ ponder.on("V4Compoundor:PositionRegistered", async ({ event, context }) => {
           totalCompoundedToken1: "0",
           totalFeesPaidToken0: "0",
           totalFeesPaidToken1: "0",
+          maxCompoundSlippage: "200", // Default 2% (200 bps)
         });
       } catch (err: any) {
         // Handle race condition - config may have been created by another handler
@@ -830,6 +891,63 @@ ponder.on("V4Compoundor:AutoCompounded", async ({ event, context }) => {
     }
   } catch (error) {
     console.error(`Error handling V4Compoundor:AutoCompounded for tokenId ${event.args.tokenId}:`, error);
+    throw error;
+  }
+});
+
+// Handle V4Compoundor protocol fee update
+// Event: ProtocolFeeUpdated(uint256 oldFee, uint256 newFee)
+ponder.on("V4Compoundor:ProtocolFeeUpdated", async ({ event, context }) => {
+  try {
+    const { oldFee, newFee } = event.args;
+    const eventId = `${event.transaction.hash}-${event.log.logIndex}`;
+
+    try {
+      await context.db.insert(protocolFeeUpdate).values({
+        id: eventId,
+        contract: "V4Compoundor",
+        oldFee: oldFee.toString(),
+        newFee: newFee.toString(),
+        timestamp: event.block.timestamp.toString(),
+        blockNumber: event.block.number.toString(),
+        transactionHash: event.transaction.hash,
+      });
+    } catch (err: any) {
+      if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
+        throw err;
+      }
+    }
+  } catch (error) {
+    console.error("Error handling V4Compoundor:ProtocolFeeUpdated:", error);
+    throw error;
+  }
+});
+
+// Handle V4Compoundor fee withdrawal
+// Event: FeesWithdrawn(address indexed recipient, address currency, uint256 amount)
+ponder.on("V4Compoundor:FeesWithdrawn", async ({ event, context }) => {
+  try {
+    const { recipient, currency, amount } = event.args;
+    const eventId = `${event.transaction.hash}-${event.log.logIndex}`;
+
+    try {
+      await context.db.insert(feeWithdrawal).values({
+        id: eventId,
+        contract: "V4Compoundor",
+        recipient: recipient.toLowerCase(),
+        currency: currency.toLowerCase(),
+        amount: amount.toString(),
+        timestamp: event.block.timestamp.toString(),
+        blockNumber: event.block.number.toString(),
+        transactionHash: event.transaction.hash,
+      });
+    } catch (err: any) {
+      if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
+        throw err;
+      }
+    }
+  } catch (error) {
+    console.error("Error handling V4Compoundor:FeesWithdrawn:", error);
     throw error;
   }
 });
@@ -1049,6 +1167,63 @@ ponder.on("V4AutoRange:Rebalanced", async ({ event, context }) => {
     }
   } catch (error) {
     console.error(`Error handling V4AutoRange:Rebalanced for oldTokenId ${event.args.oldTokenId}:`, error);
+    throw error;
+  }
+});
+
+// Handle V4AutoRange protocol fee update
+// Event: ProtocolFeeUpdated(uint256 oldFee, uint256 newFee)
+ponder.on("V4AutoRange:ProtocolFeeUpdated", async ({ event, context }) => {
+  try {
+    const { oldFee, newFee } = event.args;
+    const eventId = `${event.transaction.hash}-${event.log.logIndex}`;
+
+    try {
+      await context.db.insert(protocolFeeUpdate).values({
+        id: eventId,
+        contract: "V4AutoRange",
+        oldFee: oldFee.toString(),
+        newFee: newFee.toString(),
+        timestamp: event.block.timestamp.toString(),
+        blockNumber: event.block.number.toString(),
+        transactionHash: event.transaction.hash,
+      });
+    } catch (err: any) {
+      if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
+        throw err;
+      }
+    }
+  } catch (error) {
+    console.error("Error handling V4AutoRange:ProtocolFeeUpdated:", error);
+    throw error;
+  }
+});
+
+// Handle V4AutoRange fee withdrawal
+// Event: FeesWithdrawn(address indexed recipient, address currency, uint256 amount)
+ponder.on("V4AutoRange:FeesWithdrawn", async ({ event, context }) => {
+  try {
+    const { recipient, currency, amount } = event.args;
+    const eventId = `${event.transaction.hash}-${event.log.logIndex}`;
+
+    try {
+      await context.db.insert(feeWithdrawal).values({
+        id: eventId,
+        contract: "V4AutoRange",
+        recipient: recipient.toLowerCase(),
+        currency: currency.toLowerCase(),
+        amount: amount.toString(),
+        timestamp: event.block.timestamp.toString(),
+        blockNumber: event.block.number.toString(),
+        transactionHash: event.transaction.hash,
+      });
+    } catch (err: any) {
+      if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
+        throw err;
+      }
+    }
+  } catch (error) {
+    console.error("Error handling V4AutoRange:FeesWithdrawn:", error);
     throw error;
   }
 });

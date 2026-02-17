@@ -32,7 +32,7 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     using StateLibrary for IPoolManager;
 
     /// @notice Contract version
-    string public constant VERSION = "1.0.0";
+    string public constant VERSION = "1.1.0";
 
     /// @notice Protocol fee in basis points (0.65%)
     uint256 public override protocolFee = 65;
@@ -55,8 +55,11 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     /// @notice Accumulated protocol fees by currency
     mapping(Currency => uint256) public accumulatedFees;
 
+    /// @notice Maximum slippage for compound swaps (basis points, default 2%)
+    uint256 public maxCompoundSlippage = 200;
+
     /// @notice Storage gap for upgrades
-    uint256[45] private __gap;
+    uint256[44] private __gap;
 
     /// @notice Constructor
     constructor(
@@ -206,7 +209,6 @@ contract V4Compoundor is V4Base, IV4Compoundor {
         PoolId poolId = poolKey.toId();
 
         // Get the position's stored fee growth (from last interaction)
-        // The salt for PositionManager positions is the tokenId
         (, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128) =
             poolManager.getPositionInfo(poolId, address(positionManager), tickLower, tickUpper, bytes32(tokenId));
 
@@ -215,7 +217,6 @@ contract V4Compoundor is V4Base, IV4Compoundor {
             poolManager.getFeeGrowthInside(poolId, tickLower, tickUpper);
 
         // Calculate uncollected fees
-        // uncollectedFees = (feeGrowthInside_current - feeGrowthInside_last) * liquidity / Q128
         amount0 = FullMath.mulDiv(
             feeGrowthInside0X128 - feeGrowthInside0LastX128,
             liquidity,
@@ -246,6 +247,13 @@ contract V4Compoundor is V4Base, IV4Compoundor {
         protocolFee = newFee;
     }
 
+    /// @notice Set maximum slippage for compound swaps
+    /// @param newSlippage New slippage in basis points (max 1000 = 10%)
+    function setMaxCompoundSlippage(uint256 newSlippage) external onlyOwner {
+        require(newSlippage <= 1000, "Slippage too high");
+        maxCompoundSlippage = newSlippage;
+    }
+
     /// @inheritdoc IV4Compoundor
     function withdrawFees(Currency currency, address recipient) external override onlyOwner {
         uint256 amount = accumulatedFees[currency];
@@ -258,6 +266,13 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     }
 
     // ============ Internal Functions ============
+
+    /// @notice Get available balance excluding accumulated protocol fees
+    function _getAvailableBalance(Currency currency) internal view returns (uint256) {
+        uint256 total = _getBalance(currency);
+        uint256 reserved = accumulatedFees[currency];
+        return total > reserved ? total - reserved : 0;
+    }
 
     function _compound(
         uint256 tokenId,
@@ -290,15 +305,16 @@ contract V4Compoundor is V4Base, IV4Compoundor {
             result.fee1 = fee1;
         }
 
-        result.amount0Compounded = collected0;
-        result.amount1Compounded = collected1;
-
         // Execute swap if needed to optimize ratio
         if (swapData.length > 0) {
             _executeOptimalSwap(poolKey, tickLower, tickUpper, swapData);
-            collected0 = _getBalance(poolKey.currency0);
-            collected1 = _getBalance(poolKey.currency1);
+            collected0 = _getAvailableBalance(poolKey.currency0);
+            collected1 = _getAvailableBalance(poolKey.currency1);
         }
+
+        // Report post-swap amounts so events reflect actual compounded token split
+        result.amount0Compounded = collected0;
+        result.amount1Compounded = collected1;
 
         // Calculate liquidity to add based on collected amounts
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
@@ -315,14 +331,13 @@ contract V4Compoundor is V4Base, IV4Compoundor {
 
         if (result.liquidityAdded > 0) {
             // Add liquidity back to position
-            // Use collected amounts as max - this is what we actually have available
             _increaseLiquidity(tokenId, result.liquidityAdded, collected0, collected1);
         }
 
-        // Return any remaining dust to position owner
+        // Return any remaining dust to position owner (excluding accumulated fees)
         address owner = IERC721(address(positionManager)).ownerOf(tokenId);
-        uint256 remaining0 = _getBalance(poolKey.currency0);
-        uint256 remaining1 = _getBalance(poolKey.currency1);
+        uint256 remaining0 = _getAvailableBalance(poolKey.currency0);
+        uint256 remaining1 = _getAvailableBalance(poolKey.currency1);
 
         if (remaining0 > 0) {
             _transferCurrency(poolKey.currency0, owner, remaining0);
@@ -361,9 +376,9 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     ) internal {
         (PoolKey memory poolKey,,,) = getPositionInfo(tokenId);
 
-        // Get current balances
-        uint256 balance0 = _getBalance(poolKey.currency0);
-        uint256 balance1 = _getBalance(poolKey.currency1);
+        // Get current available balances (excluding protocol fees)
+        uint256 balance0 = _getAvailableBalance(poolKey.currency0);
+        uint256 balance1 = _getAvailableBalance(poolKey.currency1);
 
         // Transfer ERC20 tokens to PositionManager (not native ETH)
         address pmAddr = address(positionManager);
@@ -379,8 +394,6 @@ contract V4Compoundor is V4Base, IV4Compoundor {
         bool currency0IsNative = poolKey.currency0.isAddressZero();
         bool currency1IsNative = poolKey.currency1.isAddressZero();
 
-        // For native ETH: use payerIsUser=true with msg.value
-        // For ERC20: use payerIsUser=false (already transferred to PM)
         bytes memory actions = abi.encodePacked(
             uint8(Actions.INCREASE_LIQUIDITY),
             uint8(Actions.SETTLE),
@@ -390,18 +403,18 @@ contract V4Compoundor is V4Base, IV4Compoundor {
         );
         bytes[] memory params = new bytes[](5);
         params[0] = abi.encode(tokenId, liquidity, amount0Max, amount1Max, "");
-        // SETTLE params: (currency, amount, payerIsUser)
-        // For native ETH: payerIsUser=true uses msg.value
-        // For ERC20: payerIsUser=false uses PM's balance (pre-transferred)
         params[1] = abi.encode(poolKey.currency0, uint256(0), currency0IsNative);
         params[2] = abi.encode(poolKey.currency1, uint256(0), currency1IsNative);
-        // SWEEP remaining tokens back to this contract
         params[3] = abi.encode(poolKey.currency0, address(this));
         params[4] = abi.encode(poolKey.currency1, address(this));
 
-        uint256 ethValue = (currency0IsNative || currency1IsNative)
-            ? address(this).balance
-            : 0;
+        uint256 ethValue;
+        if (currency0IsNative || currency1IsNative) {
+            Currency nativeCurrency = Currency.wrap(address(0));
+            uint256 nativeBal = address(this).balance;
+            uint256 reserved = accumulatedFees[nativeCurrency];
+            ethValue = nativeBal > reserved ? nativeBal - reserved : 0;
+        }
 
         positionManager.modifyLiquidities{value: ethValue}(
             abi.encode(actions, params),
@@ -422,8 +435,8 @@ contract V4Compoundor is V4Base, IV4Compoundor {
 
         // Calculate optimal ratio and swap
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
-        uint256 balance0 = _getBalance(poolKey.currency0);
-        uint256 balance1 = _getBalance(poolKey.currency1);
+        uint256 balance0 = _getAvailableBalance(poolKey.currency0);
+        uint256 balance1 = _getAvailableBalance(poolKey.currency1);
 
         (bool zeroForOne, uint256 swapAmount) = PositionValueLib.calculateSwapForOptimalRatio(
             balance0,
@@ -434,11 +447,14 @@ contract V4Compoundor is V4Base, IV4Compoundor {
         );
 
         if (swapAmount > 0) {
+            // Calculate minimum output using price-based slippage protection
+            uint256 minAmountOut = SwapLib.calculateMinOutput(swapAmount, sqrtPriceX96, maxCompoundSlippage, zeroForOne);
+
             SwapLib.SwapParams memory swapParams = SwapLib.SwapParams({
                 fromCurrency: zeroForOne ? poolKey.currency0 : poolKey.currency1,
                 toCurrency: zeroForOne ? poolKey.currency1 : poolKey.currency0,
                 amountIn: swapAmount,
-                minAmountOut: 0,
+                minAmountOut: minAmountOut,
                 router: router,
                 swapData: routerData,
                 weth9: WETH9

@@ -442,11 +442,14 @@ export async function getPositionStatus(tokenId: bigint): Promise<{
 export async function executeRebalance(tokenId: bigint, swapData: Hex): Promise<Hex> {
   if (!walletClient) throw new Error('Wallet not configured');
 
+  // Deadline: 5 minutes from now
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 300);
+
   const { request } = await publicClient.simulateContract({
     address: contracts.v4AutoRange as Address,
     abi: V4AutoRangeABI,
     functionName: 'executeRebalance',
-    args: [tokenId, swapData],
+    args: [tokenId, swapData, deadline],
     account: walletClient.account,
   });
 

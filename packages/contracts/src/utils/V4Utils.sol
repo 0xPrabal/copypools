@@ -32,7 +32,7 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
     using StateLibrary for IPoolManager;
 
     /// @notice Contract version
-    string public constant VERSION = "1.0.0";
+    string public constant VERSION = "1.1.0";
 
     /// @notice Maximum swap slippage (50%)
     uint256 public constant MAX_SLIPPAGE = 5000;
@@ -48,6 +48,12 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
 
     /// @notice Storage gap for upgrades
     uint256[48] private __gap;
+
+    /// @notice Error when swap data is required but not provided
+    error SwapDataRequired();
+
+    /// @notice Error when recipient is not the caller
+    error RecipientMustBeCaller();
 
     /// @notice Constructor
     constructor(
@@ -310,13 +316,13 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
 
         // Swap to target currency
         if (!(poolKey.currency0 == params.targetCurrency) && amount0 > 0) {
-            amount += _swapToTarget(poolKey.currency0, params.targetCurrency, amount0, params.swapData, params.maxSwapSlippage);
+            amount += _swapToTarget(poolKey, poolKey.currency0, params.targetCurrency, amount0, params.swapData, params.maxSwapSlippage);
         } else {
             amount += amount0;
         }
 
         if (!(poolKey.currency1 == params.targetCurrency) && amount1 > 0) {
-            amount += _swapToTarget(poolKey.currency1, params.targetCurrency, amount1, params.swapData, params.maxSwapSlippage);
+            amount += _swapToTarget(poolKey, poolKey.currency1, params.targetCurrency, amount1, params.swapData, params.maxSwapSlippage);
         } else {
             amount += amount1;
         }
@@ -345,13 +351,13 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
 
         // Swap to target
         if (!(poolKey.currency0 == params.targetCurrency) && amount0 > 0) {
-            amount += _swapToTarget(poolKey.currency0, params.targetCurrency, amount0, params.swapData, params.maxSwapSlippage);
+            amount += _swapToTarget(poolKey, poolKey.currency0, params.targetCurrency, amount0, params.swapData, params.maxSwapSlippage);
         } else {
             amount += amount0;
         }
 
         if (!(poolKey.currency1 == params.targetCurrency) && amount1 > 0) {
-            amount += _swapToTarget(poolKey.currency1, params.targetCurrency, amount1, params.swapData, params.maxSwapSlippage);
+            amount += _swapToTarget(poolKey, poolKey.currency1, params.targetCurrency, amount1, params.swapData, params.maxSwapSlippage);
         } else {
             amount += amount1;
         }
@@ -460,10 +466,10 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         // Swap token0 to stablecoin if not already the stablecoin
         if (!(poolKey.currency0 == params.targetStablecoin) && amount0 > 0) {
             if (params.swapData0.length > 0) {
-                amount += _swapToTarget(poolKey.currency0, params.targetStablecoin, amount0, params.swapData0, params.maxSwapSlippage);
+                amount += _swapToTarget(poolKey, poolKey.currency0, params.targetStablecoin, amount0, params.swapData0, params.maxSwapSlippage);
             } else {
-                // No swap data - try internal pool swap
-                amount += _internalSwapToStable(poolKey.currency0, params.targetStablecoin, amount0);
+                // No swap data provided but currencies differ — revert instead of silently returning 0
+                revert SwapDataRequired();
             }
         } else {
             amount += amount0;
@@ -472,10 +478,10 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         // Swap token1 to stablecoin if not already the stablecoin
         if (!(poolKey.currency1 == params.targetStablecoin) && amount1 > 0) {
             if (params.swapData1.length > 0) {
-                amount += _swapToTarget(poolKey.currency1, params.targetStablecoin, amount1, params.swapData1, params.maxSwapSlippage);
+                amount += _swapToTarget(poolKey, poolKey.currency1, params.targetStablecoin, amount1, params.swapData1, params.maxSwapSlippage);
             } else {
-                // No swap data - try internal pool swap
-                amount += _internalSwapToStable(poolKey.currency1, params.targetStablecoin, amount1);
+                // No swap data provided but currencies differ — revert instead of silently returning 0
+                revert SwapDataRequired();
             }
         } else {
             amount += amount1;
@@ -486,22 +492,6 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
 
         // Transfer stablecoin to owner
         _transferCurrency(params.targetStablecoin, owner, amount);
-    }
-
-    /// @notice Internal swap to stablecoin without external router
-    /// @dev Falls back to zero if no direct pool exists
-    function _internalSwapToStable(
-        Currency fromCurrency,
-        Currency toStablecoin,
-        uint256 amount
-    ) internal returns (uint256) {
-        // If currencies are the same, return amount directly
-        if (fromCurrency == toStablecoin) return amount;
-
-        // For now, if no swap data provided and currencies differ, just return 0
-        // User should provide swap data for proper conversion
-        // In future, could implement direct pool lookup and swap
-        return 0;
     }
 
     /// @inheritdoc IV4Utils
@@ -553,10 +543,10 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
             _autoSwapForRange(poolKey, params.newTickLower, params.newTickUpper, params.maxSwapSlippage);
         }
 
-        // Calculate new liquidity
+        // Calculate new liquidity (use available balance excluding protocol fees)
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
-        uint256 balance0 = _getBalance(poolKey.currency0);
-        uint256 balance1 = _getBalance(poolKey.currency1);
+        uint256 balance0 = _getAvailableBalance(poolKey.currency0);
+        uint256 balance1 = _getAvailableBalance(poolKey.currency1);
 
         liquidity = LiquidityAmounts.getLiquidityForAmounts(
             sqrtPriceX96,
@@ -586,6 +576,8 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
 
     /// @inheritdoc IV4Utils
     function unwrapWETH9(uint256 minAmount, address recipient) external payable override {
+        require(recipient == msg.sender, "Recipient must be caller");
+
         uint256 balance = IERC20(WETH9).balanceOf(address(this));
         if (balance < minAmount) revert InsufficientAmount();
 
@@ -602,7 +594,9 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
 
     /// @inheritdoc IV4Utils
     function sweepToken(Currency currency, uint256 minAmount, address recipient) external payable override {
-        uint256 balance = _getBalance(currency);
+        require(recipient == msg.sender, "Recipient must be caller");
+
+        uint256 balance = _getAvailableBalance(currency);
         if (balance < minAmount) revert InsufficientAmount();
 
         if (balance > 0) {
@@ -612,8 +606,9 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
 
     /// @inheritdoc IV4Utils
     function refundETH() external payable override {
-        if (address(this).balance > 0) {
-            (bool success,) = msg.sender.call{value: address(this).balance}("");
+        uint256 available = _getAvailableNativeBalance();
+        if (available > 0) {
+            (bool success,) = msg.sender.call{value: available}("");
             require(success, "ETH refund failed");
         }
     }
@@ -637,6 +632,21 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
     }
 
     // ============ Internal Functions ============
+
+    /// @notice Get available balance excluding accumulated protocol fees
+    function _getAvailableBalance(Currency currency) internal view returns (uint256) {
+        uint256 total = _getBalance(currency);
+        uint256 reserved = accumulatedFees[currency];
+        return total > reserved ? total - reserved : 0;
+    }
+
+    /// @notice Get available native ETH balance excluding reserved fees
+    function _getAvailableNativeBalance() internal view returns (uint256) {
+        uint256 total = address(this).balance;
+        Currency nativeCurrency = Currency.wrap(address(0));
+        uint256 reserved = accumulatedFees[nativeCurrency];
+        return total > reserved ? total - reserved : 0;
+    }
 
     function _receiveTokens(Currency currency, uint256 amount) internal returns (uint256) {
         if (amount == 0) return 0;
@@ -695,32 +705,53 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         if (!approvedRouters[router]) revert RouterNotApproved();
 
         Currency toCurrency = sourceCurrency == poolKey.currency0 ? poolKey.currency1 : poolKey.currency0;
-        uint256 balanceBefore = _getBalance(toCurrency);
 
-        // Execute swap
+        // Track balances before swap to determine actual consumed/received amounts
+        uint256 sourceBalanceBefore = _getBalance(sourceCurrency);
+        uint256 targetBalanceBefore = _getBalance(toCurrency);
+
+        // Fetch current price for post-swap slippage verification
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
+        bool zeroForOne = sourceCurrency == poolKey.currency0;
+        uint256 swapAmountIn = sourceAmount > 0 ? sourceAmount : sourceBalanceBefore;
+
+        // Execute swap — pass 0 for minAmountOut since the router may only swap
+        // a portion of sourceAmount; we verify slippage post-swap against actual amounts
         SwapLib.SwapParams memory swapParams = SwapLib.SwapParams({
             fromCurrency: sourceCurrency,
             toCurrency: toCurrency,
-            amountIn: sourceAmount > 0 ? sourceAmount : _getBalance(sourceCurrency),
-            minAmountOut: 0, // Will be validated by overall slippage
+            amountIn: swapAmountIn,
+            minAmountOut: 0,
             router: router,
             swapData: routerData,
-            weth9: WETH9 // Pass WETH9 for wrapping native ETH
+            weth9: WETH9
         });
 
         SwapLib.executeSwap(swapParams);
 
+        // Calculate actual amounts consumed and received
+        uint256 actualConsumed = sourceBalanceBefore - _getBalance(sourceCurrency);
+        uint256 swapOutput = _getBalance(toCurrency) - targetBalanceBefore;
+
+        // Verify slippage based on actual consumed amount (not full sourceAmount)
+        if (actualConsumed > 0 && maxSlippage < 10000) {
+            uint256 minAmountOut = SwapLib.calculateMinOutput(actualConsumed, sqrtPriceX96, maxSlippage, zeroForOne);
+            if (swapOutput < minAmountOut) {
+                revert SwapLib.SlippageExceeded(minAmountOut, swapOutput);
+            }
+        }
+
         // Take protocol fee on swap output and return adjusted amount
-        uint256 swapOutput = _getBalance(toCurrency) - balanceBefore;
         return _takeSwapFee(toCurrency, swapOutput);
     }
 
     function _swapToTarget(
+        PoolKey memory poolKey,
         Currency fromCurrency,
         Currency toCurrency,
         uint256 amount,
         bytes memory swapData,
-        uint256 /* maxSlippage */ // Unused - slippage protection handled by router swap data
+        uint256 maxSlippage
     ) internal returns (uint256) {
         if (fromCurrency == toCurrency) return amount;
         if (swapData.length == 0) return 0;
@@ -728,20 +759,19 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         (address router, bytes memory routerData) = abi.decode(swapData, (address, bytes));
         if (!approvedRouters[router]) revert RouterNotApproved();
 
-        // NOTE: minAmountOut is set to 0 because:
-        // 1. The swap data from aggregators (0x, 1inch, etc.) already includes slippage protection
-        // 2. The previous calculation (amount * (10000 - maxSlippage) / 10000) was incorrect
-        //    because it used input token amounts (e.g., ETH with 18 decimals) to calculate
-        //    expected output (e.g., USDC with 6 decimals) without price conversion
-        // 3. Setting minAmountOut=0 lets the aggregator's built-in slippage protection work correctly
+        // Fetch current price for slippage calculation
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
+        bool zeroForOne = fromCurrency == poolKey.currency0;
+        uint256 minAmountOut = SwapLib.calculateMinOutput(amount, sqrtPriceX96, maxSlippage, zeroForOne);
+
         SwapLib.SwapParams memory swapParams = SwapLib.SwapParams({
             fromCurrency: fromCurrency,
             toCurrency: toCurrency,
             amountIn: amount,
-            minAmountOut: 0, // Slippage protection handled by aggregator swap data
+            minAmountOut: minAmountOut,
             router: router,
             swapData: routerData,
-            weth9: WETH9 // Pass WETH9 for wrapping native ETH
+            weth9: WETH9
         });
 
         uint256 swapOutput = SwapLib.executeSwap(swapParams);
@@ -758,21 +788,16 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         int24 newTickUpper,
         uint256 maxSlippage
     ) internal {
-        uint256 balance0 = _getBalance(poolKey.currency0);
-        uint256 balance1 = _getBalance(poolKey.currency1);
+        uint256 balance0 = _getAvailableBalance(poolKey.currency0);
+        uint256 balance1 = _getAvailableBalance(poolKey.currency1);
 
         // Get current price and calculate target amounts for the new range
         (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(poolKey.toId());
 
         // If current tick is in the new range, we need both tokens
         if (currentTick >= newTickLower && currentTick < newTickUpper) {
-            // Calculate what ratio we need
-            // For a position in range, the ratio depends on where the current price is within the range
-            // Simplified: we swap approximately half to get both tokens
-
             if (balance0 > 0 && balance1 == 0) {
                 // We only have token0, need to swap some for token1
-                // Calculate amount to swap (approximately half, adjusted for price impact)
                 uint256 swapAmount = balance0 / 2;
                 if (swapAmount > 0) {
                     // Perform swap inside unlock callback
@@ -815,31 +840,21 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         // Execute swap through PoolManager
         BalanceDelta delta = poolManager.swap(poolKey, swapParams, "");
 
-        // In V4, delta interpretation:
-        // - Negative = we owe to PoolManager (need to settle/pay)
-        // - Positive = PoolManager owes us (need to take/receive)
-
         // Handle token0 delta
         int256 delta0 = delta.amount0();
         if (delta0 < 0) {
-            // We owe token0 to PoolManager - settle it
             _settleToPoolManager(poolKey.currency0, uint256(-delta0));
         } else if (delta0 > 0) {
-            // PoolManager owes us token0 - take it
             _takeFromPoolManager(poolKey.currency0, uint256(delta0));
-            // Take protocol fee on received tokens (using _takeSwapFee for consistency)
             _takeSwapFee(poolKey.currency0, uint256(delta0));
         }
 
         // Handle token1 delta
         int256 delta1 = delta.amount1();
         if (delta1 < 0) {
-            // We owe token1 to PoolManager - settle it
             _settleToPoolManager(poolKey.currency1, uint256(-delta1));
         } else if (delta1 > 0) {
-            // PoolManager owes us token1 - take it
             _takeFromPoolManager(poolKey.currency1, uint256(delta1));
-            // Take protocol fee on received tokens (using _takeSwapFee for consistency)
             _takeSwapFee(poolKey.currency1, uint256(delta1));
         }
 
@@ -888,8 +903,6 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         }
 
         // Encode mint action with SETTLE using OPEN_DELTA (0) and payerIsUser=false
-        // OPEN_DELTA = 0, which tells PositionManager to settle exactly the debt amount
-        // payerIsUser = false means PositionManager uses its own balance
         bytes memory actions = abi.encodePacked(
             uint8(Actions.MINT_POSITION),
             uint8(Actions.SETTLE),
@@ -909,8 +922,6 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
             ""
         );
         // SETTLE params: (currency, amount, payerIsUser)
-        // Using OPEN_DELTA (0) to settle exactly the debt amount
-        // payerIsUser = false means PositionManager uses its own balance
         params[1] = abi.encode(poolKey.currency0, uint256(0), false);
         params[2] = abi.encode(poolKey.currency1, uint256(0), false);
         // SWEEP remaining tokens back to this contract for refund handling
@@ -918,9 +929,13 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         params[4] = abi.encode(poolKey.currency1, address(this));
 
         // Execute mint - slippage validation happens inside PositionManager
-        uint256 ethValue = poolKey.currency0.isAddressZero() || poolKey.currency1.isAddressZero()
-            ? address(this).balance
-            : 0;
+        uint256 ethValue;
+        if (poolKey.currency0.isAddressZero() || poolKey.currency1.isAddressZero()) {
+            Currency nativeCurrency = Currency.wrap(address(0));
+            uint256 nativeBal = address(this).balance;
+            uint256 reserved = accumulatedFees[nativeCurrency];
+            ethValue = nativeBal > reserved ? nativeBal - reserved : 0;
+        }
 
         positionManager.modifyLiquidities{value: ethValue}(
             abi.encode(actions, params),
@@ -952,7 +967,6 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         uint256 balance1Before = _getBalance(poolKey.currency1);
 
         // Transfer tokens to PositionManager (not PoolManager)
-        // PositionManager will then handle the settlement using its own balance
         address pmAddr = address(positionManager);
 
         if (!poolKey.currency0.isAddressZero() && balance0Before > 0) {
@@ -972,17 +986,18 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         );
         bytes[] memory params = new bytes[](5);
         params[0] = abi.encode(tokenId, liquidity, amount0Max, amount1Max, "");
-        // SETTLE params: (currency, amount, payerIsUser)
-        // Using OPEN_DELTA (0) to settle exactly the debt amount
         params[1] = abi.encode(poolKey.currency0, uint256(0), false);
         params[2] = abi.encode(poolKey.currency1, uint256(0), false);
-        // SWEEP remaining tokens back to this contract
         params[3] = abi.encode(poolKey.currency0, address(this));
         params[4] = abi.encode(poolKey.currency1, address(this));
 
-        uint256 ethValue = poolKey.currency0.isAddressZero() || poolKey.currency1.isAddressZero()
-            ? address(this).balance
-            : 0;
+        uint256 ethValue;
+        if (poolKey.currency0.isAddressZero() || poolKey.currency1.isAddressZero()) {
+            Currency nativeCurrency = Currency.wrap(address(0));
+            uint256 nativeBal = address(this).balance;
+            uint256 reserved = accumulatedFees[nativeCurrency];
+            ethValue = nativeBal > reserved ? nativeBal - reserved : 0;
+        }
 
         positionManager.modifyLiquidities{value: ethValue}(
             abi.encode(actions, params),

@@ -69,6 +69,9 @@ contract MockPoolManager {
         uint24 lpFee;
     }
 
+    /// @dev Must match StateLibrary.POOLS_SLOT in v4-core
+    bytes32 constant POOLS_SLOT = bytes32(uint256(6));
+
     mapping(PoolId => Slot0) public slots;
 
     function initialize(PoolKey memory key, uint160 sqrtPriceX96) external returns (int24 tick) {
@@ -79,6 +82,7 @@ contract MockPoolManager {
             protocolFee: 0,
             lpFee: key.fee
         });
+        _writeSlot0ToRawStorage(key.toId(), sqrtPriceX96, tick, 0, key.fee);
     }
 
     function getSlot0(PoolId id) external view returns (uint160, int24, uint24, uint24) {
@@ -89,6 +93,20 @@ contract MockPoolManager {
     function setSlot0(PoolId id, uint160 sqrtPriceX96, int24 tick) external {
         slots[id].sqrtPriceX96 = sqrtPriceX96;
         slots[id].tick = tick;
+        _writeSlot0ToRawStorage(id, sqrtPriceX96, tick, slots[id].protocolFee, slots[id].lpFee);
+    }
+
+    /// @dev Write packed slot0 data to the raw storage slot that StateLibrary.getSlot0 reads via extsload
+    function _writeSlot0ToRawStorage(PoolId id, uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee) internal {
+        bytes32 stateSlot = keccak256(abi.encodePacked(PoolId.unwrap(id), POOLS_SLOT));
+        // Pack: sqrtPriceX96 (160) | tick (24) | protocolFee (24) | lpFee (24)
+        bytes32 packed = bytes32(uint256(sqrtPriceX96))
+            | bytes32(uint256(uint24(tick)) << 160)
+            | bytes32(uint256(protocolFee) << 184)
+            | bytes32(uint256(lpFee) << 208);
+        assembly {
+            sstore(stateSlot, packed)
+        }
     }
 
     // IExtsload implementation for StateLibrary compatibility

@@ -93,6 +93,7 @@ export const compoundConfig = onchainTable("compound_config", (t) => ({
   totalCompoundedToken1: t.text().notNull().default("0"),
   totalFeesPaidToken0: t.text().notNull().default("0"),
   totalFeesPaidToken1: t.text().notNull().default("0"),
+  maxCompoundSlippage: t.text().notNull().default("200"), // basis points, default 2%
   lastCompoundTimestamp: t.text(),
 }));
 
@@ -165,6 +166,29 @@ export const rebalanceEvent = onchainTable("rebalance_event", (t) => ({
   liquidity: t.text().notNull(),
   fee0: t.text().notNull(),
   fee1: t.text().notNull(),
+}));
+
+// ============ Protocol Fee Tracking ============
+
+export const protocolFeeUpdate = onchainTable("protocol_fee_update", (t) => ({
+  id: t.text().primaryKey(),
+  contract: t.text().notNull(), // "V4Utils" | "V4Compoundor" | "V4AutoRange"
+  oldFee: t.text().notNull(),
+  newFee: t.text().notNull(),
+  timestamp: t.text().notNull(),
+  blockNumber: t.text().notNull(),
+  transactionHash: t.text().notNull(),
+}));
+
+export const feeWithdrawal = onchainTable("fee_withdrawal", (t) => ({
+  id: t.text().primaryKey(),
+  contract: t.text().notNull(), // "V4Utils" | "V4Compoundor" | "V4AutoRange"
+  recipient: t.text().notNull(),
+  currency: t.text().notNull(),
+  amount: t.text().notNull(),
+  timestamp: t.text().notNull(),
+  blockNumber: t.text().notNull(),
+  transactionHash: t.text().notNull(),
 }));
 
 // ============ Lending/Vault Entities ============

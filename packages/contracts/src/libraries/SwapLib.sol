@@ -10,6 +10,7 @@ import { SwapParams as PoolSwapParams } from "@uniswap/v4-core/src/types/PoolOpe
 import { StateLibrary } from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { FullMath } from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
 /// @notice WETH9 interface for wrapping ETH
 interface IWETH9 {
@@ -130,39 +131,20 @@ library SwapLib {
     }
 
     /// @notice Validate swap against TWAP to prevent manipulation
-    /// @param poolManager The pool manager
-    /// @param poolKey The pool key
-    /// @param maxDeviation Maximum allowed deviation from TWAP (basis points)
-    /// @param twapInterval TWAP observation interval in seconds
+    /// @dev Not yet implemented — requires a TWAP oracle hook for V4.
+    ///      Calling this function will revert unconditionally.
     function validateAgainstTWAP(
-        IPoolManager poolManager,
-        PoolKey memory poolKey,
-        uint256 maxDeviation,
-        uint32 twapInterval
-    ) internal view {
-        PoolId poolId = poolKey.toId();
-        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolId);
-
-        // Get TWAP price (simplified - in production use oracle observations)
-        // For V4, we'd need to implement or use a TWAP oracle hook
-        uint160 twapSqrtPriceX96 = sqrtPriceX96; // Placeholder
-
-        // Calculate deviation
-        uint256 deviation;
-        if (sqrtPriceX96 > twapSqrtPriceX96) {
-            deviation = ((uint256(sqrtPriceX96) - uint256(twapSqrtPriceX96)) * 10000) / uint256(twapSqrtPriceX96);
-        } else {
-            deviation = ((uint256(twapSqrtPriceX96) - uint256(sqrtPriceX96)) * 10000) / uint256(twapSqrtPriceX96);
-        }
-
-        if (deviation > maxDeviation) {
-            revert TWAPCheckFailed(sqrtPriceX96, twapSqrtPriceX96, maxDeviation);
-        }
+        IPoolManager,
+        PoolKey memory,
+        uint256,
+        uint32
+    ) internal pure {
+        revert("TWAP not implemented");
     }
 
     /// @notice Calculate minimum output with slippage
     /// @param amountIn Input amount
-    /// @param priceX96 Price in X96 format
+    /// @param priceX96 Price in X96 format (sqrtPriceX96 from pool)
     /// @param slippageBps Slippage in basis points
     /// @param zeroForOne Direction of swap
     /// @return minAmountOut Minimum output amount
@@ -172,13 +154,18 @@ library SwapLib {
         uint256 slippageBps,
         bool zeroForOne
     ) internal pure returns (uint256 minAmountOut) {
+        if (amountIn == 0 || priceX96 == 0) return 0;
+
+        uint256 Q96 = 1 << 96;
         uint256 expectedOut;
         if (zeroForOne) {
-            // token0 -> token1: multiply by price
-            expectedOut = (amountIn * uint256(priceX96) * uint256(priceX96)) >> 192;
+            // token0 -> token1: multiply by (price/Q96)^2
+            // Split to avoid overflow: (amountIn * priceX96 / Q96) * priceX96 / Q96
+            expectedOut = FullMath.mulDiv(FullMath.mulDiv(amountIn, priceX96, Q96), priceX96, Q96);
         } else {
-            // token1 -> token0: divide by price
-            expectedOut = (amountIn << 192) / (uint256(priceX96) * uint256(priceX96));
+            // token1 -> token0: divide by (price/Q96)^2
+            // Split to avoid overflow: (amountIn * Q96 / priceX96) * Q96 / priceX96
+            expectedOut = FullMath.mulDiv(FullMath.mulDiv(amountIn, Q96, priceX96), Q96, priceX96);
         }
 
         minAmountOut = (expectedOut * (10000 - slippageBps)) / 10000;

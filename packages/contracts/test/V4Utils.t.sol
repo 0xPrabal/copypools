@@ -69,7 +69,7 @@ contract V4UtilsTest is BaseTest {
     }
 
     function test_Version() public view {
-        assertEq(v4Utils.VERSION(), "1.0.0");
+        assertEq(v4Utils.VERSION(), "1.1.0");
     }
 
     // ============ Router Approval Tests ============
