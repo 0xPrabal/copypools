@@ -37,6 +37,7 @@ router.get('/', async (_req: Request, res: Response) => {
       services: {
         database: dbHealthy ? 'healthy' : 'unavailable',
         rpc: hasHealthyRpc ? 'healthy' : 'degraded',
+        cache: memoryCache.isRedisConnected() ? 'redis' : 'memory',
       },
     };
 
