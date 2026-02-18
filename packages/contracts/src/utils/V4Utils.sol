@@ -21,6 +21,7 @@ import { V4Base } from "../base/V4Base.sol";
 import { Multicall } from "../base/Multicall.sol";
 import { IV4Utils } from "../interfaces/IV4Utils.sol";
 import { SwapLib } from "../libraries/SwapLib.sol";
+import { PositionValueLib } from "../libraries/PositionValueLib.sol";
 
 /// @title V4Utils
 /// @notice Utility contract for atomic operations on Uniswap V4 positions
@@ -43,11 +44,17 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
     /// @notice Maximum protocol fee (10%)
     uint256 public constant MAX_PROTOCOL_FEE = 1000;
 
+    /// @notice Cooldown period between protocol fee changes
+    uint256 public constant FEE_CHANGE_COOLDOWN = 24 hours;
+
     /// @notice Accumulated protocol fees by currency
     mapping(Currency => uint256) public override accumulatedFees;
 
+    /// @notice Last protocol fee change timestamp
+    uint256 public lastFeeChangeTime;
+
     /// @notice Storage gap for upgrades
-    uint256[48] private __gap;
+    uint256[47] private __gap;
 
     /// @notice Error when swap data is required but not provided
     error SwapDataRequired();
@@ -440,18 +447,29 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         onlyPositionOwnerOrApproved(params.tokenId)
         returns (uint256 amount)
     {
-        (PoolKey memory poolKey,,, uint128 currentLiquidity) = getPositionInfo(params.tokenId);
+        (PoolKey memory poolKey, int24 tickLower, int24 tickUpper, uint128 currentLiquidity) =
+            getPositionInfo(params.tokenId);
         address owner = IERC721(address(positionManager)).ownerOf(params.tokenId);
 
         // Use all liquidity if 0 is specified
         uint128 liquidityToRemove = params.liquidity == 0 ? currentLiquidity : params.liquidity;
 
-        // Decrease liquidity
+        // M-03: Calculate expected amounts for slippage protection on decrease step
+        // L-NEW-01: Cap decrease slippage at 5% regardless of maxSwapSlippage
+        (uint256 expectedAmount0, uint256 expectedAmount1) = PositionValueLib.getAmountsForLiquidity(
+            poolManager, poolKey, tickLower, tickUpper, liquidityToRemove
+        );
+        uint256 decreaseSlippage = params.maxSwapSlippage > 0 ? params.maxSwapSlippage : 500;
+        if (decreaseSlippage > 500) decreaseSlippage = 500; // Cap at 5% for decrease step
+        uint256 amount0Min = expectedAmount0 * (10000 - decreaseSlippage) / 10000;
+        uint256 amount1Min = expectedAmount1 * (10000 - decreaseSlippage) / 10000;
+
+        // Decrease liquidity with per-step slippage protection
         (uint256 amount0, uint256 amount1) = _decreaseLiquidity(
             params.tokenId,
             liquidityToRemove,
-            0, // No minimum for decrease - slippage protection is on final amount
-            0
+            amount0Min,
+            amount1Min
         );
 
         emit LiquidityDecreased(params.tokenId, liquidityToRemove, amount0, amount1);
@@ -616,8 +634,10 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
     /// @inheritdoc IV4Utils
     function setProtocolFee(uint256 newFee) external override onlyOwner {
         require(newFee <= MAX_PROTOCOL_FEE, "Fee too high");
+        require(block.timestamp >= lastFeeChangeTime + FEE_CHANGE_COOLDOWN, "Fee change cooldown");
         emit ProtocolFeeUpdated(protocolFee, newFee);
         protocolFee = newFee;
+        lastFeeChangeTime = block.timestamp;
     }
 
     /// @inheritdoc IV4Utils
@@ -792,7 +812,7 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         uint256 balance1 = _getAvailableBalance(poolKey.currency1);
 
         // Get current price and calculate target amounts for the new range
-        (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(poolKey.toId());
+        (, int24 currentTick,,) = poolManager.getSlot0(poolKey.toId());
 
         // If current tick is in the new range, we need both tokens
         if (currentTick >= newTickLower && currentTick < newTickUpper) {
@@ -800,16 +820,16 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
                 // We only have token0, need to swap some for token1
                 uint256 swapAmount = balance0 / 2;
                 if (swapAmount > 0) {
-                    // Perform swap inside unlock callback
-                    bytes memory callbackData = abi.encode(poolKey, true, int256(swapAmount));
+                    // H-03: Pass maxSlippage through callback for verification
+                    bytes memory callbackData = abi.encode(poolKey, true, int256(swapAmount), maxSlippage);
                     poolManager.unlock(callbackData);
                 }
             } else if (balance1 > 0 && balance0 == 0) {
                 // We only have token1, need to swap some for token0
                 uint256 swapAmount = balance1 / 2;
                 if (swapAmount > 0) {
-                    // Perform swap inside unlock callback
-                    bytes memory callbackData = abi.encode(poolKey, false, int256(swapAmount));
+                    // H-03: Pass maxSlippage through callback for verification
+                    bytes memory callbackData = abi.encode(poolKey, false, int256(swapAmount), maxSlippage);
                     poolManager.unlock(callbackData);
                 }
             }
@@ -819,14 +839,17 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
     }
 
     /// @notice Callback from PoolManager.unlock() - performs the actual swap
-    /// @param data Encoded swap parameters (poolKey, zeroForOne, amountIn)
+    /// @param data Encoded swap parameters (poolKey, zeroForOne, amountIn, maxSlippage)
     /// @return Empty bytes
     function unlockCallback(bytes calldata data) external override returns (bytes memory) {
         require(msg.sender == address(poolManager), "Only PoolManager");
 
-        (PoolKey memory poolKey, bool zeroForOne, int256 amountIn) = abi.decode(data, (PoolKey, bool, int256));
+        (PoolKey memory poolKey, bool zeroForOne, int256 amountIn, uint256 maxSlippage) =
+            abi.decode(data, (PoolKey, bool, int256, uint256));
 
-        // Calculate minimum output with slippage protection
+        // H-03: Get current price BEFORE swap for slippage calculation
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
+
         uint160 sqrtPriceLimitX96 = zeroForOne
             ? TickMath.MIN_SQRT_PRICE + 1
             : TickMath.MAX_SQRT_PRICE - 1;
@@ -840,13 +863,22 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         // Execute swap through PoolManager
         BalanceDelta delta = poolManager.swap(poolKey, swapParams, "");
 
+        // H-03: Verify slippage on swap output
+        if (maxSlippage < 10000) {
+            uint256 minOutput = SwapLib.calculateMinOutput(uint256(amountIn), sqrtPriceX96, maxSlippage, zeroForOne);
+            int256 outputDelta = zeroForOne ? int256(delta.amount1()) : int256(delta.amount0());
+            if (outputDelta > 0) {
+                require(uint256(outputDelta) >= minOutput, "Swap slippage exceeded");
+            }
+        }
+
         // Handle token0 delta
         int256 delta0 = delta.amount0();
         if (delta0 < 0) {
             _settleToPoolManager(poolKey.currency0, uint256(-delta0));
         } else if (delta0 > 0) {
+            // M-05: No protocol fee on internal pool swaps (only on external router swaps)
             _takeFromPoolManager(poolKey.currency0, uint256(delta0));
-            _takeSwapFee(poolKey.currency0, uint256(delta0));
         }
 
         // Handle token1 delta
@@ -854,8 +886,8 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         if (delta1 < 0) {
             _settleToPoolManager(poolKey.currency1, uint256(-delta1));
         } else if (delta1 > 0) {
+            // M-05: No protocol fee on internal pool swaps (only on external router swaps)
             _takeFromPoolManager(poolKey.currency1, uint256(delta1));
-            _takeSwapFee(poolKey.currency1, uint256(delta1));
         }
 
         return "";

@@ -148,11 +148,13 @@ library PositionValueLib {
     }
 
     /// @notice Calculate optimal token ratio for a range
+    /// @dev L-NEW-02: Converts amount0 to token1 value using sqrtPriceX96 before computing ratio,
+    ///      so tokens with different decimals are compared in a common denomination.
     /// @param sqrtPriceX96 Current sqrt price
     /// @param tickLower Lower tick
     /// @param tickUpper Upper tick
-    /// @return ratio0 Ratio of token0 (basis points, where 10000 = 100%)
-    /// @return ratio1 Ratio of token1 (basis points)
+    /// @return ratio0 Ratio of token0 value (basis points, where 10000 = 100%)
+    /// @return ratio1 Ratio of token1 value (basis points)
     function calculateOptimalRatio(
         uint160 sqrtPriceX96,
         int24 tickLower,
@@ -196,12 +198,21 @@ library PositionValueLib {
             );
         }
 
-        uint256 total = amount0 + amount1;
+        // Convert amount0 to token1 value using price so tokens with different
+        // decimals are compared in the same denomination
+        // value0InToken1 = amount0 * (sqrtPriceX96 / Q96)^2
+        uint256 Q96 = FixedPoint96.Q96;
+        uint256 value0InToken1 = FullMath.mulDiv(
+            FullMath.mulDiv(amount0, sqrtPriceX96, Q96),
+            sqrtPriceX96,
+            Q96
+        );
+        uint256 total = value0InToken1 + amount1;
         if (total == 0) {
             ratio0 = 5000;
             ratio1 = 5000;
         } else {
-            ratio0 = (amount0 * 10000) / total;
+            ratio0 = (value0InToken1 * 10000) / total;
             ratio1 = 10000 - ratio0;
         }
     }

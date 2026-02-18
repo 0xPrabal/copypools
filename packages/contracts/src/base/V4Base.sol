@@ -109,6 +109,8 @@ abstract contract V4Base is
     }
 
     /// @notice Authorize upgrade (UUPS)
+    /// @dev M-01: For production, implement a timelock (e.g., 48h delay) via a
+    ///      TimelockController or 2-step upgrade pattern to give users time to exit.
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     /// @notice Set router approval
@@ -168,6 +170,12 @@ abstract contract V4Base is
         } else {
             IERC20(Currency.unwrap(currency)).safeTransfer(to, amount);
         }
+    }
+
+    /// @notice Floor division for tick alignment (rounds toward negative infinity)
+    /// @dev Solidity's / operator rounds toward zero; this corrects for negative ticks
+    function _floorDiv(int24 a, int24 b) internal pure returns (int24) {
+        return a / b - (a % b != 0 && (a ^ b) < 0 ? int24(1) : int24(0));
     }
 
     /// @notice Receive ETH

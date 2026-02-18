@@ -46,6 +46,9 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
     /// @notice Maximum protocol fee (10%)
     uint256 public constant MAX_PROTOCOL_FEE = 1000;
 
+    /// @notice Cooldown period between protocol fee changes
+    uint256 public constant FEE_CHANGE_COOLDOWN = 24 hours;
+
     /// @notice Protocol fee for rebalancing (0.65%)
     uint256 public protocolFee = 65;
 
@@ -61,8 +64,11 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
     /// @notice Accumulated protocol fees by currency
     mapping(Currency => uint256) public accumulatedFees;
 
+    /// @notice Last protocol fee change timestamp
+    uint256 public lastFeeChangeTime;
+
     /// @notice Storage gap for upgrades
-    uint256[44] private __gap;
+    uint256[43] private __gap;
 
     /// @notice Constructor
     constructor(
@@ -114,6 +120,7 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         onlyPositionOwnerOrApproved(tokenId)
     {
         require(config.minRebalanceInterval >= MIN_REBALANCE_INTERVAL, "Interval too short");
+        require(config.lowerDelta > 0 && config.upperDelta > 0, "Invalid deltas");
         rangeConfigs[tokenId] = config;
     }
 
@@ -142,6 +149,18 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
 
         address owner = IERC721(address(positionManager)).ownerOf(tokenId);
 
+        // H-01: External swap data can only be provided by position owner or approved operators
+        if (swapData.length > 0) {
+            if (
+                msg.sender != owner &&
+                !IERC721(address(positionManager)).isApprovedForAll(owner, msg.sender) &&
+                IERC721(address(positionManager)).getApproved(tokenId) != msg.sender &&
+                !operatorApprovals[owner][msg.sender]
+            ) {
+                revert NotAuthorized();
+            }
+        }
+
         // Collect fees first if configured (wrapped in try-catch to handle positions with no fees)
         uint256 collected0;
         uint256 collected1;
@@ -157,8 +176,19 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
             }
         }
 
-        // Decrease all liquidity
-        (uint256 amount0, uint256 amount1) = _decreaseLiquidity(tokenId, oldLiquidity, 0, 0);
+        // M-NEW-01: Calculate expected amounts for slippage protection on decrease step
+        uint256 amount0;
+        uint256 amount1;
+        {
+            (uint256 expected0, uint256 expected1) = PositionValueLib.getAmountsForLiquidity(
+                poolManager, poolKey, oldTickLower, oldTickUpper, oldLiquidity
+            );
+            uint256 decreaseSlippage = config.maxSwapSlippage > 0 ? config.maxSwapSlippage : 500;
+            if (decreaseSlippage > 500) decreaseSlippage = 500; // Cap at 5%
+            uint256 amount0Min = expected0 * (10000 - decreaseSlippage) / 10000;
+            uint256 amount1Min = expected1 * (10000 - decreaseSlippage) / 10000;
+            (amount0, amount1) = _decreaseLiquidity(tokenId, oldLiquidity, amount0Min, amount1Min);
+        }
         amount0 += collected0;
         amount1 += collected1;
 
@@ -211,7 +241,7 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         // The swap moves the price, so we need to center the range on the new tick
         {
             int24 tickSpacing = poolKey.tickSpacing;
-            int24 nearestTick = (currentTick / tickSpacing) * tickSpacing;
+            int24 nearestTick = _floorDiv(currentTick, tickSpacing) * tickSpacing;
             newTickLower = nearestTick - (config.lowerDelta / tickSpacing) * tickSpacing;
             newTickUpper = nearestTick + (config.upperDelta / tickSpacing) * tickSpacing;
 
@@ -349,7 +379,7 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
 
         // Round to tick spacing
         int24 tickSpacing = poolKey.tickSpacing;
-        int24 nearestTick = (currentTick / tickSpacing) * tickSpacing;
+        int24 nearestTick = _floorDiv(currentTick, tickSpacing) * tickSpacing;
 
         tickLower = nearestTick - (config.lowerDelta / tickSpacing) * tickSpacing;
         tickUpper = nearestTick + (config.upperDelta / tickSpacing) * tickSpacing;
@@ -377,8 +407,10 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
     /// @inheritdoc IV4AutoRange
     function setProtocolFee(uint256 newFee) external override onlyOwner {
         require(newFee <= MAX_PROTOCOL_FEE, "Fee too high");
+        require(block.timestamp >= lastFeeChangeTime + FEE_CHANGE_COOLDOWN, "Fee change cooldown");
         emit ProtocolFeeUpdated(protocolFee, newFee);
         protocolFee = newFee;
+        lastFeeChangeTime = block.timestamp;
     }
 
     /// @inheritdoc IV4AutoRange
@@ -670,12 +702,8 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         require(msg.sender == address(poolManager), "Only PoolManager");
 
-        (
-            PoolKey memory poolKey,
-            bool zeroForOne,
-            int256 amountSpecified,
-            // minOutput not used here - validated after swap completes
-        ) = abi.decode(data, (PoolKey, bool, int256, uint256));
+        (PoolKey memory poolKey, bool zeroForOne, int256 amountSpecified, uint256 minOutput) =
+            abi.decode(data, (PoolKey, bool, int256, uint256));
 
         // Execute the swap
         // In V4: negative amountSpecified = exact input
@@ -688,6 +716,12 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
             }),
             ""
         );
+
+        // H-NEW-01: Enforce slippage protection on internal swap output
+        if (minOutput > 0) {
+            int128 outputDelta = zeroForOne ? delta.amount1() : delta.amount0();
+            require(outputDelta > 0 && uint256(int256(outputDelta)) >= minOutput, "Slippage exceeded");
+        }
 
         // Get the delta amounts
         int128 delta0 = delta.amount0();

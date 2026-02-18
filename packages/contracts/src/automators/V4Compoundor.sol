@@ -43,6 +43,9 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     /// @notice Maximum protocol fee (10%)
     uint256 public constant MAX_PROTOCOL_FEE = 1000;
 
+    /// @notice Cooldown period between protocol fee changes
+    uint256 public constant FEE_CHANGE_COOLDOWN = 24 hours;
+
     /// @notice Minimum compound interval (5 minutes)
     uint32 public constant MIN_COMPOUND_INTERVAL = 300;
 
@@ -58,8 +61,11 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     /// @notice Maximum slippage for compound swaps (basis points, default 2%)
     uint256 public maxCompoundSlippage = 200;
 
+    /// @notice Last protocol fee change timestamp
+    uint256 public lastFeeChangeTime;
+
     /// @notice Storage gap for upgrades
-    uint256[44] private __gap;
+    uint256[43] private __gap;
 
     /// @notice Constructor
     constructor(
@@ -122,6 +128,19 @@ contract V4Compoundor is V4Base, IV4Compoundor {
             "Too soon"
         );
 
+        // H-02: External swap data can only be provided by position owner or approved operators
+        if (swapData.length > 0) {
+            address owner = IERC721(address(positionManager)).ownerOf(tokenId);
+            if (
+                msg.sender != owner &&
+                !IERC721(address(positionManager)).isApprovedForAll(owner, msg.sender) &&
+                IERC721(address(positionManager)).getApproved(tokenId) != msg.sender &&
+                !operatorApprovals[owner][msg.sender]
+            ) {
+                revert NotAuthorized();
+            }
+        }
+
         // Execute compound
         result = _compound(tokenId, swapData, true);
 
@@ -177,9 +196,9 @@ contract V4Compoundor is V4Base, IV4Compoundor {
         // Get pending fees
         (uint256 amount0, uint256 amount1) = getPendingFees(tokenId);
 
-        // No caller reward - just check if fees exist above minimum
+        // I-04: Check each token independently (they may have different decimals)
         estimatedReward = 0;
-        profitable = (amount0 + amount1) >= config.minRewardAmount;
+        profitable = amount0 >= config.minRewardAmount || amount1 >= config.minRewardAmount;
     }
 
     /// @inheritdoc IV4Compoundor
@@ -243,8 +262,10 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     /// @inheritdoc IV4Compoundor
     function setProtocolFee(uint256 newFee) external override onlyOwner {
         require(newFee <= MAX_PROTOCOL_FEE, "Fee too high");
+        require(block.timestamp >= lastFeeChangeTime + FEE_CHANGE_COOLDOWN, "Fee change cooldown");
         emit ProtocolFeeUpdated(protocolFee, newFee);
         protocolFee = newFee;
+        lastFeeChangeTime = block.timestamp;
     }
 
     /// @notice Set maximum slippage for compound swaps
