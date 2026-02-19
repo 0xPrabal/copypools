@@ -7,6 +7,7 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { V4Utils } from "../src/utils/V4Utils.sol";
 import { V4Compoundor } from "../src/automators/V4Compoundor.sol";
 import { V4AutoRange } from "../src/automators/V4AutoRange.sol";
+import { V4AutoExit } from "../src/automators/V4AutoExit.sol";
 import { Addresses } from "../src/constants/Addresses.sol";
 
 /// @title DeployScript
@@ -60,11 +61,21 @@ contract DeployScript is Script {
         V4AutoRange autoRange = V4AutoRange(payable(address(autoRangeProxy)));
         console.log("V4AutoRange deployed:", address(autoRange));
 
+        // Deploy V4AutoExit
+        V4AutoExit autoExitImpl = new V4AutoExit(poolManager, positionManager, weth);
+        ERC1967Proxy autoExitProxy = new ERC1967Proxy(
+            address(autoExitImpl),
+            abi.encodeWithSelector(V4AutoExit.initialize.selector, deployer)
+        );
+        V4AutoExit autoExit = V4AutoExit(payable(address(autoExitProxy)));
+        console.log("V4AutoExit deployed:", address(autoExit));
+
         // Log deployment summary
         console.log("\n=== Deployment Summary ===");
         console.log("V4Utils:      ", address(v4Utils));
         console.log("V4Compoundor: ", address(compoundor));
         console.log("V4AutoRange:  ", address(autoRange));
+        console.log("V4AutoExit:   ", address(autoExit));
 
         vm.stopBroadcast();
     }
@@ -129,10 +140,19 @@ contract DeploySepolia is Script {
         );
         V4AutoRange autoRange = V4AutoRange(payable(address(autoRangeProxy)));
 
+        // Deploy V4AutoExit
+        V4AutoExit autoExitImpl = new V4AutoExit(POOL_MANAGER, POSITION_MANAGER, WETH);
+        ERC1967Proxy autoExitProxy = new ERC1967Proxy(
+            address(autoExitImpl),
+            abi.encodeWithSelector(V4AutoExit.initialize.selector, deployer)
+        );
+        V4AutoExit autoExit = V4AutoExit(payable(address(autoExitProxy)));
+
         // Approve Universal Router on all contracts
         v4Utils.setRouterApproval(UNIVERSAL_ROUTER, true);
         compoundor.setRouterApproval(UNIVERSAL_ROUTER, true);
         autoRange.setRouterApproval(UNIVERSAL_ROUTER, true);
+        autoExit.setRouterApproval(UNIVERSAL_ROUTER, true);
 
         console.log("\n==============================================");
         console.log("  Sepolia Deployment Complete!");
@@ -140,6 +160,7 @@ contract DeploySepolia is Script {
         console.log("V4Utils:      ", address(v4Utils));
         console.log("V4Compoundor: ", address(compoundor));
         console.log("V4AutoRange:  ", address(autoRange));
+        console.log("V4AutoExit:   ", address(autoExit));
         console.log("\nUniversal Router approved on all contracts");
 
         vm.stopBroadcast();
@@ -206,10 +227,19 @@ contract DeployBase is Script {
         );
         V4AutoRange autoRange = V4AutoRange(payable(address(autoRangeProxy)));
 
+        // Deploy V4AutoExit
+        V4AutoExit autoExitImpl = new V4AutoExit(POOL_MANAGER, POSITION_MANAGER, WETH);
+        ERC1967Proxy autoExitProxy = new ERC1967Proxy(
+            address(autoExitImpl),
+            abi.encodeWithSelector(V4AutoExit.initialize.selector, deployer)
+        );
+        V4AutoExit autoExit = V4AutoExit(payable(address(autoExitProxy)));
+
         // Approve Universal Router on all contracts
         v4Utils.setRouterApproval(UNIVERSAL_ROUTER, true);
         compoundor.setRouterApproval(UNIVERSAL_ROUTER, true);
         autoRange.setRouterApproval(UNIVERSAL_ROUTER, true);
+        autoExit.setRouterApproval(UNIVERSAL_ROUTER, true);
 
         console.log("\n==============================================");
         console.log("  Base Mainnet Deployment Complete!");
@@ -217,6 +247,7 @@ contract DeployBase is Script {
         console.log("V4Utils:      ", address(v4Utils));
         console.log("V4Compoundor: ", address(compoundor));
         console.log("V4AutoRange:  ", address(autoRange));
+        console.log("V4AutoExit:   ", address(autoExit));
         console.log("\nUniversal Router approved on all contracts");
 
         vm.stopBroadcast();
@@ -232,6 +263,7 @@ contract ConfigureRouters is Script {
         address v4Utils = vm.envAddress("V4_UTILS");
         address compoundor = vm.envAddress("V4_COMPOUNDOR");
         address autoRange = vm.envAddress("V4_AUTO_RANGE");
+        address autoExit = vm.envAddress("V4_AUTO_EXIT");
 
         // Universal router for the chain
         address universalRouter = Addresses.getUniversalRouter(block.chainid);
@@ -245,6 +277,7 @@ contract ConfigureRouters is Script {
         V4Utils(payable(v4Utils)).setRouterApproval(universalRouter, true);
         V4Compoundor(payable(compoundor)).setRouterApproval(universalRouter, true);
         V4AutoRange(payable(autoRange)).setRouterApproval(universalRouter, true);
+        V4AutoExit(payable(autoExit)).setRouterApproval(universalRouter, true);
 
         // Also approve 0x and 1inch if on mainnet
         if (block.chainid == 1) {
@@ -256,6 +289,9 @@ contract ConfigureRouters is Script {
 
             V4AutoRange(payable(autoRange)).setRouterApproval(Addresses.ZEROX_EXCHANGE_PROXY, true);
             V4AutoRange(payable(autoRange)).setRouterApproval(Addresses.ONEINCH_ROUTER_V6, true);
+
+            V4AutoExit(payable(autoExit)).setRouterApproval(Addresses.ZEROX_EXCHANGE_PROXY, true);
+            V4AutoExit(payable(autoExit)).setRouterApproval(Addresses.ONEINCH_ROUTER_V6, true);
         }
 
         console.log("Routers configured successfully");
@@ -272,6 +308,7 @@ contract SetOperators is Script {
 
         address compoundor = vm.envAddress("V4_COMPOUNDOR");
         address autoRange = vm.envAddress("V4_AUTO_RANGE");
+        address autoExit = vm.envAddress("V4_AUTO_EXIT");
         address operator = vm.envAddress("OPERATOR");
 
         console.log("Setting operator:", operator);
@@ -280,6 +317,7 @@ contract SetOperators is Script {
 
         V4Compoundor(payable(compoundor)).setOperatorApproval(operator, true);
         V4AutoRange(payable(autoRange)).setOperatorApproval(operator, true);
+        V4AutoExit(payable(autoExit)).setOperatorApproval(operator, true);
 
         console.log("Operator configured successfully");
 

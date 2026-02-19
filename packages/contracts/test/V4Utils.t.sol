@@ -68,8 +68,8 @@ contract V4UtilsTest is BaseTest {
         v4Utils.initialize(user1);
     }
 
-    function test_Version() public view {
-        assertEq(v4Utils.VERSION(), "1.2.0");
+    function test_ProtocolFeeDefault() public view {
+        assertEq(v4Utils.protocolFee(), 65);
     }
 
     // ============ Router Approval Tests ============
