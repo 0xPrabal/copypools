@@ -181,13 +181,13 @@ export async function fetchPoolsFromGecko(): Promise<Partial<V4Pool>[]> {
 
         // Parse fee from pool name (only use actual data, not estimates)
         const parsedFee = parseFeeFromName(poolName);
-        const fee = parsedFee ?? 0; // Use 0 if fee not available
+        if (parsedFee === null || parsedFee === 0) continue; // Skip pools without valid fee data
 
         // Calculate APR only if we have real fee data
         let fees1dUsd = 0;
         let poolApr = 0;
 
-        if (parsedFee !== null && tvlUsd > 0) {
+        if (tvlUsd > 0) {
           const feeRate = parsedFee / 1000000; // Convert basis points to rate
           fees1dUsd = volume1dUsd * feeRate;
           poolApr = (fees1dUsd * 365 / tvlUsd) * 100;
@@ -204,7 +204,7 @@ export async function fetchPoolsFromGecko(): Promise<Partial<V4Pool>[]> {
           token1Logo: TOKEN_LOGOS[token1Address] || null,
           token0Decimals: token0Info.decimals,
           token1Decimals: token1Info.decimals,
-          fee,
+          fee: parsedFee,
           tvlUsd,
           volume1dUsd,
           volume30dUsd: volume1dUsd * 30, // Estimate

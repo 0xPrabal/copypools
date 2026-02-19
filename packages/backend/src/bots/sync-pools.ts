@@ -42,10 +42,10 @@ export async function syncPools(): Promise<void> {
 
     syncLogger.info({ count: pools.length }, 'Fetched pools from external sources');
 
-    // Filter out pools without required fields
+    // Filter out pools without required fields (fee must be > 0)
     const validPools = pools.filter(
       (pool): pool is typeof pool & { id: string; currency0: string; currency1: string; fee: number } =>
-        !!pool.id && !!pool.currency0 && !!pool.currency1 && pool.fee !== undefined
+        !!pool.id && !!pool.currency0 && !!pool.currency1 && pool.fee !== undefined && pool.fee > 0
     );
 
     if (validPools.length === 0) {

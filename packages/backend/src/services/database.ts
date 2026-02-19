@@ -1425,7 +1425,7 @@ export async function batchUpsertV4Pools(poolsData: Array<Partial<V4Pool> & { id
           token1_logo = COALESCE($8, v4_pools.token1_logo),
           token0_decimals = COALESCE($9, v4_pools.token0_decimals),
           token1_decimals = COALESCE($10, v4_pools.token1_decimals),
-          fee = $11,
+          fee = COALESCE(NULLIF($11, 0), v4_pools.fee),
           tick_spacing = COALESCE($12, v4_pools.tick_spacing),
           hooks = COALESCE($13, v4_pools.hooks),
           tvl_usd = $14,
