@@ -4,7 +4,7 @@ import { startAutoExitBot } from './auto-exit-bot.js';
 import { startAutoRangeBot } from './auto-range-bot.js';
 import { startLiquidationBot } from './liquidation-bot.js';
 import { startPositionIndexer } from './position-indexer.js';
-import { startPoolSyncJob } from './sync-pools.js';
+import { startPoolSyncJob, startConfigSyncJob } from './sync-pools.js';
 import { runNotificationChecks } from '../services/notifications.js';
 import { logger } from '../utils/logger.js';
 import { config, contracts } from '../config/index.js';
@@ -70,6 +70,11 @@ export function startAllBots(): void {
   const poolSyncJob = startPoolSyncJob();
   activeJobs.push(poolSyncJob);
   botsLogger.info('Pool sync job started (every 15 minutes)');
+
+  // Start automation config sync job (syncs compound/range/exit configs every 5 minutes)
+  const configSyncJob = startConfigSyncJob();
+  activeJobs.push(configSyncJob);
+  botsLogger.info('Automation config sync job started (every 5 minutes)');
 }
 
 export function stopAllBots(): void {

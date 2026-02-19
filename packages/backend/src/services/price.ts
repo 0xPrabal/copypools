@@ -14,6 +14,7 @@ import axios from 'axios';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { memoryCache, CACHE_TTL } from './cache.js';
+import { getTokenPriceFromDb, upsertTokenPrices } from './database.js';
 
 const priceLogger = logger.child({ service: 'price' });
 
@@ -368,7 +369,7 @@ export async function getTokenPriceUSD(
     };
   }
 
-  // Check cache
+  // Layer 1: Check memory cache
   const cacheKey = PRICE_CACHE_KEY(chainId, normalized);
   const cached = memoryCache.get<number>(cacheKey);
 
@@ -383,7 +384,27 @@ export async function getTokenPriceUSD(
     };
   }
 
-  // Try providers in order: CoinGecko → DeFiLlama → Binance
+  // Layer 2: Check DB cache (populated by background sync job)
+  try {
+    const dbPrice = await getTokenPriceFromDb(normalized, chainId);
+    if (dbPrice?.priceUsd !== null && dbPrice?.priceUsd !== undefined) {
+      // Populate memory cache from DB
+      memoryCache.set(cacheKey, dbPrice.priceUsd, PRICE_CACHE_TTL);
+      return {
+        address: normalized,
+        symbol: tokenInfo.symbol,
+        decimals: tokenInfo.decimals,
+        priceUSD: dbPrice.priceUsd,
+        cached: true,
+        timestamp,
+        source: `db:${dbPrice.source}`,
+      };
+    }
+  } catch {
+    // DB cache miss, fall through to external APIs
+  }
+
+  // Layer 3: Try providers in order: CoinGecko → DeFiLlama → Binance
   let priceUSD: number | null = null;
   let priceSource = '';
 
@@ -407,6 +428,16 @@ export async function getTokenPriceUSD(
   if (priceUSD !== null) {
     memoryCache.set(cacheKey, priceUSD, PRICE_CACHE_TTL);
     priceLogger.debug({ token: tokenInfo.symbol, priceUSD, source: priceSource }, 'Price resolved');
+
+    // Write-through to DB cache (fire-and-forget)
+    upsertTokenPrices([{
+      address: normalized,
+      chainId,
+      symbol: tokenInfo.symbol,
+      decimals: tokenInfo.decimals,
+      priceUsd: priceUSD,
+      source: priceSource,
+    }]).catch(() => {});
   }
 
   return {

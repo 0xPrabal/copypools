@@ -777,6 +777,7 @@ router.get('/owner/:address', checkRpcHealth, async (req: Request, res: Response
         inRange: p.inRange ?? true,
         compoundConfig: p.compoundConfig || null,
         rangeConfig: p.rangeConfig || null,
+        exitConfig: p.exitConfig || null,
       }));
 
       database.savePositions(dbPositions).catch(err => {

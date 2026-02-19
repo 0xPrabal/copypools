@@ -412,6 +412,22 @@ export async function initializeDatabase(): Promise<void> {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_ec_type_token ON event_cache(event_type, token_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_ec_block ON event_cache(block_number DESC)`);
 
+    // Create token_prices table for DB-cached pricing (Phase 2)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS token_prices (
+        address VARCHAR(42) NOT NULL,
+        chain_id INTEGER NOT NULL,
+        symbol VARCHAR(32),
+        decimals INTEGER DEFAULT 18,
+        price_usd DECIMAL(24,8),
+        derived_eth DECIMAL(24,18),
+        source VARCHAR(32),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        PRIMARY KEY (address, chain_id)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_tp_updated ON token_prices(updated_at DESC)`);
+
     dbLogger.info('Database schema initialized successfully');
   } catch (error) {
     dbLogger.error({ error }, 'Failed to initialize database schema');
@@ -1921,6 +1937,142 @@ export async function getActiveRangeTokenIds(): Promise<Set<string>> {
   } catch (error) {
     dbLogger.error({ error }, 'Failed to get active range token IDs');
     return new Set();
+  }
+}
+
+// ============ Token Price Functions (Phase 2 DB Caching) ============
+
+export interface DbTokenPrice {
+  address: string;
+  chainId: number;
+  symbol: string | null;
+  decimals: number;
+  priceUsd: number | null;
+  derivedEth: number | null;
+  source: string | null;
+  updatedAt: Date;
+}
+
+/**
+ * Get a token price from DB cache.
+ */
+export async function getTokenPriceFromDb(
+  address: string,
+  chainId: number = 8453
+): Promise<DbTokenPrice | null> {
+  if (!pool) return null;
+
+  try {
+    const result = await timedQuery(
+      pool,
+      `SELECT address, chain_id, symbol, decimals, price_usd, derived_eth, source, updated_at
+       FROM token_prices
+       WHERE LOWER(address) = LOWER($1) AND chain_id = $2
+         AND updated_at > NOW() - INTERVAL '10 minutes'`,
+      [address, chainId]
+    );
+
+    if (result.rows.length === 0) return null;
+    const row = result.rows[0];
+    return {
+      address: row.address,
+      chainId: row.chain_id,
+      symbol: row.symbol,
+      decimals: row.decimals,
+      priceUsd: row.price_usd ? parseFloat(row.price_usd) : null,
+      derivedEth: row.derived_eth ? parseFloat(row.derived_eth) : null,
+      source: row.source,
+      updatedAt: row.updated_at,
+    };
+  } catch (error) {
+    dbLogger.error({ error, address }, 'Failed to get token price from DB');
+    return null;
+  }
+}
+
+/**
+ * Batch get token prices from DB cache.
+ */
+export async function getBatchTokenPricesFromDb(
+  addresses: string[],
+  chainId: number = 8453
+): Promise<Map<string, DbTokenPrice>> {
+  const result = new Map<string, DbTokenPrice>();
+  if (!pool || addresses.length === 0) return result;
+
+  try {
+    const lowerAddresses = addresses.map(a => a.toLowerCase());
+    const queryResult = await timedQuery(
+      pool,
+      `SELECT address, chain_id, symbol, decimals, price_usd, derived_eth, source, updated_at
+       FROM token_prices
+       WHERE LOWER(address) = ANY($1) AND chain_id = $2
+         AND updated_at > NOW() - INTERVAL '10 minutes'`,
+      [lowerAddresses, chainId]
+    );
+
+    for (const row of queryResult.rows) {
+      result.set(row.address.toLowerCase(), {
+        address: row.address,
+        chainId: row.chain_id,
+        symbol: row.symbol,
+        decimals: row.decimals,
+        priceUsd: row.price_usd ? parseFloat(row.price_usd) : null,
+        derivedEth: row.derived_eth ? parseFloat(row.derived_eth) : null,
+        source: row.source,
+        updatedAt: row.updated_at,
+      });
+    }
+  } catch (error) {
+    dbLogger.error({ error, count: addresses.length }, 'Failed to batch get token prices from DB');
+  }
+
+  return result;
+}
+
+/**
+ * Upsert token prices to DB (used by sync job).
+ */
+export async function upsertTokenPrices(
+  prices: Array<{
+    address: string;
+    chainId: number;
+    symbol?: string;
+    decimals?: number;
+    priceUsd: number | null;
+    derivedEth?: number | null;
+    source: string;
+  }>
+): Promise<void> {
+  if (!pool || prices.length === 0) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    for (const p of prices) {
+      await client.query(
+        `INSERT INTO token_prices (address, chain_id, symbol, decimals, price_usd, derived_eth, source, updated_at)
+         VALUES (LOWER($1), $2, $3, $4, $5, $6, $7, NOW())
+         ON CONFLICT (address, chain_id)
+         DO UPDATE SET
+           symbol = COALESCE($3, token_prices.symbol),
+           decimals = COALESCE($4, token_prices.decimals),
+           price_usd = $5,
+           derived_eth = COALESCE($6, token_prices.derived_eth),
+           source = $7,
+           updated_at = NOW()`,
+        [p.address, p.chainId, p.symbol || null, p.decimals || 18, p.priceUsd, p.derivedEth || null, p.source]
+      );
+    }
+
+    await client.query('COMMIT');
+    dbLogger.debug({ count: prices.length }, 'Upserted token prices');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    dbLogger.error({ error, count: prices.length }, 'Failed to upsert token prices');
+  } finally {
+    client.release();
   }
 }
 

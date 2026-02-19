@@ -180,81 +180,163 @@ export async function getPositionsByOwner(owner: string, first = 100, skip = 0) 
     [owner, first, skip]
   );
 
-  // Enrich with configs (from database and on-chain)
-  const enrichedPositions = await Promise.all(
-    positions.map(async (pos) => {
-      const [compoundConfigs, exitConfigs, rangeConfigs] = await Promise.all([
-        queryWithRetry<any>(`SELECT * FROM compound_config WHERE position_id = $1`, [pos.tokenId]),
-        queryWithRetry<any>(`SELECT * FROM exit_config WHERE position_id = $1`, [pos.tokenId]),
-        queryWithRetry<any>(`SELECT * FROM range_config WHERE position_id = $1`, [pos.tokenId]),
-      ]);
+  // Layer 1: Batch read configs from Ponder tables (N queries → 3 batch queries)
+  const allTokenIds = positions.map((p: any) => p.tokenId);
 
-      let compoundConfig = compoundConfigs[0] || null;
-      let rangeConfig = rangeConfigs[0] || null;
+  const [allCompoundConfigs, allExitConfigs, allRangeConfigs] = await Promise.all([
+    allTokenIds.length > 0
+      ? queryWithRetry<any>(
+          `SELECT * FROM compound_config WHERE position_id = ANY($1)`,
+          [allTokenIds]
+        )
+      : Promise.resolve([]),
+    allTokenIds.length > 0
+      ? queryWithRetry<any>(
+          `SELECT * FROM exit_config WHERE position_id = ANY($1)`,
+          [allTokenIds]
+        )
+      : Promise.resolve([]),
+    allTokenIds.length > 0
+      ? queryWithRetry<any>(
+          `SELECT * FROM range_config WHERE position_id = ANY($1)`,
+          [allTokenIds]
+        )
+      : Promise.resolve([]),
+  ]);
 
-      // If no compound config in database, check on-chain
-      if (!compoundConfig) {
-        try {
-          const onChainConfig = await blockchain.getCompoundConfig(BigInt(pos.tokenId));
-          if (onChainConfig.enabled) {
-            compoundConfig = {
-              enabled: onChainConfig.enabled,
-              minCompoundInterval: onChainConfig.minCompoundInterval,
-              minRewardAmount: onChainConfig.minRewardAmount.toString(),
-            };
-          }
-        } catch (e) {
-          // Position might not be registered
+  // Build lookup maps from Ponder results
+  const ponderCompound = new Map<string, any>();
+  const ponderExit = new Map<string, any>();
+  const ponderRange = new Map<string, any>();
+  for (const c of allCompoundConfigs) ponderCompound.set(c.positionId, c);
+  for (const e of allExitConfigs) ponderExit.set(e.positionId, e);
+  for (const r of allRangeConfigs) ponderRange.set(r.positionId, r);
+
+  // Assign Ponder configs and collect IDs still missing
+  const missingCompoundIds: string[] = [];
+  const missingRangeIds: string[] = [];
+  const missingExitIds: string[] = [];
+
+  const enrichedPositions = positions.map((pos: any) => {
+    const compoundConfig = ponderCompound.get(pos.tokenId) || null;
+    const rangeConfig = ponderRange.get(pos.tokenId) || null;
+    const exitConfig = ponderExit.get(pos.tokenId) || null;
+
+    if (!compoundConfig) missingCompoundIds.push(pos.tokenId);
+    if (!rangeConfig) missingRangeIds.push(pos.tokenId);
+    if (!exitConfig) missingExitIds.push(pos.tokenId);
+
+    return { ...pos, compoundConfig, rangeConfig, exitConfig };
+  });
+
+  // Layer 2: Batch read from positions DB cache for missing configs (1 query)
+  const allMissingIds = [...new Set([...missingCompoundIds, ...missingRangeIds, ...missingExitIds])];
+  let dbConfigs = new Map<string, { compoundConfig: CompoundConfig | null; rangeConfig: RangeConfig | null; exitConfig: ExitConfig | null }>();
+
+  if (allMissingIds.length > 0) {
+    try {
+      dbConfigs = await getPositionConfigs(allMissingIds);
+    } catch (e) {
+      // DB cache miss is fine
+    }
+  }
+
+  // Apply DB cached configs
+  const stillMissingCompound: string[] = [];
+  const stillMissingRange: string[] = [];
+  const stillMissingExit: string[] = [];
+
+  for (const pos of enrichedPositions) {
+    const cached = dbConfigs.get(pos.tokenId);
+    if (!pos.compoundConfig && cached?.compoundConfig) {
+      pos.compoundConfig = cached.compoundConfig;
+    }
+    if (!pos.rangeConfig && cached?.rangeConfig) {
+      pos.rangeConfig = cached.rangeConfig;
+    }
+    if (!pos.exitConfig && cached?.exitConfig) {
+      pos.exitConfig = cached.exitConfig;
+    }
+
+    // Track what's still missing after DB cache
+    if (!pos.compoundConfig) stillMissingCompound.push(pos.tokenId);
+    if (!pos.rangeConfig) stillMissingRange.push(pos.tokenId);
+    if (!pos.exitConfig) stillMissingExit.push(pos.tokenId);
+  }
+
+  // Layer 3: Batch multicall RPC only for still-missing configs (max 3 multicalls total)
+  const dbWritebacks: Array<{ tokenId: string; chainId: number; compoundConfig?: any; rangeConfig?: any; exitConfig?: any }> = [];
+
+  if (stillMissingCompound.length > 0 || stillMissingRange.length > 0 || stillMissingExit.length > 0) {
+    const [batchCompound, batchRange, batchExit] = await Promise.all([
+      stillMissingCompound.length > 0
+        ? blockchain.batchGetCompoundConfigs(stillMissingCompound.map(id => BigInt(id)))
+        : Promise.resolve(new Map()),
+      stillMissingRange.length > 0
+        ? blockchain.batchGetRangeConfigs(stillMissingRange.map(id => BigInt(id)))
+        : Promise.resolve(new Map()),
+      stillMissingExit.length > 0
+        ? blockchain.batchGetExitConfigs(stillMissingExit.map(id => BigInt(id)))
+        : Promise.resolve(new Map()),
+    ]);
+
+    // Apply RPC results and prepare write-through updates
+    for (const pos of enrichedPositions) {
+      const writeback: typeof dbWritebacks[0] = { tokenId: pos.tokenId, chainId: 8453 };
+      let needsWrite = false;
+
+      if (!pos.compoundConfig) {
+        const rpcConfig = batchCompound.get(pos.tokenId);
+        if (rpcConfig?.enabled) {
+          pos.compoundConfig = {
+            enabled: rpcConfig.enabled,
+            minCompoundInterval: rpcConfig.minCompoundInterval,
+            minRewardAmount: rpcConfig.minRewardAmount.toString(),
+          };
+          writeback.compoundConfig = pos.compoundConfig;
+          needsWrite = true;
         }
       }
 
-      // If no range config in database, check on-chain
-      if (!rangeConfig) {
-        try {
-          const onChainRangeConfig = await blockchain.getRangeConfig(BigInt(pos.tokenId));
-          if (onChainRangeConfig?.enabled) {
-            rangeConfig = {
-              enabled: onChainRangeConfig.enabled,
-              lowerDelta: onChainRangeConfig.lowerDelta,
-              upperDelta: onChainRangeConfig.upperDelta,
-              rebalanceThreshold: onChainRangeConfig.rebalanceThreshold,
-            };
-          }
-        } catch (e) {
-          // Position might not be registered
+      if (!pos.rangeConfig) {
+        const rpcConfig = batchRange.get(pos.tokenId);
+        if (rpcConfig?.enabled) {
+          pos.rangeConfig = {
+            enabled: rpcConfig.enabled,
+            lowerDelta: rpcConfig.lowerDelta,
+            upperDelta: rpcConfig.upperDelta,
+            rebalanceThreshold: rpcConfig.rebalanceThreshold,
+          };
+          writeback.rangeConfig = pos.rangeConfig;
+          needsWrite = true;
         }
       }
 
-      let exitConfigResult = exitConfigs[0] || null;
-
-      // If no exit config in database, check on-chain
-      if (!exitConfigResult) {
-        try {
-          const onChainExitConfig = await blockchain.getExitConfig(BigInt(pos.tokenId));
-          if (onChainExitConfig.enabled) {
-            exitConfigResult = {
-              enabled: onChainExitConfig.enabled,
-              triggerTickLower: onChainExitConfig.triggerTickLower,
-              triggerTickUpper: onChainExitConfig.triggerTickUpper,
-              exitOnRangeExit: onChainExitConfig.exitOnRangeExit,
-              exitToken: onChainExitConfig.exitToken,
-              maxSwapSlippage: onChainExitConfig.maxSwapSlippage.toString(),
-              minExitInterval: onChainExitConfig.minExitInterval,
-            };
-          }
-        } catch (e) {
-          // Position might not have exit config
+      if (!pos.exitConfig) {
+        const rpcConfig = batchExit.get(pos.tokenId);
+        if (rpcConfig?.enabled) {
+          pos.exitConfig = {
+            enabled: rpcConfig.enabled,
+            triggerTickLower: rpcConfig.triggerTickLower,
+            triggerTickUpper: rpcConfig.triggerTickUpper,
+            exitOnRangeExit: rpcConfig.exitOnRangeExit,
+            exitToken: rpcConfig.exitToken,
+            maxSwapSlippage: rpcConfig.maxSwapSlippage.toString(),
+            minExitInterval: rpcConfig.minExitInterval,
+          };
+          writeback.exitConfig = pos.exitConfig;
+          needsWrite = true;
         }
       }
 
-      return {
-        ...pos,
-        compoundConfig,
-        exitConfig: exitConfigResult,
-        rangeConfig,
-      };
-    })
-  );
+      if (needsWrite) dbWritebacks.push(writeback);
+    }
+
+    // Write-through to DB cache (fire-and-forget)
+    if (dbWritebacks.length > 0) {
+      batchUpdatePositionConfigs(dbWritebacks).catch(() => {});
+    }
+  }
 
   return { positions: { items: enrichedPositions } };
 }
