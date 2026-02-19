@@ -17,8 +17,9 @@ const BASE_CONTRACTS = {
 // Start from deployment block (Feb 19, 2026)
 const BASE_START_BLOCK = 42359600;
 
-// PositionManager start block - same as BASE_START_BLOCK for consistency
-const POSITION_MANAGER_START_BLOCK = 40800000;
+// PositionManager start block - use same as deployment block to avoid heavy backfill
+// Older positions are fetched via Alchemy NFT API or RPC fallback
+const POSITION_MANAGER_START_BLOCK = BASE_START_BLOCK;
 
 // Base Mainnet RPC URLs - Prioritize paid/reliable RPCs first
 // IMPORTANT: Keep list short to avoid spreading requests across too many endpoints
@@ -42,8 +43,8 @@ export default createConfig({
     base: {
       id: 8453,
       rpc: BASE_RPCS.length > 0 ? BASE_RPCS : "https://mainnet.base.org",
-      pollingInterval: 60_000, // Poll every 1 minute for faster position updates
-      maxRequestsPerSecond: 3, // Increased for faster indexing
+      pollingInterval: 120_000, // Poll every 2 minutes to reduce RPC pressure
+      maxRequestsPerSecond: 1, // Throttled to avoid Alchemy concurrent request limits
     },
   },
   contracts: {

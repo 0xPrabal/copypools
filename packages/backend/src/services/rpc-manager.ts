@@ -24,9 +24,9 @@ const CONFIG = {
   HEALTH_CHECK_INTERVAL: 300_000, // Check unhealthy RPCs every 5 minutes (was 60s)
   CIRCUIT_RESET_TIMEOUT: 600_000, // Try unhealthy RPCs again after 10 minutes (was 5min)
 
-  // Rate Limiting (Token Bucket) - increased for better performance
-  TOKENS_PER_SECOND: 20,          // Max RPC calls per second globally (increased from 5)
-  BUCKET_SIZE: 50,                // Max burst capacity (increased from 20)
+  // Rate Limiting (Token Bucket) - conservative to share Alchemy quota with ponder
+  TOKENS_PER_SECOND: 5,           // Max RPC calls per second globally
+  BUCKET_SIZE: 10,                // Max burst capacity
   REFILL_INTERVAL: 100,           // Refill tokens every 100ms (was 200ms)
 
   // Client Cache
