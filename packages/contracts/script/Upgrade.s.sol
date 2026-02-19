@@ -7,6 +7,7 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils
 import { V4Utils } from "../src/utils/V4Utils.sol";
 import { V4Compoundor } from "../src/automators/V4Compoundor.sol";
 import { V4AutoRange } from "../src/automators/V4AutoRange.sol";
+import { V4AutoExit } from "../src/automators/V4AutoExit.sol";
 import { Addresses } from "../src/constants/Addresses.sol";
 
 /// @title UpgradeScript
@@ -157,17 +158,18 @@ contract UpgradeSepolia is Script {
 }
 
 /// @title UpgradeBase
-/// @notice Upgrade Base Mainnet proxies with 0.65% fee implementation
+/// @notice Upgrade Base Mainnet proxies — audit fixes (H-02, H-03, M-04, M-05, L-04, L-05, L-07)
 contract UpgradeBase is Script {
     // Official Uniswap V4 Base Mainnet Addresses
     address constant POOL_MANAGER = 0x498581fF718922c3f8e6A244956aF099B2652b2b;
     address constant POSITION_MANAGER = 0x7C5f5A4bBd8fD63184577525326123B519429bDc;
     address constant WETH = 0x4200000000000000000000000000000000000006;
 
-    // Existing Base Mainnet proxy addresses
-    address constant V4_UTILS_PROXY = 0x37A199B0Baea8943AD493f04Cc2da8c4fa7C2cE1;
-    address constant V4_COMPOUNDOR_PROXY = 0xB17265e7875416955dE583e3cd1d72Ab5Ed6f670;
-    address constant V4_AUTO_RANGE_PROXY = 0xa3671811324e8868e9fa83038e6b565A5b59719C;
+    // Current Base Mainnet proxy addresses (Feb 19, 2026 deployment)
+    address constant V4_UTILS_PROXY = 0x8d81Bb4daA4c8D6ad99a741d1E7C9563EAFda423;
+    address constant V4_COMPOUNDOR_PROXY = 0x2056eDc7590B42b5464f357589810fA3441216E3;
+    address constant V4_AUTO_RANGE_PROXY = 0xB6E684266259d172a8CC85F524ab2E845886242b;
+    address constant V4_AUTO_EXIT_PROXY = 0xb9ab855339036df10790728A773dD3a8c9e538B0;
 
     function run() public {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -177,23 +179,26 @@ contract UpgradeBase is Script {
 
         console.log("==============================================");
         console.log("  Upgrading Base Mainnet Proxies");
-        console.log("  0.65% Protocol Fee Implementation");
+        console.log("  Audit Fixes: H-02, H-03, M-04, M-05,");
+        console.log("               L-04, L-05, L-07");
         console.log("==============================================");
         console.log("Deployer:", deployer);
         console.log("Balance:", deployer.balance);
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // Deploy new implementations with 0.65% fee
+        // Deploy new implementations
         console.log("\nDeploying new implementations...");
         V4Utils newV4UtilsImpl = new V4Utils(POOL_MANAGER, POSITION_MANAGER, WETH);
         V4Compoundor newCompoundorImpl = new V4Compoundor(POOL_MANAGER, POSITION_MANAGER, WETH);
         V4AutoRange newAutoRangeImpl = new V4AutoRange(POOL_MANAGER, POSITION_MANAGER, WETH);
+        V4AutoExit newAutoExitImpl = new V4AutoExit(POOL_MANAGER, POSITION_MANAGER, WETH);
 
         console.log("\nNew Implementations Deployed:");
         console.log("V4Utils:      ", address(newV4UtilsImpl));
         console.log("V4Compoundor: ", address(newCompoundorImpl));
         console.log("V4AutoRange:  ", address(newAutoRangeImpl));
+        console.log("V4AutoExit:   ", address(newAutoExitImpl));
 
         // Upgrade proxies
         console.log("\nUpgrading proxies...");
@@ -216,6 +221,12 @@ contract UpgradeBase is Script {
         );
         console.log("V4AutoRange proxy upgraded");
 
+        V4AutoExit(payable(V4_AUTO_EXIT_PROXY)).upgradeToAndCall(
+            address(newAutoExitImpl),
+            ""
+        );
+        console.log("V4AutoExit proxy upgraded");
+
         console.log("\n==============================================");
         console.log("  Base Mainnet Upgrade Complete!");
         console.log("==============================================");
@@ -223,11 +234,12 @@ contract UpgradeBase is Script {
         console.log("V4Utils:      ", V4_UTILS_PROXY);
         console.log("V4Compoundor: ", V4_COMPOUNDOR_PROXY);
         console.log("V4AutoRange:  ", V4_AUTO_RANGE_PROXY);
+        console.log("V4AutoExit:   ", V4_AUTO_EXIT_PROXY);
         console.log("\nNew Implementation Addresses:");
         console.log("V4Utils Impl:      ", address(newV4UtilsImpl));
         console.log("V4Compoundor Impl: ", address(newCompoundorImpl));
         console.log("V4AutoRange Impl:  ", address(newAutoRangeImpl));
-        console.log("\nAll contracts now use 0.65% protocol fee");
+        console.log("V4AutoExit Impl:   ", address(newAutoExitImpl));
 
         vm.stopBroadcast();
     }

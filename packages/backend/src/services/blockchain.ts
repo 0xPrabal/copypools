@@ -172,7 +172,7 @@ export async function checkExit(tokenId: bigint): Promise<{ shouldExit: boolean;
   return { shouldExit: result[0], reason: result[1] };
 }
 
-export async function executeExit(tokenId: bigint, swapData: Hex): Promise<Hex> {
+export async function executeExit(tokenId: bigint, swapData: Hex, swapData1: Hex = '0x'): Promise<Hex> {
   if (!walletClient) throw new Error('Wallet not configured');
 
   // Deadline: 5 minutes from now
@@ -182,7 +182,7 @@ export async function executeExit(tokenId: bigint, swapData: Hex): Promise<Hex> 
     address: contracts.v4AutoExit as Address,
     abi: V4AutoExitABI,
     functionName: 'executeExit',
-    args: [tokenId, swapData, deadline],
+    args: [tokenId, swapData, swapData1, deadline],
     account: walletClient.account,
   });
 

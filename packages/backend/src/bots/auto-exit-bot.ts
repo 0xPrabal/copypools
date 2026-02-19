@@ -45,7 +45,8 @@ async function processExit(position: ExitablePosition): Promise<boolean> {
       : '0x';
 
     // Execute exit (deadline handled inside blockchain.executeExit)
-    const hash = await blockchain.executeExit(tokenId, swapData as `0x${string}`);
+    // swapData0 = swap for token0 side, swapData1 = swap for token1 side (empty for backwards compat)
+    const hash = await blockchain.executeExit(tokenId, swapData as `0x${string}`, '0x' as `0x${string}`);
 
     botLogger.info(
       {
