@@ -147,7 +147,12 @@
             "internalType": "Currency"
           },
           {
-            "name": "swapData",
+            "name": "swapData0",
+            "type": "bytes",
+            "internalType": "bytes"
+          },
+          {
+            "name": "swapData1",
             "type": "bytes",
             "internalType": "bytes"
           },
@@ -249,7 +254,12 @@
             "internalType": "Currency"
           },
           {
-            "name": "swapData",
+            "name": "swapData0",
+            "type": "bytes",
+            "internalType": "bytes"
+          },
+          {
+            "name": "swapData1",
             "type": "bytes",
             "internalType": "bytes"
           },
