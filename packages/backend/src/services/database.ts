@@ -2043,6 +2043,141 @@ export async function getActiveRangeTokenIds(): Promise<Set<string>> {
   }
 }
 
+// ============ Protocol Stats Functions (Phase 4 DB Caching) ============
+
+export interface DbProtocolStats {
+  poolCount: number;
+  txCount: number;
+  totalVolumeUsd: number;
+  totalFeesUsd: number;
+  totalValueLockedUsd: number;
+  poolManagerAddress: string | null;
+  updatedAt: Date;
+}
+
+/**
+ * Get cached protocol stats from DB.
+ */
+export async function getProtocolStatsFromDb(): Promise<DbProtocolStats | null> {
+  if (!pool) return null;
+
+  try {
+    const result = await timedQuery(
+      pool,
+      `SELECT pool_count, tx_count, total_volume_usd, total_fees_usd,
+              total_value_locked_usd, pool_manager_address, updated_at
+       FROM protocol_stats_cache
+       WHERE id = 'latest'
+         AND updated_at > NOW() - INTERVAL '30 minutes'`,
+      []
+    );
+
+    if (result.rows.length === 0) return null;
+    const row = result.rows[0];
+    return {
+      poolCount: row.pool_count,
+      txCount: parseInt(row.tx_count) || 0,
+      totalVolumeUsd: parseFloat(row.total_volume_usd) || 0,
+      totalFeesUsd: parseFloat(row.total_fees_usd) || 0,
+      totalValueLockedUsd: parseFloat(row.total_value_locked_usd) || 0,
+      poolManagerAddress: row.pool_manager_address,
+      updatedAt: row.updated_at,
+    };
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to get protocol stats from DB');
+    return null;
+  }
+}
+
+/**
+ * Upsert protocol stats to DB.
+ */
+export async function upsertProtocolStats(stats: {
+  poolCount: number;
+  txCount: number;
+  totalVolumeUsd: number;
+  totalFeesUsd: number;
+  totalValueLockedUsd: number;
+  poolManagerAddress?: string;
+}): Promise<void> {
+  if (!pool) return;
+
+  try {
+    await pool.query(
+      `INSERT INTO protocol_stats_cache (id, pool_count, tx_count, total_volume_usd,
+         total_fees_usd, total_value_locked_usd, pool_manager_address, updated_at)
+       VALUES ('latest', $1, $2, $3, $4, $5, $6, NOW())
+       ON CONFLICT (id)
+       DO UPDATE SET
+         pool_count = $1, tx_count = $2, total_volume_usd = $3,
+         total_fees_usd = $4, total_value_locked_usd = $5,
+         pool_manager_address = COALESCE($6, protocol_stats_cache.pool_manager_address),
+         updated_at = NOW()`,
+      [stats.poolCount, stats.txCount, stats.totalVolumeUsd,
+       stats.totalFeesUsd, stats.totalValueLockedUsd, stats.poolManagerAddress || null]
+    );
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to upsert protocol stats');
+  }
+}
+
+/**
+ * Get protocol day data from DB.
+ */
+export async function getProtocolDayDataFromDb(days: number = 30): Promise<any[]> {
+  if (!pool) return [];
+
+  try {
+    const result = await timedQuery(
+      pool,
+      `SELECT date, volume_usd, fees_usd, tvl_usd, tx_count
+       FROM protocol_day_data
+       ORDER BY date DESC
+       LIMIT $1`,
+      [days]
+    );
+    return result.rows;
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to get protocol day data from DB');
+    return [];
+  }
+}
+
+/**
+ * Upsert protocol day data.
+ */
+export async function upsertProtocolDayData(
+  dayData: Array<{
+    date: number;
+    volumeUSD: string;
+    feesUSD: string;
+    tvlUSD: string;
+    txCount: string;
+  }>
+): Promise<void> {
+  if (!pool || dayData.length === 0) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const d of dayData) {
+      await client.query(
+        `INSERT INTO protocol_day_data (date, volume_usd, fees_usd, tvl_usd, tx_count)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (date)
+         DO UPDATE SET volume_usd = $2, fees_usd = $3, tvl_usd = $4, tx_count = $5`,
+        [d.date, d.volumeUSD, d.feesUSD, d.tvlUSD, d.txCount]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    dbLogger.error({ error, count: dayData.length }, 'Failed to upsert protocol day data');
+  } finally {
+    client.release();
+  }
+}
+
 // ============ Pool Historical Data Functions (Phase 3 DB Caching) ============
 
 /**

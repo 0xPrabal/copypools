@@ -4,7 +4,7 @@ import { fetchAllPools } from '../services/uniswap-subgraph.js';
 import {
   batchUpsertV4Pools, getPoolsLastSyncTime, getPositionsNeedingConfigSync,
   batchUpdatePositionConfigs, upsertTokenPrices, upsertPoolDayData,
-  upsertPoolSwaps, upsertPoolTicks
+  upsertPoolSwaps, upsertPoolTicks, upsertProtocolStats, upsertProtocolDayData
 } from '../services/database.js';
 import { batchGetCompoundConfigs, batchGetRangeConfigs, batchGetExitConfigs } from '../services/blockchain.js';
 import {
