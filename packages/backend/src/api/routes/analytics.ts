@@ -12,6 +12,12 @@ import {
   fetchEthPrice,
   fetchTopTokens,
 } from '../../services/graph-client.js';
+import {
+  getProtocolStatsFromDb,
+  getProtocolDayDataFromDb,
+  getBatchTokenPricesFromDb,
+  getTokenPriceFromDb,
+} from '../../services/database.js';
 
 const router = Router();
 const routeLogger = logger.child({ route: 'analytics' });
@@ -420,9 +426,25 @@ router.get('/rebalances', async (req: Request, res: Response) => {
 
 // ─── Graph-powered Routes ──────────────────────────────────────
 
-// Get Uniswap V4 protocol stats from The Graph
+// Get Uniswap V4 protocol stats (DB first, Graph fallback)
 router.get('/graph/protocol', async (_req: Request, res: Response) => {
   try {
+    // Try DB cache first (populated by background sync)
+    const dbStats = await getProtocolStatsFromDb();
+    if (dbStats) {
+      if (res.headersSent) return;
+      return res.json({
+        source: 'db',
+        poolManagerAddress: dbStats.poolManagerAddress,
+        poolCount: dbStats.poolCount,
+        txCount: dbStats.txCount,
+        totalVolumeUSD: dbStats.totalVolumeUsd,
+        totalFeesUSD: dbStats.totalFeesUsd,
+        totalValueLockedUSD: dbStats.totalValueLockedUsd,
+      });
+    }
+
+    // Fallback to Graph
     const stats = await fetchProtocolStats();
     if (res.headersSent) return;
 
@@ -446,10 +468,29 @@ router.get('/graph/protocol', async (_req: Request, res: Response) => {
   }
 });
 
-// Get Uniswap V4 daily data from The Graph
+// Get Uniswap V4 daily data (DB first, Graph fallback)
 router.get('/graph/daily', async (req: Request, res: Response) => {
   try {
     const days = Math.min(parseInt(req.query.days as string) || 30, 365);
+
+    // Try DB first
+    const dbData = await getProtocolDayDataFromDb(days);
+    if (dbData.length > 0) {
+      if (res.headersSent) return;
+      return res.json({
+        source: 'db',
+        count: dbData.length,
+        data: dbData.map(d => ({
+          date: d.date,
+          volumeUSD: parseFloat(d.volume_usd) || 0,
+          feesUSD: parseFloat(d.fees_usd) || 0,
+          tvlUSD: parseFloat(d.tvl_usd) || 0,
+          txCount: d.tx_count || 0,
+        })),
+      });
+    }
+
+    // Fallback to Graph
     const data = await fetchUniswapDayData(days);
     if (res.headersSent) return;
 
@@ -471,27 +512,41 @@ router.get('/graph/daily', async (req: Request, res: Response) => {
   }
 });
 
-// Get ETH/USD price from The Graph Bundle
+// Get ETH/USD price (DB first, Graph fallback)
 router.get('/graph/eth-price', async (_req: Request, res: Response) => {
   try {
+    // Try DB first (ETH stored as WETH)
+    const dbPrice = await getTokenPriceFromDb('0x4200000000000000000000000000000000000006', 8453);
+    if (dbPrice?.priceUsd) {
+      if (res.headersSent) return;
+      return res.json({ source: 'db', ethPriceUSD: dbPrice.priceUsd });
+    }
+
     const price = await fetchEthPrice();
     if (res.headersSent) return;
     res.json({ source: 'thegraph', ethPriceUSD: price });
   } catch (error) {
-    routeLogger.error({ error }, 'Failed to get ETH price from Graph');
+    routeLogger.error({ error }, 'Failed to get ETH price');
     if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch ETH price' });
   }
 });
 
-// Get top tokens from The Graph
+// Get top tokens (Graph with DB-cached prices)
 router.get('/graph/tokens', async (req: Request, res: Response) => {
   try {
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
     const tokens = await fetchTopTokens(limit);
     if (res.headersSent) return;
 
-    const ethPrice = await fetchEthPrice();
+    // Get ETH price from DB or Graph
+    let ethPrice = 0;
+    const dbEthPrice = await getTokenPriceFromDb('0x4200000000000000000000000000000000000006', 8453);
+    if (dbEthPrice?.priceUsd) {
+      ethPrice = dbEthPrice.priceUsd;
+    } else {
+      ethPrice = await fetchEthPrice();
+    }
 
     res.json({
       source: 'thegraph',

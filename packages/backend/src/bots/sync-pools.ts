@@ -484,6 +484,86 @@ export function startTokenPriceSyncJob(): CronJob {
   return job;
 }
 
+// ============ Protocol Stats Sync (Phase 4 DB Caching) ============
+
+const PROTOCOL_STATS_SYNC_INTERVAL = '*/15 * * * *'; // Every 15 minutes
+let isProtocolStatsSyncing = false;
+
+/**
+ * Background sync job: fetches protocol stats and daily data from Graph
+ * and writes to DB. Eliminates Graph calls from /analytics/* request path.
+ */
+export async function syncProtocolStatsData(): Promise<void> {
+  if (isProtocolStatsSyncing) {
+    syncLogger.info('Protocol stats sync already in progress, skipping');
+    return;
+  }
+
+  isProtocolStatsSyncing = true;
+  const startTime = Date.now();
+
+  try {
+    // Fetch protocol stats and daily data in parallel from Graph (2 queries)
+    const [stats, dayData] = await Promise.all([
+      fetchProtocolStats(),
+      fetchUniswapDayData(30),
+    ]);
+
+    // Upsert protocol stats
+    if (stats) {
+      await upsertProtocolStats({
+        poolCount: parseInt(stats.poolCount) || 0,
+        txCount: parseInt(stats.txCount) || 0,
+        totalVolumeUsd: parseFloat(stats.totalVolumeUSD) || 0,
+        totalFeesUsd: parseFloat(stats.totalFeesUSD) || 0,
+        totalValueLockedUsd: parseFloat(stats.totalValueLockedUSD) || 0,
+        poolManagerAddress: stats.id,
+      });
+    }
+
+    // Upsert protocol day data
+    if (dayData && dayData.length > 0) {
+      await upsertProtocolDayData(dayData);
+    }
+
+    const duration = Date.now() - startTime;
+    syncLogger.info(
+      { hasStats: !!stats, dayDataCount: dayData?.length || 0, durationMs: duration },
+      'Protocol stats sync completed'
+    );
+  } catch (error) {
+    syncLogger.error({ error }, 'Protocol stats sync failed');
+  } finally {
+    isProtocolStatsSyncing = false;
+  }
+}
+
+export function startProtocolStatsSyncJob(): CronJob {
+  syncLogger.info('Starting protocol stats sync job (every 15 minutes)');
+
+  // Run initial sync after 20-second delay
+  setTimeout(() => {
+    syncProtocolStatsData().catch((error) => {
+      syncLogger.error({ error }, 'Initial protocol stats sync failed');
+    });
+  }, 20000);
+
+  const job = new CronJob(
+    PROTOCOL_STATS_SYNC_INTERVAL,
+    async () => {
+      try {
+        await syncProtocolStatsData();
+      } catch (error) {
+        syncLogger.error({ error }, 'Scheduled protocol stats sync failed');
+      }
+    },
+    null,
+    true
+  );
+
+  return job;
+}
+
 // Get status of last sync
 export async function getPoolSyncStatus(): Promise<{
   lastSyncTime: Date | null;

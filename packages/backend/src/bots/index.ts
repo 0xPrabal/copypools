@@ -4,7 +4,7 @@ import { startAutoExitBot } from './auto-exit-bot.js';
 import { startAutoRangeBot } from './auto-range-bot.js';
 import { startLiquidationBot } from './liquidation-bot.js';
 import { startPositionIndexer } from './position-indexer.js';
-import { startPoolSyncJob, startConfigSyncJob, startTokenPriceSyncJob, startHistoricalDataSyncJob } from './sync-pools.js';
+import { startPoolSyncJob, startConfigSyncJob, startTokenPriceSyncJob, startHistoricalDataSyncJob, startProtocolStatsSyncJob } from './sync-pools.js';
 import { runNotificationChecks } from '../services/notifications.js';
 import { logger } from '../utils/logger.js';
 import { config, contracts } from '../config/index.js';
@@ -85,6 +85,11 @@ export function startAllBots(): void {
   const historicalSyncJob = startHistoricalDataSyncJob();
   activeJobs.push(historicalSyncJob);
   botsLogger.info('Pool historical data sync job started (every 15 minutes)');
+
+  // Start protocol stats sync job (syncs protocol stats + daily data every 15 minutes)
+  const protocolStatsSyncJob = startProtocolStatsSyncJob();
+  activeJobs.push(protocolStatsSyncJob);
+  botsLogger.info('Protocol stats sync job started (every 15 minutes)');
 }
 
 export function stopAllBots(): void {
