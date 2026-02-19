@@ -1,0 +1,682 @@
+import { logger } from '../utils/logger.js';
+
+const graphLogger = logger.child({ module: 'graph-client' });
+
+// Subgraph endpoints in priority order
+const SUBGRAPH_IDS = {
+  PRIMARY: 'Gqm2b5J85n1bhCyDMpGbtbVn4935EvvdyHdHrx3dibyj',   // uniswap-v4-base-3
+  FALLBACK: 'HNCFA9TyBqpo5qpe6QreQABAA1kV8g46mhkCcicu6v2R',   // uniswap-v4-base
+};
+
+const GRAPH_GATEWAY = 'https://gateway.thegraph.com/api/subgraphs/id';
+
+// In-memory cache
+const cache = new Map<string, { data: unknown; expiry: number }>();
+
+function getCached<T>(key: string): T | null {
+  const entry = cache.get(key);
+  if (entry && entry.expiry > Date.now()) {
+    return entry.data as T;
+  }
+  if (entry) cache.delete(key);
+  return null;
+}
+
+function setCache(key: string, data: unknown, ttlMs: number): void {
+  cache.set(key, { data, expiry: Date.now() + ttlMs });
+}
+
+// Get API key from env
+function getApiKey(): string | null {
+  return process.env.GRAPH_API_KEY || null;
+}
+
+// Execute a GraphQL query with automatic failover
+async function queryGraph<T>(query: string, variables?: Record<string, unknown>): Promise<T | null> {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    graphLogger.warn('GRAPH_API_KEY not set, skipping Graph queries');
+    return null;
+  }
+
+  const subgraphIds = [SUBGRAPH_IDS.PRIMARY, SUBGRAPH_IDS.FALLBACK];
+
+  for (const subgraphId of subgraphIds) {
+    try {
+      const url = `${GRAPH_GATEWAY}/${subgraphId}`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ query, variables }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        graphLogger.warn({ status: response.status, subgraphId }, 'Graph API returned non-OK status');
+        continue;
+      }
+
+      const result = await response.json() as { data?: T; errors?: Array<{ message: string }> };
+
+      if (result.errors?.length) {
+        graphLogger.warn({ errors: result.errors, subgraphId }, 'Graph query returned errors');
+        continue;
+      }
+
+      if (result.data) {
+        return result.data;
+      }
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      graphLogger.warn({ error: msg, subgraphId }, 'Graph query failed, trying next endpoint');
+    }
+  }
+
+  graphLogger.error('All Graph subgraph endpoints failed');
+  return null;
+}
+
+// ─── Public API ────────────────────────────────────────────────
+
+// Types
+
+export interface GraphPool {
+  id: string;
+  token0: { id: string; symbol: string; name: string; decimals: string };
+  token1: { id: string; symbol: string; name: string; decimals: string };
+  feeTier: string;
+  liquidity: string;
+  sqrtPrice: string;
+  tick: string | null;
+  tickSpacing: string;
+  totalValueLockedUSD: string;
+  volumeUSD: string;
+  feesUSD: string;
+  txCount: string;
+  liquidityProviderCount: string;
+  hooks: string;
+  createdAtTimestamp: string;
+  token0Price: string;
+  token1Price: string;
+  poolDayData?: GraphPoolDayData[];
+}
+
+export interface GraphPoolDayData {
+  date: number;
+  tvlUSD: string;
+  volumeToken0: string;
+  volumeToken1: string;
+  volumeUSD: string;
+  feesUSD: string;
+  txCount: string;
+  token0Price: string;
+  token1Price: string;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  liquidity: string;
+}
+
+export interface GraphPoolHourData {
+  periodStartUnix: number;
+  tvlUSD: string;
+  volumeUSD: string;
+  feesUSD: string;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  liquidity: string;
+}
+
+export interface GraphToken {
+  id: string;
+  symbol: string;
+  name: string;
+  decimals: string;
+  derivedETH: string;
+  totalValueLockedUSD: string;
+  volumeUSD: string;
+  poolCount: string;
+}
+
+export interface GraphSwap {
+  id: string;
+  timestamp: string;
+  pool: { id: string };
+  token0: { id: string; symbol: string };
+  token1: { id: string; symbol: string };
+  sender: string;
+  origin: string;
+  amount0: string;
+  amount1: string;
+  amountUSD: string;
+  sqrtPriceX96: string;
+  tick: string;
+}
+
+export interface GraphTick {
+  tickIdx: string;
+  liquidityGross: string;
+  liquidityNet: string;
+  price0: string;
+  price1: string;
+}
+
+export interface GraphProtocolStats {
+  id: string;
+  poolCount: string;
+  txCount: string;
+  totalVolumeUSD: string;
+  totalFeesUSD: string;
+  totalValueLockedUSD: string;
+}
+
+export interface GraphUniswapDayData {
+  date: number;
+  volumeUSD: string;
+  feesUSD: string;
+  tvlUSD: string;
+  txCount: string;
+}
+
+// ─── Fetch Functions ───────────────────────────────────────────
+
+/**
+ * Fetch top pools ordered by TVL with optional day data
+ */
+export async function fetchGraphPools(
+  first: number = 100,
+  minTxCount: number = 10,
+  includeDayData: boolean = true,
+): Promise<GraphPool[]> {
+  const cacheKey = `pools:${first}:${minTxCount}:${includeDayData}`;
+  const cached = getCached<GraphPool[]>(cacheKey);
+  if (cached) return cached;
+
+  const dayDataFragment = includeDayData
+    ? `poolDayData(first: 30, orderBy: date, orderDirection: desc) {
+        date volumeUSD feesUSD tvlUSD token0Price token1Price
+        open high low close liquidity volumeToken0 volumeToken1 txCount
+      }`
+    : '';
+
+  const query = `{
+    pools(
+      first: ${first}
+      orderBy: totalValueLockedUSD
+      orderDirection: desc
+      where: { txCount_gt: "${minTxCount}" }
+    ) {
+      id
+      token0 { id symbol name decimals }
+      token1 { id symbol name decimals }
+      feeTier
+      liquidity
+      sqrtPrice
+      tick
+      tickSpacing
+      totalValueLockedUSD
+      volumeUSD
+      feesUSD
+      txCount
+      liquidityProviderCount
+      hooks
+      createdAtTimestamp
+      token0Price
+      token1Price
+      ${dayDataFragment}
+    }
+  }`;
+
+  const data = await queryGraph<{ pools: GraphPool[] }>(query);
+  const pools = data?.pools || [];
+
+  if (pools.length > 0) {
+    setCache(cacheKey, pools, 5 * 60 * 1000); // 5 min cache
+  }
+
+  graphLogger.info({ count: pools.length }, 'Fetched pools from Graph');
+  return pools;
+}
+
+/**
+ * Fetch a single pool by ID with day data
+ */
+export async function fetchGraphPool(poolId: string): Promise<GraphPool | null> {
+  const cacheKey = `pool:${poolId}`;
+  const cached = getCached<GraphPool>(cacheKey);
+  if (cached) return cached;
+
+  const query = `{
+    pool(id: "${poolId.toLowerCase()}") {
+      id
+      token0 { id symbol name decimals }
+      token1 { id symbol name decimals }
+      feeTier
+      liquidity
+      sqrtPrice
+      tick
+      tickSpacing
+      totalValueLockedUSD
+      volumeUSD
+      feesUSD
+      txCount
+      liquidityProviderCount
+      hooks
+      createdAtTimestamp
+      token0Price
+      token1Price
+      poolDayData(first: 30, orderBy: date, orderDirection: desc) {
+        date volumeUSD feesUSD tvlUSD token0Price token1Price
+        open high low close liquidity volumeToken0 volumeToken1 txCount
+      }
+    }
+  }`;
+
+  const data = await queryGraph<{ pool: GraphPool | null }>(query);
+  const pool = data?.pool || null;
+
+  if (pool) {
+    setCache(cacheKey, pool, 5 * 60 * 1000);
+  }
+
+  return pool;
+}
+
+/**
+ * Fetch pool day data (OHLCV) for charts
+ */
+export async function fetchPoolDayData(poolId: string, days: number = 30): Promise<GraphPoolDayData[]> {
+  const cacheKey = `poolDayData:${poolId}:${days}`;
+  const cached = getCached<GraphPoolDayData[]>(cacheKey);
+  if (cached) return cached;
+
+  const query = `{
+    poolDayDatas(
+      first: ${days}
+      orderBy: date
+      orderDirection: desc
+      where: { pool: "${poolId.toLowerCase()}" }
+    ) {
+      date
+      tvlUSD
+      volumeToken0
+      volumeToken1
+      volumeUSD
+      feesUSD
+      txCount
+      token0Price
+      token1Price
+      open
+      high
+      low
+      close
+      liquidity
+    }
+  }`;
+
+  const data = await queryGraph<{ poolDayDatas: GraphPoolDayData[] }>(query);
+  const result = data?.poolDayDatas || [];
+
+  if (result.length > 0) {
+    setCache(cacheKey, result, 60 * 60 * 1000); // 1 hour cache
+  }
+
+  return result;
+}
+
+/**
+ * Fetch pool hour data for granular charts
+ */
+export async function fetchPoolHourData(poolId: string, hours: number = 168): Promise<GraphPoolHourData[]> {
+  const cacheKey = `poolHourData:${poolId}:${hours}`;
+  const cached = getCached<GraphPoolHourData[]>(cacheKey);
+  if (cached) return cached;
+
+  const query = `{
+    poolHourDatas(
+      first: ${hours}
+      orderBy: periodStartUnix
+      orderDirection: desc
+      where: { pool: "${poolId.toLowerCase()}" }
+    ) {
+      periodStartUnix
+      tvlUSD
+      volumeUSD
+      feesUSD
+      open
+      high
+      low
+      close
+      liquidity
+    }
+  }`;
+
+  const data = await queryGraph<{ poolHourDatas: GraphPoolHourData[] }>(query);
+  const result = data?.poolHourDatas || [];
+
+  if (result.length > 0) {
+    setCache(cacheKey, result, 5 * 60 * 1000); // 5 min cache
+  }
+
+  return result;
+}
+
+/**
+ * Fetch ETH/USD price from Bundle entity
+ */
+export async function fetchEthPrice(): Promise<number> {
+  const cacheKey = 'ethPrice';
+  const cached = getCached<number>(cacheKey);
+  if (cached) return cached;
+
+  const query = `{ bundle(id: "1") { ethPriceUSD } }`;
+  const data = await queryGraph<{ bundle: { ethPriceUSD: string } | null }>(query);
+
+  const price = parseFloat(data?.bundle?.ethPriceUSD || '0');
+  if (price > 0) {
+    setCache(cacheKey, price, 2 * 60 * 1000); // 2 min cache
+  }
+
+  return price;
+}
+
+/**
+ * Fetch token prices using derivedETH + Bundle
+ */
+export async function fetchTokenPrices(addresses: string[]): Promise<Map<string, number>> {
+  if (addresses.length === 0) return new Map();
+
+  const cacheKey = `tokenPrices:${addresses.sort().join(',')}`;
+  const cached = getCached<Map<string, number>>(cacheKey);
+  if (cached) return cached;
+
+  const ids = addresses.map(a => `"${a.toLowerCase()}"`).join(',');
+  const query = `{
+    bundle(id: "1") { ethPriceUSD }
+    tokens(where: { id_in: [${ids}] }) {
+      id
+      symbol
+      derivedETH
+      totalValueLockedUSD
+    }
+  }`;
+
+  const data = await queryGraph<{
+    bundle: { ethPriceUSD: string } | null;
+    tokens: Array<{ id: string; derivedETH: string }>;
+  }>(query);
+
+  const prices = new Map<string, number>();
+  const ethPrice = parseFloat(data?.bundle?.ethPriceUSD || '0');
+
+  if (data?.tokens && ethPrice > 0) {
+    for (const token of data.tokens) {
+      const derivedETH = parseFloat(token.derivedETH || '0');
+      prices.set(token.id.toLowerCase(), derivedETH * ethPrice);
+    }
+  }
+
+  if (prices.size > 0) {
+    setCache(cacheKey, prices, 2 * 60 * 1000); // 2 min cache
+  }
+
+  return prices;
+}
+
+/**
+ * Fetch tokens by address with full metadata
+ */
+export async function fetchTokens(addresses: string[]): Promise<GraphToken[]> {
+  if (addresses.length === 0) return [];
+
+  const ids = addresses.map(a => `"${a.toLowerCase()}"`).join(',');
+  const query = `{
+    tokens(where: { id_in: [${ids}] }) {
+      id symbol name decimals derivedETH
+      totalValueLockedUSD volumeUSD poolCount
+    }
+  }`;
+
+  const data = await queryGraph<{ tokens: GraphToken[] }>(query);
+  return data?.tokens || [];
+}
+
+/**
+ * Fetch top tokens by TVL
+ */
+export async function fetchTopTokens(first: number = 50): Promise<GraphToken[]> {
+  const cacheKey = `topTokens:${first}`;
+  const cached = getCached<GraphToken[]>(cacheKey);
+  if (cached) return cached;
+
+  const query = `{
+    tokens(
+      first: ${first}
+      orderBy: totalValueLockedUSD
+      orderDirection: desc
+    ) {
+      id symbol name decimals derivedETH
+      totalValueLockedUSD volumeUSD poolCount
+    }
+  }`;
+
+  const data = await queryGraph<{ tokens: GraphToken[] }>(query);
+  const tokens = data?.tokens || [];
+
+  if (tokens.length > 0) {
+    setCache(cacheKey, tokens, 5 * 60 * 1000);
+  }
+
+  return tokens;
+}
+
+/**
+ * Fetch recent swaps for a pool
+ */
+export async function fetchSwaps(poolId: string, first: number = 50): Promise<GraphSwap[]> {
+  const cacheKey = `swaps:${poolId}:${first}`;
+  const cached = getCached<GraphSwap[]>(cacheKey);
+  if (cached) return cached;
+
+  const query = `{
+    swaps(
+      first: ${first}
+      orderBy: timestamp
+      orderDirection: desc
+      where: { pool: "${poolId.toLowerCase()}" }
+    ) {
+      id
+      timestamp
+      pool { id }
+      token0 { id symbol }
+      token1 { id symbol }
+      sender
+      origin
+      amount0
+      amount1
+      amountUSD
+      sqrtPriceX96
+      tick
+    }
+  }`;
+
+  const data = await queryGraph<{ swaps: GraphSwap[] }>(query);
+  const swaps = data?.swaps || [];
+
+  if (swaps.length > 0) {
+    setCache(cacheKey, swaps, 60 * 1000); // 1 min cache
+  }
+
+  return swaps;
+}
+
+/**
+ * Fetch tick liquidity distribution for a pool
+ */
+export async function fetchTicks(poolId: string, first: number = 200): Promise<GraphTick[]> {
+  const cacheKey = `ticks:${poolId}:${first}`;
+  const cached = getCached<GraphTick[]>(cacheKey);
+  if (cached) return cached;
+
+  const query = `{
+    ticks(
+      first: ${first}
+      where: { pool: "${poolId.toLowerCase()}" }
+      orderBy: tickIdx
+    ) {
+      tickIdx
+      liquidityGross
+      liquidityNet
+      price0
+      price1
+    }
+  }`;
+
+  const data = await queryGraph<{ ticks: GraphTick[] }>(query);
+  const ticks = data?.ticks || [];
+
+  if (ticks.length > 0) {
+    setCache(cacheKey, ticks, 15 * 60 * 1000); // 15 min cache
+  }
+
+  return ticks;
+}
+
+/**
+ * Fetch protocol-wide statistics from PoolManager
+ */
+export async function fetchProtocolStats(): Promise<GraphProtocolStats | null> {
+  const cacheKey = 'protocolStats';
+  const cached = getCached<GraphProtocolStats>(cacheKey);
+  if (cached) return cached;
+
+  // Base PoolManager address
+  const query = `{
+    poolManagers(first: 1) {
+      id
+      poolCount
+      txCount
+      totalVolumeUSD
+      totalFeesUSD
+      totalValueLockedUSD
+    }
+  }`;
+
+  const data = await queryGraph<{ poolManagers: GraphProtocolStats[] }>(query);
+  const stats = data?.poolManagers?.[0] || null;
+
+  if (stats) {
+    setCache(cacheKey, stats, 15 * 60 * 1000); // 15 min cache
+  }
+
+  return stats;
+}
+
+/**
+ * Fetch daily protocol-wide data (UniswapDayData)
+ */
+export async function fetchUniswapDayData(days: number = 30): Promise<GraphUniswapDayData[]> {
+  const cacheKey = `uniswapDayData:${days}`;
+  const cached = getCached<GraphUniswapDayData[]>(cacheKey);
+  if (cached) return cached;
+
+  const query = `{
+    uniswapDayDatas(
+      first: ${days}
+      orderBy: date
+      orderDirection: desc
+    ) {
+      date
+      volumeUSD
+      feesUSD
+      tvlUSD
+      txCount
+    }
+  }`;
+
+  const data = await queryGraph<{ uniswapDayDatas: GraphUniswapDayData[] }>(query);
+  const result = data?.uniswapDayDatas || [];
+
+  if (result.length > 0) {
+    setCache(cacheKey, result, 60 * 60 * 1000); // 1 hour cache
+  }
+
+  return result;
+}
+
+/**
+ * Search pools by token symbol or address
+ */
+export async function searchPools(tokenQuery: string, first: number = 20): Promise<GraphPool[]> {
+  const isAddress = tokenQuery.startsWith('0x') && tokenQuery.length === 42;
+
+  let whereClause: string;
+  if (isAddress) {
+    const addr = tokenQuery.toLowerCase();
+    whereClause = `or: [{ token0: "${addr}" }, { token1: "${addr}" }]`;
+  } else {
+    // Search by symbol requires fetching token IDs first, so we just get top pools
+    // and filter client-side
+    whereClause = `txCount_gt: "10"`;
+  }
+
+  const query = `{
+    pools(
+      first: ${first}
+      orderBy: totalValueLockedUSD
+      orderDirection: desc
+      where: { ${whereClause} }
+    ) {
+      id
+      token0 { id symbol name decimals }
+      token1 { id symbol name decimals }
+      feeTier
+      liquidity
+      sqrtPrice
+      tick
+      tickSpacing
+      totalValueLockedUSD
+      volumeUSD
+      feesUSD
+      txCount
+      liquidityProviderCount
+      hooks
+      createdAtTimestamp
+      token0Price
+      token1Price
+    }
+  }`;
+
+  const data = await queryGraph<{ pools: GraphPool[] }>(query);
+  let pools = data?.pools || [];
+
+  // Client-side filter by symbol if not address search
+  if (!isAddress && tokenQuery) {
+    const term = tokenQuery.toUpperCase();
+    pools = pools.filter(
+      p => p.token0.symbol.toUpperCase().includes(term) ||
+           p.token1.symbol.toUpperCase().includes(term)
+    );
+  }
+
+  return pools;
+}
+
+/**
+ * Clear all cached data
+ */
+export function clearGraphCache(): void {
+  cache.clear();
+  graphLogger.info('Graph cache cleared');
+}

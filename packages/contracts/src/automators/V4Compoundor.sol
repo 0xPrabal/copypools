@@ -119,6 +119,7 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     {
         require(config.minCompoundInterval >= MIN_COMPOUND_INTERVAL, "Interval too short");
         configs[tokenId] = config;
+        emit ConfigUpdated(tokenId, msg.sender);
     }
 
     /// @inheritdoc IV4Compoundor

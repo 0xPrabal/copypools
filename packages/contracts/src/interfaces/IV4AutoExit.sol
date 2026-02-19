@@ -99,19 +99,21 @@ interface IV4AutoExit {
 
     /// @notice Execute an automated exit (called by bot, takes protocol fee)
     /// @param tokenId The position token ID
-    /// @param swapData Swap data for converting to exit token (empty = keep both)
+    /// @param swapData0 Swap data for token0 conversion (empty = keep token0 as-is)
+    /// @param swapData1 Swap data for token1 conversion (empty = keep token1 as-is)
     /// @param deadline Transaction deadline timestamp
     /// @return result The exit result
-    function executeExit(uint256 tokenId, bytes calldata swapData, uint256 deadline)
+    function executeExit(uint256 tokenId, bytes calldata swapData0, bytes calldata swapData1, uint256 deadline)
         external
         returns (ExitResult memory result);
 
     /// @notice Owner self-exit (no protocol fee)
     /// @param tokenId The position token ID
-    /// @param swapData Swap data for converting to exit token
+    /// @param swapData0 Swap data for token0 conversion (empty = keep token0 as-is)
+    /// @param swapData1 Swap data for token1 conversion (empty = keep token1 as-is)
     /// @param deadline Transaction deadline timestamp
     /// @return result The exit result
-    function selfExit(uint256 tokenId, bytes calldata swapData, uint256 deadline)
+    function selfExit(uint256 tokenId, bytes calldata swapData0, bytes calldata swapData1, uint256 deadline)
         external
         returns (ExitResult memory result);
 

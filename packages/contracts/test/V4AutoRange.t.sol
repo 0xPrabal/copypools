@@ -630,10 +630,10 @@ contract V4AutoRangeTest is BaseTest {
         vm.prank(bot);
         IV4AutoRange.RebalanceResult memory result = autoRange.executeRebalance(tokenId, "", block.timestamp + 1 hours);
 
-        // Protocol fee should be accumulated
-        // fee0 and fee1 in result track protocol fees
-        // At least one should be > 0 (position had liquidity that was withdrawn)
-        assertTrue(result.fee0 > 0 || result.fee1 > 0, "Protocol fee should be taken");
+        // M-04: Protocol fee is only charged on swap output (amounts that increased)
+        // With no swap (empty swapData), no fee should be taken
+        assertEq(result.fee0, 0, "No fee0 without swap");
+        assertEq(result.fee1, 0, "No fee1 without swap");
     }
 
     function test_ExecuteRebalance_MultipleRebalances() public {

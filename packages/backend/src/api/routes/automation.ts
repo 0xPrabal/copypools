@@ -100,13 +100,13 @@ router.get('/exit/:tokenId', validateTokenId, async (req: Request, res: Response
 
     // Check exit condition
     let shouldExit = false;
-    let exitType = 0;
+    let exitReason = 0;
     let currentPrice = '0';
 
     try {
       const exitCheck = await blockchain.checkExit(BigInt(tokenId));
       shouldExit = exitCheck.shouldExit;
-      exitType = exitCheck.exitType;
+      exitReason = exitCheck.reason;
     } catch (e) {
       routeLogger.debug({ tokenId, error: e }, 'Could not check exit condition on-chain');
     }
@@ -132,7 +132,7 @@ router.get('/exit/:tokenId', validateTokenId, async (req: Request, res: Response
       config: position.exitConfig || null,
       currentPrice,
       shouldExit,
-      exitType,
+      exitReason,
     });
   } catch (error) {
     routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to get exit config');
@@ -259,7 +259,7 @@ router.post('/batch-status', async (req: Request, res: Response) => {
         try {
           const [compoundCheck, exitCheck, rebalanceCheck] = await Promise.all([
             blockchain.checkCompoundProfitable(BigInt(tokenId)).catch(() => ({ profitable: false, reward: 0n })),
-            blockchain.checkExit(BigInt(tokenId)).catch(() => ({ shouldExit: false, exitType: 0 })),
+            blockchain.checkExit(BigInt(tokenId)).catch(() => ({ shouldExit: false, reason: 0 })),
             blockchain.checkRebalance(BigInt(tokenId)).catch(() => ({ needsRebalance: false, reason: 0 })),
           ]);
 

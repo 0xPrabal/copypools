@@ -315,7 +315,8 @@ contract V4UtilsTest is BaseTest {
             amount0Min: 0,
             amount1Min: 0,
             targetCurrency: Currency.wrap(address(token0)),
-            swapData: getRouterCallData(address(token1), address(token0), 0, 0),
+            swapData0: "",
+            swapData1: getRouterCallData(address(token1), address(token0), 0, 0),
             maxSwapSlippage: 500,
             deadline: block.timestamp + 1 hours
         });
@@ -339,7 +340,8 @@ contract V4UtilsTest is BaseTest {
             amount0Min: 0,
             amount1Min: 0,
             targetCurrency: Currency.wrap(address(token1)),
-            swapData: getRouterCallData(address(token0), address(token1), 0, 0),
+            swapData0: getRouterCallData(address(token0), address(token1), 0, 0),
+            swapData1: "",
             maxSwapSlippage: 500,
             deadline: block.timestamp + 1 hours
         });
@@ -361,7 +363,8 @@ contract V4UtilsTest is BaseTest {
             amount0Min: 0,
             amount1Min: 0,
             targetCurrency: Currency.wrap(address(token0)),
-            swapData: "",
+            swapData0: "",
+            swapData1: "",
             maxSwapSlippage: 0,
             deadline: block.timestamp + 1 hours
         });
@@ -382,7 +385,8 @@ contract V4UtilsTest is BaseTest {
         IV4Utils.CollectAndSwapParams memory params = IV4Utils.CollectAndSwapParams({
             tokenId: tokenId,
             targetCurrency: Currency.wrap(address(token0)),
-            swapData: getRouterCallData(address(token1), address(token0), 0, 0),
+            swapData0: "",
+            swapData1: getRouterCallData(address(token1), address(token0), 0, 0),
             maxSwapSlippage: 500,
             deadline: block.timestamp + 1 hours
         });
@@ -402,7 +406,8 @@ contract V4UtilsTest is BaseTest {
         IV4Utils.CollectAndSwapParams memory params = IV4Utils.CollectAndSwapParams({
             tokenId: tokenId,
             targetCurrency: Currency.wrap(address(token0)),
-            swapData: "",
+            swapData0: "",
+            swapData1: "",
             maxSwapSlippage: 0,
             deadline: block.timestamp + 1 hours
         });
@@ -542,7 +547,8 @@ contract V4UtilsTest is BaseTest {
         IV4Utils.CollectAndSwapParams memory params = IV4Utils.CollectAndSwapParams({
             tokenId: tokenId,
             targetCurrency: Currency.wrap(address(token0)),
-            swapData: "",
+            swapData0: "",
+            swapData1: "",
             maxSwapSlippage: 0,
             deadline: block.timestamp + 1 hours
         });
@@ -567,7 +573,8 @@ contract V4UtilsTest is BaseTest {
             IV4Utils.CollectAndSwapParams({
                 tokenId: tokenId,
                 targetCurrency: Currency.wrap(address(token0)),
-                swapData: "",
+                swapData0: "",
+                swapData1: "",
                 maxSwapSlippage: 0,
                 deadline: block.timestamp + 1 hours
             })

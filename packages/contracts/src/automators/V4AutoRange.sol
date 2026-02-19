@@ -217,6 +217,10 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         // Get current price info
         (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(poolKey.toId());
 
+        // M-04: Track pre-swap balances to charge fee only on swap output
+        uint256 preSwap0 = amount0;
+        uint256 preSwap1 = amount1;
+
         // Execute swap for optimal ratio
         if (swapData.length > 0) {
             // External router swap
@@ -246,9 +250,9 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
             }
         }
 
-        // Take protocol fee and track it
-        uint256 fee0 = amount0 * protocolFee / 10000;
-        uint256 fee1 = amount1 * protocolFee / 10000;
+        // M-04: Take protocol fee only on swap output (token amounts that increased)
+        uint256 fee0 = amount0 > preSwap0 ? (amount0 - preSwap0) * protocolFee / 10000 : 0;
+        uint256 fee1 = amount1 > preSwap1 ? (amount1 - preSwap1) * protocolFee / 10000 : 0;
         accumulatedFees[poolKey.currency0] += fee0;
         accumulatedFees[poolKey.currency1] += fee1;
         amount0 -= fee0;
@@ -314,6 +318,9 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
             fee0,
             fee1
         );
+
+        // L-05: Burn the old empty position NFT (best-effort, won't revert rebalance on failure)
+        try this.burnPositionExternal(tokenId) {} catch {}
     }
 
     /// @inheritdoc IV4AutoRange
@@ -468,6 +475,13 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         return _collectFees(tokenId);
     }
 
+    /// @notice External wrapper for position burn to enable try-catch pattern
+    /// @dev Only callable by this contract itself
+    function burnPositionExternal(uint256 tokenId) external {
+        require(msg.sender == address(this), "Only self");
+        _burnPosition(tokenId);
+    }
+
     // ============ Internal Functions ============
 
     /// @notice Get available balance excluding accumulated protocol fees
@@ -475,6 +489,21 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         uint256 total = _getBalance(currency);
         uint256 reserved = accumulatedFees[currency];
         return total > reserved ? total - reserved : 0;
+    }
+
+    /// @notice Burn an empty position NFT after rebalance
+    function _burnPosition(uint256 tokenId) internal {
+        (PoolKey memory poolKey,,,) = getPositionInfo(tokenId);
+
+        bytes memory actions = abi.encodePacked(
+            uint8(Actions.BURN_POSITION),
+            uint8(Actions.TAKE_PAIR)
+        );
+        bytes[] memory params = new bytes[](2);
+        params[0] = abi.encode(tokenId, 0, 0, "");
+        params[1] = abi.encode(poolKey.currency0, poolKey.currency1, address(this));
+
+        positionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp);
     }
 
     function _collectFees(uint256 tokenId) internal returns (uint256 amount0, uint256 amount1) {

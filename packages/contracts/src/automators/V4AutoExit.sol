@@ -137,7 +137,7 @@ contract V4AutoExit is V4Base, IV4AutoExit {
     // ============ Bot Execution ============
 
     /// @inheritdoc IV4AutoExit
-    function executeExit(uint256 tokenId, bytes calldata swapData, uint256 deadline)
+    function executeExit(uint256 tokenId, bytes calldata swapData0, bytes calldata swapData1, uint256 deadline)
         external
         override
         nonReentrant
@@ -145,11 +145,11 @@ contract V4AutoExit is V4Base, IV4AutoExit {
         checkDeadline(deadline)
         returns (ExitResult memory result)
     {
-        result = _exit(tokenId, swapData, true);
+        result = _exit(tokenId, swapData0, swapData1, true);
     }
 
     /// @inheritdoc IV4AutoExit
-    function selfExit(uint256 tokenId, bytes calldata swapData, uint256 deadline)
+    function selfExit(uint256 tokenId, bytes calldata swapData0, bytes calldata swapData1, uint256 deadline)
         external
         override
         nonReentrant
@@ -158,7 +158,7 @@ contract V4AutoExit is V4Base, IV4AutoExit {
         onlyPositionOwnerOrApproved(tokenId)
         returns (ExitResult memory result)
     {
-        result = _exit(tokenId, swapData, false);
+        result = _exit(tokenId, swapData0, swapData1, false);
     }
 
     // ============ View Functions ============
@@ -284,7 +284,8 @@ contract V4AutoExit is V4Base, IV4AutoExit {
     /// @notice Core exit logic shared by executeExit and selfExit
     function _exit(
         uint256 tokenId,
-        bytes calldata swapData,
+        bytes calldata swapData0,
+        bytes calldata swapData1,
         bool takeFees
     ) internal returns (ExitResult memory result) {
         ExitConfig memory config = _exitConfigs[tokenId];
@@ -306,7 +307,7 @@ contract V4AutoExit is V4Base, IV4AutoExit {
         address posOwner = IERC721(address(positionManager)).ownerOf(tokenId);
 
         // H-01: External swap data can only be provided by position owner or approved operators
-        if (swapData.length > 0) {
+        if (swapData0.length > 0 || swapData1.length > 0) {
             if (
                 msg.sender != posOwner &&
                 !IERC721(address(positionManager)).isApprovedForAll(posOwner, msg.sender) &&
@@ -360,8 +361,9 @@ contract V4AutoExit is V4Base, IV4AutoExit {
         }
 
         // Step 4: If exitToken is configured, swap non-exit-token to exit token
-        if (!config.exitToken.isAddressZero() && swapData.length > 0) {
-            _executeExitSwap(poolKey, config.exitToken, swapData, config.maxSwapSlippage);
+        // M-05: Use separate swap data for each token direction
+        if (!config.exitToken.isAddressZero() && (swapData0.length > 0 || swapData1.length > 0)) {
+            _executeExitSwap(poolKey, config.exitToken, swapData0, swapData1, config.maxSwapSlippage);
             // Recalculate available balances after swap
             amount0 = _getAvailableBalance(poolKey.currency0);
             amount1 = _getAvailableBalance(poolKey.currency1);
@@ -446,21 +448,22 @@ contract V4AutoExit is V4Base, IV4AutoExit {
     }
 
     /// @notice Execute swap to convert to exit token
+    /// @dev M-05: Accepts separate swap data for each token direction
     function _executeExitSwap(
         PoolKey memory poolKey,
         Currency exitToken,
-        bytes calldata swapData,
+        bytes calldata swapData0,
+        bytes calldata swapData1,
         uint256 maxSlippage
     ) internal {
-        (address router, bytes memory routerData) = abi.decode(swapData, (address, bytes));
-        if (!approvedRouters[router]) revert RouterNotApproved();
-
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
 
         if (Currency.unwrap(exitToken) == Currency.unwrap(poolKey.currency0)) {
-            // Swap all token1 → token0
+            // Exit to token0: swap token1 → token0 using swapData1
             uint256 amount1 = _getAvailableBalance(poolKey.currency1);
-            if (amount1 > 0) {
+            if (amount1 > 0 && swapData1.length > 0) {
+                (address router, bytes memory routerData) = abi.decode(swapData1, (address, bytes));
+                if (!approvedRouters[router]) revert RouterNotApproved();
                 uint256 minOut = SwapLib.calculateMinOutput(amount1, sqrtPriceX96, maxSlippage, false);
                 SwapLib.executeSwap(SwapLib.SwapParams({
                     fromCurrency: poolKey.currency1,
@@ -473,9 +476,11 @@ contract V4AutoExit is V4Base, IV4AutoExit {
                 }));
             }
         } else if (Currency.unwrap(exitToken) == Currency.unwrap(poolKey.currency1)) {
-            // Swap all token0 → token1
+            // Exit to token1: swap token0 → token1 using swapData0
             uint256 amount0 = _getAvailableBalance(poolKey.currency0);
-            if (amount0 > 0) {
+            if (amount0 > 0 && swapData0.length > 0) {
+                (address router, bytes memory routerData) = abi.decode(swapData0, (address, bytes));
+                if (!approvedRouters[router]) revert RouterNotApproved();
                 uint256 minOut = SwapLib.calculateMinOutput(amount0, sqrtPriceX96, maxSlippage, true);
                 SwapLib.executeSwap(SwapLib.SwapParams({
                     fromCurrency: poolKey.currency0,
@@ -488,28 +493,32 @@ contract V4AutoExit is V4Base, IV4AutoExit {
                 }));
             }
         } else {
-            // Cross-pair exit: swap both pool tokens to exitToken via router
+            // Cross-pair exit: swap each pool token → exitToken with its own swap data
             uint256 amount0 = _getAvailableBalance(poolKey.currency0);
-            if (amount0 > 0) {
+            if (amount0 > 0 && swapData0.length > 0) {
+                (address router0, bytes memory routerData0) = abi.decode(swapData0, (address, bytes));
+                if (!approvedRouters[router0]) revert RouterNotApproved();
                 SwapLib.executeSwap(SwapLib.SwapParams({
                     fromCurrency: poolKey.currency0,
                     toCurrency: exitToken,
                     amountIn: amount0,
                     minAmountOut: 0,
-                    router: router,
-                    swapData: routerData,
+                    router: router0,
+                    swapData: routerData0,
                     weth9: WETH9
                 }));
             }
             uint256 amount1 = _getAvailableBalance(poolKey.currency1);
-            if (amount1 > 0) {
+            if (amount1 > 0 && swapData1.length > 0) {
+                (address router1, bytes memory routerData1) = abi.decode(swapData1, (address, bytes));
+                if (!approvedRouters[router1]) revert RouterNotApproved();
                 SwapLib.executeSwap(SwapLib.SwapParams({
                     fromCurrency: poolKey.currency1,
                     toCurrency: exitToken,
                     amountIn: amount1,
                     minAmountOut: 0,
-                    router: router,
-                    swapData: routerData,
+                    router: router1,
+                    swapData: routerData1,
                     weth9: WETH9
                 }));
             }

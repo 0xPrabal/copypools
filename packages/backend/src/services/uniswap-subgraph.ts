@@ -1,5 +1,6 @@
 import { logger } from '../utils/logger.js';
 import { V4Pool, CHAIN_IDS } from './database.js';
+import { fetchGraphPools, type GraphPool } from './graph-client.js';
 
 const subgraphLogger = logger.child({ module: 'uniswap-subgraph' });
 
@@ -225,115 +226,63 @@ export async function fetchPoolsFromGecko(): Promise<Partial<V4Pool>[]> {
   }
 }
 
-// Uniswap V4 Subgraph endpoint for Base (if available)
-const UNISWAP_V4_SUBGRAPH = process.env.UNISWAP_V4_SUBGRAPH_URL ||
-  'https://api.studio.thegraph.com/query/48211/uniswap-v4-base/version/latest';
-
-// Fetch pools from Uniswap V4 Subgraph
+// Fetch pools from The Graph decentralized network (Uniswap V4 Base subgraphs)
 export async function fetchPoolsFromSubgraph(): Promise<Partial<V4Pool>[]> {
   try {
-    const query = `
-      {
-        pools(first: 100, orderBy: totalValueLockedUSD, orderDirection: desc) {
-          id
-          token0 {
-            id
-            symbol
-            decimals
-          }
-          token1 {
-            id
-            symbol
-            decimals
-          }
-          feeTier
-          liquidity
-          totalValueLockedUSD
-          volumeUSD
-          feesUSD
-          txCount
-          poolDayData(first: 30, orderBy: date, orderDirection: desc) {
-            date
-            volumeUSD
-            feesUSD
-            tvlUSD
-          }
-        }
-      }
-    `;
+    const graphPools = await fetchGraphPools(100, 10, true);
 
-    const response = await fetch(UNISWAP_V4_SUBGRAPH, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ query }),
-    });
-
-    if (!response.ok) {
-      subgraphLogger.warn({ status: response.status }, 'Subgraph API returned non-OK status');
-      return [];
-    }
-
-    const data = await response.json() as {
-      data?: { pools?: SubgraphPool[] };
-      errors?: unknown[];
-    };
-
-    if (data.errors) {
-      subgraphLogger.warn({ errors: data.errors }, 'Subgraph returned errors');
+    if (graphPools.length === 0) {
+      subgraphLogger.info('Graph returned no pools');
       return [];
     }
 
     const pools: Partial<V4Pool>[] = [];
 
-    if (data.data?.pools) {
-      for (const pool of data.data.pools) {
-        const tvlUsd = parseFloat(pool.totalValueLockedUSD) || 0;
+    for (const pool of graphPools) {
+      const tvlUsd = parseFloat(pool.totalValueLockedUSD) || 0;
 
-        // Calculate 1d and 30d volume from poolDayData
-        let volume1dUsd = 0;
-        let volume30dUsd = 0;
-        let fees1dUsd = 0;
+      // Calculate 1d and 30d volume from poolDayData
+      let volume1dUsd = 0;
+      let volume30dUsd = 0;
+      let fees1dUsd = 0;
 
-        if (pool.poolDayData && pool.poolDayData.length > 0) {
-          volume1dUsd = parseFloat(pool.poolDayData[0]?.volumeUSD) || 0;
-          fees1dUsd = parseFloat(pool.poolDayData[0]?.feesUSD) || 0;
-          volume30dUsd = pool.poolDayData.reduce((sum, day) => sum + (parseFloat(day.volumeUSD) || 0), 0);
-        }
-
-        // Calculate APR
-        const poolApr = tvlUsd > 0 ? (fees1dUsd * 365 / tvlUsd) * 100 : 0;
-
-        const token0Address = pool.token0.id.toLowerCase();
-        const token1Address = pool.token1.id.toLowerCase();
-
-        pools.push({
-          id: pool.id,
-          chainId: DEFAULT_CHAIN_ID,
-          currency0: token0Address,
-          currency1: token1Address,
-          token0Symbol: pool.token0.symbol,
-          token1Symbol: pool.token1.symbol,
-          token0Logo: TOKEN_LOGOS[token0Address] || null,
-          token1Logo: TOKEN_LOGOS[token1Address] || null,
-          token0Decimals: parseInt(pool.token0.decimals) || 18,
-          token1Decimals: parseInt(pool.token1.decimals) || 18,
-          fee: parseInt(pool.feeTier) || 3000,
-          tvlUsd,
-          volume1dUsd,
-          volume30dUsd,
-          fees1dUsd,
-          poolApr,
-          rewardApr: null,
-        });
+      if (pool.poolDayData && pool.poolDayData.length > 0) {
+        volume1dUsd = parseFloat(pool.poolDayData[0]?.volumeUSD) || 0;
+        fees1dUsd = parseFloat(pool.poolDayData[0]?.feesUSD) || 0;
+        volume30dUsd = pool.poolDayData.reduce((sum: number, day) => sum + (parseFloat(day.volumeUSD) || 0), 0);
       }
+
+      // Calculate APR
+      const poolApr = tvlUsd > 0 ? (fees1dUsd * 365 / tvlUsd) * 100 : 0;
+
+      const token0Address = pool.token0.id.toLowerCase();
+      const token1Address = pool.token1.id.toLowerCase();
+
+      pools.push({
+        id: pool.id,
+        chainId: DEFAULT_CHAIN_ID,
+        currency0: token0Address,
+        currency1: token1Address,
+        token0Symbol: pool.token0.symbol,
+        token1Symbol: pool.token1.symbol,
+        token0Logo: TOKEN_LOGOS[token0Address] || null,
+        token1Logo: TOKEN_LOGOS[token1Address] || null,
+        token0Decimals: parseInt(pool.token0.decimals) || 18,
+        token1Decimals: parseInt(pool.token1.decimals) || 18,
+        fee: parseInt(pool.feeTier) || 3000,
+        tvlUsd,
+        volume1dUsd,
+        volume30dUsd,
+        fees1dUsd,
+        poolApr,
+        rewardApr: null,
+      });
     }
 
-    subgraphLogger.info({ count: pools.length }, 'Fetched pools from Uniswap V4 subgraph');
+    subgraphLogger.info({ count: pools.length }, 'Fetched pools from Graph (Uniswap V4 Base)');
     return pools;
   } catch (error) {
-    subgraphLogger.error({ error }, 'Failed to fetch pools from subgraph');
+    subgraphLogger.error({ error }, 'Failed to fetch pools from Graph');
     return [];
   }
 }

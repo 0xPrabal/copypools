@@ -10,11 +10,13 @@ const botLogger = logger.child({ bot: 'auto-exit' });
 interface ExitablePosition {
   tokenId: string;
   poolId: string;
-  exitType: number;
-  triggerSqrtPriceX96: string;
-  targetCurrency: string;
-  maxPriceImpact: string;
-  swapToSingleAsset: boolean;
+  enabled: boolean;
+  triggerTickLower: number;
+  triggerTickUpper: number;
+  exitOnRangeExit: boolean;
+  exitToken: string;
+  maxSwapSlippage: string;
+  minExitInterval: number;
 }
 
 async function processExit(position: ExitablePosition): Promise<boolean> {
@@ -22,32 +24,34 @@ async function processExit(position: ExitablePosition): Promise<boolean> {
     const tokenId = BigInt(position.tokenId);
 
     // Check exit condition on-chain
-    const { shouldExit, exitType } = await blockchain.checkExit(tokenId);
+    const { shouldExit, reason } = await blockchain.checkExit(tokenId);
 
     if (!shouldExit) {
       botLogger.debug({ tokenId: position.tokenId }, 'Exit conditions not met');
       return false;
     }
 
-    // Get swap data for target currency
-    const swapData = position.swapToSingleAsset
+    // Get swap data if exitToken is set (non-zero address)
+    const zeroAddress = '0x0000000000000000000000000000000000000000';
+    const needsSwap = position.exitToken && position.exitToken.toLowerCase() !== zeroAddress;
+    const swapData = needsSwap
       ? await getSwapData(
           position.poolId,
-          position.targetCurrency,
-          position.targetCurrency,
+          position.exitToken,
+          position.exitToken,
           0n,
           0n
         )
       : '0x';
 
-    // Execute exit
+    // Execute exit (deadline handled inside blockchain.executeExit)
     const hash = await blockchain.executeExit(tokenId, swapData as `0x${string}`);
 
     botLogger.info(
       {
         tokenId: position.tokenId,
         hash,
-        exitType,
+        reason,
       },
       'Exit executed successfully'
     );
@@ -66,7 +70,7 @@ async function runAutoExitBot(): Promise<void> {
     // Check gas price
     await blockchain.getGasPrice();
 
-    // Get exitable positions from subgraph
+    // Get exitable positions from subgraph (enabled exit configs)
     const result = await subgraph.getExitablePositions();
     const configs = (result as any).exitConfigs || [];
 
@@ -75,28 +79,17 @@ async function runAutoExitBot(): Promise<void> {
     let successCount = 0;
     let failCount = 0;
 
-    for (const exitConfig of configs) {
-      // Check deadline
-      if (exitConfig.deadline && exitConfig.deadline !== '0') {
-        const deadline = parseInt(exitConfig.deadline);
-        const now = Math.floor(Date.now() / 1000);
-        if (now > deadline) {
-          botLogger.debug(
-            { tokenId: exitConfig.position.tokenId },
-            'Exit deadline passed'
-          );
-          continue;
-        }
-      }
-
+    for (const ec of configs) {
       const position: ExitablePosition = {
-        tokenId: exitConfig.position.tokenId,
-        poolId: exitConfig.position.pool.id,
-        exitType: exitConfig.exitType,
-        triggerSqrtPriceX96: exitConfig.triggerSqrtPriceX96,
-        targetCurrency: exitConfig.targetCurrency,
-        maxPriceImpact: exitConfig.maxPriceImpact,
-        swapToSingleAsset: exitConfig.swapToSingleAsset,
+        tokenId: ec.tokenId || ec.positionId,
+        poolId: ec.poolId || 'unknown',
+        enabled: ec.enabled,
+        triggerTickLower: ec.triggerTickLower,
+        triggerTickUpper: ec.triggerTickUpper,
+        exitOnRangeExit: ec.exitOnRangeExit,
+        exitToken: ec.exitToken,
+        maxSwapSlippage: ec.maxSwapSlippage,
+        minExitInterval: ec.minExitInterval,
       };
 
       const success = await processExit(position);

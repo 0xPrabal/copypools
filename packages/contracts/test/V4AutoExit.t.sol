@@ -602,7 +602,7 @@ contract V4AutoExitTest is BaseTest {
         uint256 user1Token1Before = token1.balanceOf(user1);
 
         vm.prank(bot);
-        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
 
         assertEq(result.exitReason, 1); // stopLoss
         assertGt(result.liquidityRemoved, 0);
@@ -639,7 +639,7 @@ contract V4AutoExitTest is BaseTest {
         vm.warp(1000 + 301);
 
         vm.prank(bot);
-        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
 
         assertEq(result.exitReason, 2); // takeProfit
         assertGt(result.liquidityRemoved, 0);
@@ -668,7 +668,7 @@ contract V4AutoExitTest is BaseTest {
         vm.warp(1000 + 301);
 
         vm.prank(bot);
-        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
 
         assertEq(result.exitReason, 3); // outOfRange
     }
@@ -698,7 +698,7 @@ contract V4AutoExitTest is BaseTest {
         bytes memory swapData = getRouterCallData(address(token1), address(token0), 0, 0);
 
         vm.prank(user1); // Owner provides swap data
-        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, swapData, block.timestamp + 1 hours);
+        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, swapData, "", block.timestamp + 1 hours);
 
         assertEq(result.exitReason, 1);
         assertGt(result.liquidityRemoved, 0);
@@ -728,7 +728,7 @@ contract V4AutoExitTest is BaseTest {
         bytes memory swapData = getRouterCallData(address(token0), address(token1), 0, 0);
 
         vm.prank(user1);
-        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, swapData, block.timestamp + 1 hours);
+        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, swapData, "", block.timestamp + 1 hours);
 
         assertEq(result.exitReason, 1);
         assertGt(result.liquidityRemoved, 0);
@@ -751,7 +751,7 @@ contract V4AutoExitTest is BaseTest {
         uint256 user1Token1Before = token1.balanceOf(user1);
 
         vm.prank(bot);
-        autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
 
         // User should receive fees + liquidity tokens (minus protocol fee)
         uint256 user1Token0After = token0.balanceOf(user1);
@@ -769,7 +769,7 @@ contract V4AutoExitTest is BaseTest {
         vm.warp(1000 + 301);
 
         vm.prank(bot);
-        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
 
         // Protocol fee should be taken (0.65%)
         // At least one of fee0/fee1 should be > 0 since there was liquidity
@@ -795,7 +795,7 @@ contract V4AutoExitTest is BaseTest {
         uint256 user1Token1Before = token1.balanceOf(user1);
 
         vm.prank(bot);
-        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
 
         uint256 user1Token0After = token0.balanceOf(user1);
         uint256 user1Token1After = token1.balanceOf(user1);
@@ -815,7 +815,7 @@ contract V4AutoExitTest is BaseTest {
         vm.warp(1000 + 301);
 
         vm.prank(bot);
-        autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
 
         // Config should be deleted
         IV4AutoExit.ExitConfig memory stored = autoExit.getExitConfig(tokenId);
@@ -836,7 +836,7 @@ contract V4AutoExitTest is BaseTest {
         emit IV4AutoExit.ExitExecuted(tokenId, user1, 1, 0, 0, 0, 0, 0);
 
         vm.prank(bot);
-        autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
     }
 
     function test_ExecuteExit_RevertIfNotConfigured() public {
@@ -844,7 +844,7 @@ contract V4AutoExitTest is BaseTest {
 
         vm.prank(bot);
         vm.expectRevert(IV4AutoExit.ExitNotConfigured.selector);
-        autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
     }
 
     function test_ExecuteExit_RevertIfConditionsNotMet() public {
@@ -856,7 +856,7 @@ contract V4AutoExitTest is BaseTest {
 
         vm.prank(bot);
         vm.expectRevert(IV4AutoExit.ExitConditionsNotMet.selector);
-        autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
     }
 
     function test_ExecuteExit_RevertIfTooSoon() public {
@@ -871,7 +871,7 @@ contract V4AutoExitTest is BaseTest {
 
         vm.prank(bot);
         vm.expectRevert(IV4AutoExit.ExitTooSoon.selector);
-        autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
     }
 
     function test_ExecuteExit_RevertIfDeadlinePassed() public {
@@ -885,7 +885,7 @@ contract V4AutoExitTest is BaseTest {
 
         vm.prank(bot);
         vm.expectRevert();
-        autoExit.executeExit(tokenId, "", block.timestamp - 1); // deadline in the past
+        autoExit.executeExit(tokenId, "", "", block.timestamp - 1); // deadline in the past
     }
 
     function test_ExecuteExit_RevertIfPaused() public {
@@ -902,7 +902,7 @@ contract V4AutoExitTest is BaseTest {
 
         vm.prank(bot);
         vm.expectRevert();
-        autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
     }
 
     function test_ExecuteExit_SwapDataOnlyByOwner() public {
@@ -919,7 +919,7 @@ contract V4AutoExitTest is BaseTest {
         // Bot (not owner/approved) cannot provide swapData
         vm.prank(bot);
         vm.expectRevert();
-        autoExit.executeExit(tokenId, swapData, block.timestamp + 1 hours);
+        autoExit.executeExit(tokenId, swapData, "", block.timestamp + 1 hours);
     }
 
     // ============ SelfExit Tests ============
@@ -934,7 +934,7 @@ contract V4AutoExitTest is BaseTest {
         vm.warp(1000 + 301);
 
         vm.prank(user1);
-        IV4AutoExit.ExitResult memory result = autoExit.selfExit(tokenId, "", block.timestamp + 1 hours);
+        IV4AutoExit.ExitResult memory result = autoExit.selfExit(tokenId, "", "", block.timestamp + 1 hours);
 
         assertEq(result.fee0, 0, "No protocol fee on self-exit");
         assertEq(result.fee1, 0, "No protocol fee on self-exit");
@@ -951,7 +951,7 @@ contract V4AutoExitTest is BaseTest {
         vm.warp(1000 + 301);
 
         vm.prank(user1);
-        IV4AutoExit.ExitResult memory result = autoExit.selfExit(tokenId, "", block.timestamp + 1 hours);
+        IV4AutoExit.ExitResult memory result = autoExit.selfExit(tokenId, "", "", block.timestamp + 1 hours);
 
         assertEq(result.exitReason, 1);
         assertGt(result.liquidityRemoved, 0);
@@ -970,7 +970,7 @@ contract V4AutoExitTest is BaseTest {
         vm.warp(1000 + 301);
 
         vm.prank(operator);
-        IV4AutoExit.ExitResult memory result = autoExit.selfExit(tokenId, "", block.timestamp + 1 hours);
+        IV4AutoExit.ExitResult memory result = autoExit.selfExit(tokenId, "", "", block.timestamp + 1 hours);
 
         assertGt(result.liquidityRemoved, 0);
     }
@@ -986,7 +986,7 @@ contract V4AutoExitTest is BaseTest {
 
         vm.prank(user2);
         vm.expectRevert();
-        autoExit.selfExit(tokenId, "", block.timestamp + 1 hours);
+        autoExit.selfExit(tokenId, "", "", block.timestamp + 1 hours);
     }
 
     // ============ Protocol Fee Management Tests ============
@@ -1055,7 +1055,7 @@ contract V4AutoExitTest is BaseTest {
         vm.warp(1000 + 301);
 
         vm.prank(bot);
-        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        IV4AutoExit.ExitResult memory result = autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
 
         // Withdraw accumulated fees
         uint256 fee0 = autoExit.accumulatedFees(poolKey.currency0);
@@ -1094,7 +1094,7 @@ contract V4AutoExitTest is BaseTest {
         vm.warp(1000 + 301);
 
         vm.prank(bot);
-        autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
 
         uint256 fee0 = autoExit.accumulatedFees(poolKey.currency0);
         if (fee0 > 0) {
@@ -1116,7 +1116,7 @@ contract V4AutoExitTest is BaseTest {
         vm.warp(1000 + 301);
 
         vm.prank(bot);
-        autoExit.executeExit(tokenId, "", block.timestamp + 1 hours);
+        autoExit.executeExit(tokenId, "", "", block.timestamp + 1 hours);
 
         Currency[] memory currencies = new Currency[](2);
         currencies[0] = poolKey.currency0;

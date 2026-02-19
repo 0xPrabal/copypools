@@ -7,6 +7,7 @@ import { memoryCache, CACHE_KEYS, CACHE_TTL } from './cache.js';
 import { V4CompoundorAbi } from '../abis/V4Compoundor.js';
 import { V4AutoRangeAbi } from '../abis/V4AutoRange.js';
 import { V4UtilsAbi } from '../abis/V4Utils.js';
+import { V4AutoExitAbi } from '../abis/V4AutoExit.js';
 import { rpcManager, executeBatch } from './rpc-manager.js';
 
 // Chain mapping
@@ -79,11 +80,8 @@ const V4CompoundorABI = V4CompoundorAbi;
 const V4AutoRangeABI = V4AutoRangeAbi;
 const V4UtilsABI = V4UtilsAbi;
 
-// Simplified ABIs for contracts that might not be deployed yet
-const V4AutoExitABI = parseAbi([
-  'function checkExit(uint256 tokenId) view returns (bool, uint8)',
-  'function executeExit(uint256 tokenId, bytes swapData)',
-]);
+// Full ABI from compiled contract
+const V4AutoExitABI = V4AutoExitAbi;
 
 const V4VaultABI = parseAbi([
   'function isLiquidatable(uint256 tokenId) view returns (bool)',
@@ -145,11 +143,14 @@ export async function getPendingFees(tokenId: bigint): Promise<{ amount0: bigint
 export async function executeCompound(tokenId: bigint, swapData: Hex): Promise<Hex> {
   if (!walletClient) throw new Error('Wallet not configured');
 
+  // Deadline: 5 minutes from now
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 300);
+
   const { request } = await publicClient.simulateContract({
     address: contracts.v4Compoundor as Address,
     abi: V4CompoundorABI,
     functionName: 'autoCompound',
-    args: [tokenId, swapData],
+    args: [tokenId, swapData, deadline],
     account: walletClient.account,
   });
 
@@ -159,33 +160,29 @@ export async function executeCompound(tokenId: bigint, swapData: Hex): Promise<H
   return hash;
 }
 
-// Auto-exit functions (V4AutoExit not yet implemented)
-export async function checkExit(tokenId: bigint): Promise<{ shouldExit: boolean; exitType: number }> {
-  if (!contracts.v4AutoExit) {
-    throw new Error('V4AutoExit contract not deployed');
-  }
-
+// Auto-exit functions
+export async function checkExit(tokenId: bigint): Promise<{ shouldExit: boolean; reason: number }> {
   const result = await publicClient.readContract({
     address: contracts.v4AutoExit as Address,
     abi: V4AutoExitABI,
     functionName: 'checkExit',
     args: [tokenId],
-  });
+  }) as [boolean, number];
 
-  return { shouldExit: result[0], exitType: result[1] };
+  return { shouldExit: result[0], reason: result[1] };
 }
 
 export async function executeExit(tokenId: bigint, swapData: Hex): Promise<Hex> {
-  if (!contracts.v4AutoExit) {
-    throw new Error('V4AutoExit contract not deployed');
-  }
   if (!walletClient) throw new Error('Wallet not configured');
+
+  // Deadline: 5 minutes from now
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 300);
 
   const { request } = await publicClient.simulateContract({
     address: contracts.v4AutoExit as Address,
     abi: V4AutoExitABI,
     functionName: 'executeExit',
-    args: [tokenId, swapData],
+    args: [tokenId, swapData, deadline],
     account: walletClient.account,
   });
 
@@ -193,6 +190,33 @@ export async function executeExit(tokenId: bigint, swapData: Hex): Promise<Hex> 
   logger.info({ tokenId: tokenId.toString(), hash }, 'Exit executed');
 
   return hash;
+}
+
+export async function getExitConfig(tokenId: bigint): Promise<{
+  enabled: boolean;
+  triggerTickLower: number;
+  triggerTickUpper: number;
+  exitOnRangeExit: boolean;
+  exitToken: string;
+  maxSwapSlippage: bigint;
+  minExitInterval: number;
+}> {
+  const result = await publicClient.readContract({
+    address: contracts.v4AutoExit as Address,
+    abi: V4AutoExitABI,
+    functionName: 'getExitConfig',
+    args: [tokenId],
+  }) as any;
+
+  return {
+    enabled: result.enabled,
+    triggerTickLower: Number(result.triggerTickLower),
+    triggerTickUpper: Number(result.triggerTickUpper),
+    exitOnRangeExit: result.exitOnRangeExit,
+    exitToken: result.exitToken,
+    maxSwapSlippage: BigInt(result.maxSwapSlippage),
+    minExitInterval: Number(result.minExitInterval),
+  };
 }
 
 // Auto-range functions

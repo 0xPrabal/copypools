@@ -29,6 +29,9 @@ interface IV4Compoundor {
     /// @notice Emitted when fees are withdrawn
     event FeesWithdrawn(address indexed recipient, Currency currency, uint256 amount);
 
+    /// @notice Emitted when compound configuration is updated
+    event ConfigUpdated(uint256 indexed tokenId, address indexed caller);
+
     /// @notice Configuration for auto-compound
     struct CompoundConfig {
         bool enabled;

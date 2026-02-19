@@ -193,13 +193,14 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
             amount1 += fees1;
         }
 
+        // H-02: Use separate swap data for each token direction
         if (!(poolKey.currency0 == params.targetCurrency) && amount0 > 0) {
-            amount += _routerSwap(poolKey.currency0, params.targetCurrency, amount0, params.swapData, poolKey, params.maxSwapSlippage);
+            amount += _routerSwap(poolKey.currency0, params.targetCurrency, amount0, params.swapData0, poolKey, params.maxSwapSlippage);
         } else {
             amount += amount0;
         }
         if (!(poolKey.currency1 == params.targetCurrency) && amount1 > 0) {
-            amount += _routerSwap(poolKey.currency1, params.targetCurrency, amount1, params.swapData, poolKey, params.maxSwapSlippage);
+            amount += _routerSwap(poolKey.currency1, params.targetCurrency, amount1, params.swapData1, poolKey, params.maxSwapSlippage);
         } else {
             amount += amount1;
         }
@@ -221,13 +222,14 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         (uint256 amount0, uint256 amount1) = _decreaseLiquidity(params.tokenId, 0, 0, 0);
         emit FeesCollected(params.tokenId, amount0, amount1);
 
+        // H-02: Use separate swap data for each token direction
         if (!(poolKey.currency0 == params.targetCurrency) && amount0 > 0) {
-            amount += _routerSwap(poolKey.currency0, params.targetCurrency, amount0, params.swapData, poolKey, params.maxSwapSlippage);
+            amount += _routerSwap(poolKey.currency0, params.targetCurrency, amount0, params.swapData0, poolKey, params.maxSwapSlippage);
         } else {
             amount += amount0;
         }
         if (!(poolKey.currency1 == params.targetCurrency) && amount1 > 0) {
-            amount += _routerSwap(poolKey.currency1, params.targetCurrency, amount1, params.swapData, poolKey, params.maxSwapSlippage);
+            amount += _routerSwap(poolKey.currency1, params.targetCurrency, amount1, params.swapData1, poolKey, params.maxSwapSlippage);
         } else {
             amount += amount1;
         }
@@ -341,7 +343,18 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
         }
 
         if (params.swapData.length > 0) {
-            _routerSwap(poolKey.currency0, poolKey.currency1, 0, params.swapData, poolKey, params.maxSwapSlippage);
+            // L-07: Calculate optimal swap amount and direction instead of swapping entire balance
+            uint256 bal0 = _getAvailableBalance(poolKey.currency0);
+            uint256 bal1 = _getAvailableBalance(poolKey.currency1);
+            (uint160 sqrtPriceSwap,,,) = poolManager.getSlot0(poolKey.toId());
+            (bool zeroForOne, uint256 optimalSwapAmount) = PositionValueLib.calculateSwapForOptimalRatio(
+                bal0, bal1, sqrtPriceSwap, params.newTickLower, params.newTickUpper
+            );
+            if (optimalSwapAmount > 0) {
+                Currency from = zeroForOne ? poolKey.currency0 : poolKey.currency1;
+                Currency to = zeroForOne ? poolKey.currency1 : poolKey.currency0;
+                _routerSwap(from, to, optimalSwapAmount, params.swapData, poolKey, params.maxSwapSlippage);
+            }
         } else {
             _autoSwapForRange(poolKey, params.newTickLower, params.newTickUpper, params.maxSwapSlippage);
         }
@@ -454,14 +467,17 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
             weth9: WETH9
         }));
 
-        uint256 consumed = srcBal - _getAvailableBalance(fromCurrency);
         uint256 output = _getBalance(toCurrency) - dstBal;
 
-        if (consumed > 0 && maxSlippage < 10000) {
-            (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
-            bool zeroForOne = fromCurrency == poolKey.currency0;
-            uint256 minOut = SwapLib.calculateMinOutput(consumed, sqrtPriceX96, maxSlippage, zeroForOne);
-            if (output < minOut) revert SwapLib.SlippageExceeded(minOut, output);
+        // H-03: Post-hoc slippage check based on actual consumed amount
+        if (output > 0 && maxSlippage < 10000) {
+            uint256 actualConsumed = srcBal - _getAvailableBalance(fromCurrency);
+            if (actualConsumed > 0) {
+                (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
+                bool zeroForOne = Currency.unwrap(fromCurrency) < Currency.unwrap(toCurrency);
+                uint256 minAmountOut = SwapLib.calculateMinOutput(actualConsumed, sqrtPriceX96, maxSlippage, zeroForOne);
+                if (output < minAmountOut) revert SwapLib.SlippageExceeded(minAmountOut, output);
+            }
         }
 
         return _takeSwapFee(toCurrency, output);

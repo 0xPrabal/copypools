@@ -78,7 +78,8 @@ interface IV4Utils {
         uint256 amount1Min;
         uint256 deadline;
         Currency targetCurrency;
-        bytes swapData;
+        bytes swapData0;       // Swap data for token0 → target (empty if token0 is target)
+        bytes swapData1;       // Swap data for token1 → target (empty if token1 is target)
         uint256 maxSwapSlippage;
     }
 
@@ -86,7 +87,8 @@ interface IV4Utils {
     struct CollectAndSwapParams {
         uint256 tokenId;
         Currency targetCurrency;
-        bytes swapData;
+        bytes swapData0;       // Swap data for token0 → target (empty if token0 is target)
+        bytes swapData1;       // Swap data for token1 → target (empty if token1 is target)
         uint256 maxSwapSlippage;
         uint256 deadline;
     }

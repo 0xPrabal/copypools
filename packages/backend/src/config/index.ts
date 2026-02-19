@@ -21,8 +21,8 @@ const configSchema = z.object({
   V4_COMPOUNDOR_ADDRESS: z.string(),
   V4_AUTO_RANGE_ADDRESS: z.string(),
 
-  // Optional - Not yet implemented
-  V4_AUTO_EXIT_ADDRESS: z.string().optional(),
+  // Auto Exit
+  V4_AUTO_EXIT_ADDRESS: z.string(),
   V4_VAULT_ADDRESS: z.string().optional(),
 
   // Subgraph/Database
@@ -35,6 +35,7 @@ const configSchema = z.object({
   // External APIs
   ZEROX_API_KEY: z.string().optional(),
   COINGECKO_API_KEY: z.string().optional(),
+  GRAPH_API_KEY: z.string().optional(),
 
   // Bot Configuration (optimized for minimal RPC usage)
   BOT_ENABLED: z.string().transform((v) => v === 'true').default('false'),
@@ -76,7 +77,6 @@ export const contracts = {
   v4Utils: config.V4_UTILS_ADDRESS,
   v4Compoundor: config.V4_COMPOUNDOR_ADDRESS,
   v4AutoRange: config.V4_AUTO_RANGE_ADDRESS,
-  // Optional - Only include if deployed
-  v4AutoExit: config.V4_AUTO_EXIT_ADDRESS || undefined,
+  v4AutoExit: config.V4_AUTO_EXIT_ADDRESS,
   v4Vault: config.V4_VAULT_ADDRESS || undefined,
 };

@@ -3,6 +3,14 @@ import * as subgraph from '../../services/subgraph.js';
 import { getV4Pools } from '../../services/database.js';
 import { syncPools } from '../../bots/sync-pools.js';
 import { logger } from '../../utils/logger.js';
+import {
+  fetchGraphPool,
+  fetchPoolDayData,
+  fetchPoolHourData,
+  fetchSwaps,
+  fetchTicks,
+  searchPools,
+} from '../../services/graph-client.js';
 
 const router = Router();
 const routeLogger = logger.child({ route: 'pools' });
@@ -237,6 +245,215 @@ router.get('/:poolId/optimal-range', async (req: Request, res: Response) => {
   } catch (error) {
     routeLogger.error({ error, poolId: req.params.poolId }, 'Failed to get optimal range');
     res.status(500).json({ error: 'Failed to calculate optimal range' });
+  }
+});
+
+// ─── Graph-powered Routes ──────────────────────────────────────
+
+// Get pool OHLCV chart data (daily)
+router.get('/:poolId/chart', async (req: Request, res: Response) => {
+  try {
+    const { poolId } = req.params;
+    const days = Math.min(parseInt(req.query.days as string) || 30, 365);
+    const granularity = (req.query.granularity as string) || 'day';
+
+    if (granularity === 'hour') {
+      const hours = Math.min(days * 24, 720); // max 30 days of hourly
+      const data = await fetchPoolHourData(poolId, hours);
+      if (res.headersSent) return;
+      return res.json({
+        poolId,
+        granularity: 'hour',
+        count: data.length,
+        data: data.map(d => ({
+          timestamp: d.periodStartUnix,
+          tvlUSD: parseFloat(d.tvlUSD),
+          volumeUSD: parseFloat(d.volumeUSD),
+          feesUSD: parseFloat(d.feesUSD),
+          open: parseFloat(d.open),
+          high: parseFloat(d.high),
+          low: parseFloat(d.low),
+          close: parseFloat(d.close),
+        })),
+      });
+    }
+
+    const data = await fetchPoolDayData(poolId, days);
+    if (res.headersSent) return;
+    res.json({
+      poolId,
+      granularity: 'day',
+      count: data.length,
+      data: data.map(d => ({
+        timestamp: d.date,
+        tvlUSD: parseFloat(d.tvlUSD),
+        volumeUSD: parseFloat(d.volumeUSD),
+        feesUSD: parseFloat(d.feesUSD),
+        open: parseFloat(d.open),
+        high: parseFloat(d.high),
+        low: parseFloat(d.low),
+        close: parseFloat(d.close),
+        token0Price: parseFloat(d.token0Price),
+        token1Price: parseFloat(d.token1Price),
+        txCount: parseInt(d.txCount),
+      })),
+    });
+  } catch (error) {
+    routeLogger.error({ error, poolId: req.params.poolId }, 'Failed to get pool chart data');
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'Failed to fetch pool chart data' });
+  }
+});
+
+// Get recent swaps for a pool
+router.get('/:poolId/swaps', async (req: Request, res: Response) => {
+  try {
+    const { poolId } = req.params;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+
+    const swaps = await fetchSwaps(poolId, limit);
+    if (res.headersSent) return;
+    res.json({
+      poolId,
+      count: swaps.length,
+      swaps: swaps.map(s => ({
+        id: s.id,
+        timestamp: parseInt(s.timestamp),
+        sender: s.sender,
+        amount0: parseFloat(s.amount0),
+        amount1: parseFloat(s.amount1),
+        amountUSD: parseFloat(s.amountUSD),
+        token0Symbol: s.token0.symbol,
+        token1Symbol: s.token1.symbol,
+        tick: parseInt(s.tick),
+      })),
+    });
+  } catch (error) {
+    routeLogger.error({ error, poolId: req.params.poolId }, 'Failed to get pool swaps');
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'Failed to fetch pool swaps' });
+  }
+});
+
+// Get tick liquidity distribution for a pool
+router.get('/:poolId/ticks', async (req: Request, res: Response) => {
+  try {
+    const { poolId } = req.params;
+    const limit = Math.min(parseInt(req.query.limit as string) || 200, 1000);
+
+    const ticks = await fetchTicks(poolId, limit);
+    if (res.headersSent) return;
+    res.json({
+      poolId,
+      count: ticks.length,
+      ticks: ticks.map(t => ({
+        tickIdx: parseInt(t.tickIdx),
+        liquidityGross: t.liquidityGross,
+        liquidityNet: t.liquidityNet,
+        price0: parseFloat(t.price0),
+        price1: parseFloat(t.price1),
+      })),
+    });
+  } catch (error) {
+    routeLogger.error({ error, poolId: req.params.poolId }, 'Failed to get pool ticks');
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'Failed to fetch pool ticks' });
+  }
+});
+
+// Search pools by token address or symbol
+router.get('/v4/search', async (req: Request, res: Response) => {
+  try {
+    const query = (req.query.q as string) || '';
+    if (!query || query.length < 2) {
+      return res.status(400).json({ error: 'Query must be at least 2 characters' });
+    }
+
+    const pools = await searchPools(query, 20);
+    if (res.headersSent) return;
+    res.json({
+      query,
+      count: pools.length,
+      pools: pools.map(p => ({
+        id: p.id,
+        token0Symbol: p.token0.symbol,
+        token1Symbol: p.token1.symbol,
+        token0Address: p.token0.id,
+        token1Address: p.token1.id,
+        feeTier: formatFeeTier(parseInt(p.feeTier)),
+        tvlUSD: parseFloat(p.totalValueLockedUSD),
+        volumeUSD: parseFloat(p.volumeUSD),
+        hooks: p.hooks,
+      })),
+    });
+  } catch (error) {
+    routeLogger.error({ error }, 'Failed to search pools');
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'Failed to search pools' });
+  }
+});
+
+// Get enriched pool detail from Graph
+router.get('/:poolId/graph', async (req: Request, res: Response) => {
+  try {
+    const { poolId } = req.params;
+    const pool = await fetchGraphPool(poolId);
+
+    if (!pool) {
+      return res.status(404).json({ error: 'Pool not found on Graph' });
+    }
+
+    // Calculate metrics
+    const tvlUsd = parseFloat(pool.totalValueLockedUSD);
+    let volume1d = 0;
+    let fees1d = 0;
+    let volume30d = 0;
+
+    if (pool.poolDayData && pool.poolDayData.length > 0) {
+      volume1d = parseFloat(pool.poolDayData[0].volumeUSD);
+      fees1d = parseFloat(pool.poolDayData[0].feesUSD);
+      volume30d = pool.poolDayData.reduce((sum, d) => sum + parseFloat(d.volumeUSD), 0);
+    }
+
+    const apr = tvlUsd > 0 ? (fees1d * 365 / tvlUsd) * 100 : 0;
+
+    if (res.headersSent) return;
+    res.json({
+      id: pool.id,
+      token0: pool.token0,
+      token1: pool.token1,
+      feeTier: parseInt(pool.feeTier),
+      feeTierFormatted: formatFeeTier(parseInt(pool.feeTier)),
+      liquidity: pool.liquidity,
+      sqrtPrice: pool.sqrtPrice,
+      tick: pool.tick ? parseInt(pool.tick) : null,
+      tickSpacing: parseInt(pool.tickSpacing),
+      hooks: pool.hooks,
+      createdAt: parseInt(pool.createdAtTimestamp),
+      tvlUSD: tvlUsd,
+      volumeUSD: parseFloat(pool.volumeUSD),
+      feesUSD: parseFloat(pool.feesUSD),
+      txCount: parseInt(pool.txCount),
+      lpCount: parseInt(pool.liquidityProviderCount),
+      token0Price: parseFloat(pool.token0Price),
+      token1Price: parseFloat(pool.token1Price),
+      metrics: {
+        volume1dUSD: volume1d,
+        volume30dUSD: volume30d,
+        fees1dUSD: fees1d,
+        apr,
+      },
+      dayData: pool.poolDayData?.map(d => ({
+        date: d.date,
+        tvlUSD: parseFloat(d.tvlUSD),
+        volumeUSD: parseFloat(d.volumeUSD),
+        feesUSD: parseFloat(d.feesUSD),
+      })) || [],
+    });
+  } catch (error) {
+    routeLogger.error({ error, poolId: req.params.poolId }, 'Failed to get pool from Graph');
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'Failed to fetch pool from Graph' });
   }
 });
 

@@ -6,6 +6,12 @@ import { logger } from '../../utils/logger.js';
 import { rpcManager } from '../../services/rpc-manager.js';
 import { config } from '../../config/index.js';
 import { ErrorCodes } from '../../utils/errors.js';
+import {
+  fetchProtocolStats,
+  fetchUniswapDayData,
+  fetchEthPrice,
+  fetchTopTokens,
+} from '../../services/graph-client.js';
 
 const router = Router();
 const routeLogger = logger.child({ route: 'analytics' });
@@ -409,6 +415,104 @@ router.get('/rebalances', async (req: Request, res: Response) => {
     routeLogger.error({ error }, 'Failed to get rebalance stats');
     if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch rebalance stats' });
+  }
+});
+
+// ─── Graph-powered Routes ──────────────────────────────────────
+
+// Get Uniswap V4 protocol stats from The Graph
+router.get('/graph/protocol', async (_req: Request, res: Response) => {
+  try {
+    const stats = await fetchProtocolStats();
+    if (res.headersSent) return;
+
+    if (!stats) {
+      return res.status(503).json({ error: 'Graph data unavailable' });
+    }
+
+    res.json({
+      source: 'thegraph',
+      poolManagerAddress: stats.id,
+      poolCount: parseInt(stats.poolCount),
+      txCount: parseInt(stats.txCount),
+      totalVolumeUSD: parseFloat(stats.totalVolumeUSD),
+      totalFeesUSD: parseFloat(stats.totalFeesUSD),
+      totalValueLockedUSD: parseFloat(stats.totalValueLockedUSD),
+    });
+  } catch (error) {
+    routeLogger.error({ error }, 'Failed to get Graph protocol stats');
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'Failed to fetch Graph protocol stats' });
+  }
+});
+
+// Get Uniswap V4 daily data from The Graph
+router.get('/graph/daily', async (req: Request, res: Response) => {
+  try {
+    const days = Math.min(parseInt(req.query.days as string) || 30, 365);
+    const data = await fetchUniswapDayData(days);
+    if (res.headersSent) return;
+
+    res.json({
+      source: 'thegraph',
+      count: data.length,
+      data: data.map(d => ({
+        date: d.date,
+        volumeUSD: parseFloat(d.volumeUSD),
+        feesUSD: parseFloat(d.feesUSD),
+        tvlUSD: parseFloat(d.tvlUSD),
+        txCount: parseInt(d.txCount),
+      })),
+    });
+  } catch (error) {
+    routeLogger.error({ error }, 'Failed to get Graph daily data');
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'Failed to fetch Graph daily data' });
+  }
+});
+
+// Get ETH/USD price from The Graph Bundle
+router.get('/graph/eth-price', async (_req: Request, res: Response) => {
+  try {
+    const price = await fetchEthPrice();
+    if (res.headersSent) return;
+    res.json({ source: 'thegraph', ethPriceUSD: price });
+  } catch (error) {
+    routeLogger.error({ error }, 'Failed to get ETH price from Graph');
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'Failed to fetch ETH price' });
+  }
+});
+
+// Get top tokens from The Graph
+router.get('/graph/tokens', async (req: Request, res: Response) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const tokens = await fetchTopTokens(limit);
+    if (res.headersSent) return;
+
+    const ethPrice = await fetchEthPrice();
+
+    res.json({
+      source: 'thegraph',
+      ethPriceUSD: ethPrice,
+      count: tokens.length,
+      tokens: tokens.map(t => ({
+        address: t.id,
+        symbol: t.symbol,
+        name: t.name,
+        decimals: parseInt(t.decimals),
+        priceUSD: parseFloat(t.derivedETH) * ethPrice,
+        derivedETH: parseFloat(t.derivedETH),
+        tvlUSD: parseFloat(t.totalValueLockedUSD),
+        volumeUSD: parseFloat(t.volumeUSD),
+        poolCount: parseInt(t.poolCount),
+      })),
+    });
+  } catch (error) {
+    routeLogger.error({ error }, 'Failed to get tokens from Graph');
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'Failed to fetch tokens from Graph' });
   }
 });
 

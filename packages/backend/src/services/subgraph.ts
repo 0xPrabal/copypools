@@ -123,6 +123,26 @@ export async function getPosition(tokenId: string) {
     }
   }
 
+  // If no exit config in database, check on-chain
+  if (!position.exitConfig) {
+    try {
+      const onChainExitConfig = await blockchain.getExitConfig(BigInt(tokenId));
+      if (onChainExitConfig.enabled) {
+        position.exitConfig = {
+          enabled: onChainExitConfig.enabled,
+          triggerTickLower: onChainExitConfig.triggerTickLower,
+          triggerTickUpper: onChainExitConfig.triggerTickUpper,
+          exitOnRangeExit: onChainExitConfig.exitOnRangeExit,
+          exitToken: onChainExitConfig.exitToken,
+          maxSwapSlippage: onChainExitConfig.maxSwapSlippage.toString(),
+          minExitInterval: onChainExitConfig.minExitInterval,
+        };
+      }
+    } catch (e) {
+      // Position might not have exit config
+    }
+  }
+
   return { position };
 }
 
@@ -180,10 +200,32 @@ export async function getPositionsByOwner(owner: string, first = 100, skip = 0) 
         }
       }
 
+      let exitConfigResult = exitConfigs[0] || null;
+
+      // If no exit config in database, check on-chain
+      if (!exitConfigResult) {
+        try {
+          const onChainExitConfig = await blockchain.getExitConfig(BigInt(pos.tokenId));
+          if (onChainExitConfig.enabled) {
+            exitConfigResult = {
+              enabled: onChainExitConfig.enabled,
+              triggerTickLower: onChainExitConfig.triggerTickLower,
+              triggerTickUpper: onChainExitConfig.triggerTickUpper,
+              exitOnRangeExit: onChainExitConfig.exitOnRangeExit,
+              exitToken: onChainExitConfig.exitToken,
+              maxSwapSlippage: onChainExitConfig.maxSwapSlippage.toString(),
+              minExitInterval: onChainExitConfig.minExitInterval,
+            };
+          }
+        } catch (e) {
+          // Position might not have exit config
+        }
+      }
+
       return {
         ...pos,
         compoundConfig,
-        exitConfig: exitConfigs[0] || null,
+        exitConfig: exitConfigResult,
         rangeConfig,
       };
     })
@@ -335,10 +377,12 @@ export async function getCompoundablePositions(minReward: string, limit = 100) {
 
 export async function getExitablePositions(limit = 100) {
   const configs = await queryWithRetry<any>(
-    `SELECT ec.*, p.*
+    `SELECT ec.*, p.token_id as "tokenId", p.pool_id as "poolId"
      FROM exit_config ec
      JOIN position p ON ec.position_id = p.token_id
-     WHERE ec.executed = false AND ec.exit_type > 0
+     WHERE ec.enabled = true
+       AND p.liquidity != '0'
+       AND p.closed_at_timestamp IS NULL
      LIMIT $1`,
     [limit]
   );
@@ -416,7 +460,7 @@ export async function getProtocolStats() {
     queryWithRetry<any>(`SELECT COUNT(*) as count FROM position`),
     queryWithRetry<any>(`SELECT COUNT(*) as count FROM compound_config WHERE enabled = true`),
     queryWithRetry<any>(`SELECT COUNT(*) as count FROM range_config WHERE enabled = true`),
-    queryWithRetry<any>(`SELECT COUNT(*) as count FROM exit_config WHERE executed = false AND exit_type > 0`),
+    queryWithRetry<any>(`SELECT COUNT(*) as count FROM exit_config WHERE enabled = true`),
     // Aggregate TVL, volume, fees from all pools
     queryWithRetry<any>(`
       SELECT
