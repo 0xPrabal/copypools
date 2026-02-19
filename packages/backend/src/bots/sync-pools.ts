@@ -9,7 +9,8 @@ import {
 import { batchGetCompoundConfigs, batchGetRangeConfigs, batchGetExitConfigs } from '../services/blockchain.js';
 import {
   fetchTokenPrices, fetchEthPrice, fetchTopTokens,
-  fetchGraphPools, fetchPoolDayData, fetchSwaps, fetchTicks
+  fetchGraphPools, fetchPoolDayData, fetchSwaps, fetchTicks,
+  fetchProtocolStats, fetchUniswapDayData
 } from '../services/graph-client.js';
 
 const syncLogger = logger.child({ module: 'sync-pools' });
