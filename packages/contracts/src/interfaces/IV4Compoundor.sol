@@ -63,13 +63,13 @@ interface IV4Compoundor {
     /// @param tokenId The position token ID
     /// @param swapData Optional swap data for rebalancing
     /// @return result The compound result
-    function autoCompound(uint256 tokenId, bytes calldata swapData) external returns (CompoundResult memory result);
+    function autoCompound(uint256 tokenId, bytes calldata swapData, uint256 deadline) external returns (CompoundResult memory result);
 
     /// @notice Self-compound fees (called by position owner)
     /// @param tokenId The position token ID
     /// @param swapData Optional swap data for rebalancing
     /// @return result The compound result
-    function selfCompound(uint256 tokenId, bytes calldata swapData) external returns (CompoundResult memory result);
+    function selfCompound(uint256 tokenId, bytes calldata swapData, uint256 deadline) external returns (CompoundResult memory result);
 
     /// @notice Check if a position is profitable to compound
     /// @param tokenId The position token ID
@@ -105,4 +105,9 @@ interface IV4Compoundor {
     /// @param currency The currency to withdraw
     /// @param recipient The recipient address
     function withdrawFees(Currency currency, address recipient) external;
+
+    /// @notice Batch withdraw accumulated protocol fees for multiple currencies
+    /// @param currencies Array of currencies to withdraw
+    /// @param recipient The recipient address
+    function batchWithdrawFees(Currency[] calldata currencies, address recipient) external;
 }

@@ -77,6 +77,14 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     /// @notice Initialize the contract
     function initialize(address _owner) external initializer {
         __V4Base_init(_owner);
+        protocolFee = 65; // 0.65%
+        maxCompoundSlippage = 200; // 2%
+    }
+
+    /// @notice Re-initialize for upgrades (sets storage values that were missing in v1)
+    function initializeV2() external reinitializer(2) {
+        if (protocolFee == 0) protocolFee = 65;
+        if (maxCompoundSlippage == 0) maxCompoundSlippage = 200;
     }
 
     /// @inheritdoc IV4Compoundor
@@ -114,11 +122,12 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     }
 
     /// @inheritdoc IV4Compoundor
-    function autoCompound(uint256 tokenId, bytes calldata swapData)
+    function autoCompound(uint256 tokenId, bytes calldata swapData, uint256 deadline)
         external
         override
         nonReentrant
         whenNotPaused
+        checkDeadline(deadline)
         returns (CompoundResult memory result)
     {
         CompoundConfig memory config = configs[tokenId];
@@ -159,11 +168,12 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     }
 
     /// @inheritdoc IV4Compoundor
-    function selfCompound(uint256 tokenId, bytes calldata swapData)
+    function selfCompound(uint256 tokenId, bytes calldata swapData, uint256 deadline)
         external
         override
         nonReentrant
         whenNotPaused
+        checkDeadline(deadline)
         onlyPositionOwnerOrApproved(tokenId)
         returns (CompoundResult memory result)
     {
@@ -262,7 +272,10 @@ contract V4Compoundor is V4Base, IV4Compoundor {
     /// @inheritdoc IV4Compoundor
     function setProtocolFee(uint256 newFee) external override onlyOwner {
         require(newFee <= MAX_PROTOCOL_FEE, "Fee too high");
-        require(block.timestamp >= lastFeeChangeTime + FEE_CHANGE_COOLDOWN, "Fee change cooldown");
+        // Skip cooldown for first change (lastFeeChangeTime == 0 means never changed)
+        if (lastFeeChangeTime > 0) {
+            require(block.timestamp >= lastFeeChangeTime + FEE_CHANGE_COOLDOWN, "Fee change cooldown");
+        }
         emit ProtocolFeeUpdated(protocolFee, newFee);
         protocolFee = newFee;
         lastFeeChangeTime = block.timestamp;
@@ -284,6 +297,18 @@ contract V4Compoundor is V4Base, IV4Compoundor {
         _transferCurrency(currency, recipient, amount);
 
         emit FeesWithdrawn(recipient, currency, amount);
+    }
+
+    /// @inheritdoc IV4Compoundor
+    function batchWithdrawFees(Currency[] calldata currencies, address recipient) external override onlyOwner {
+        for (uint256 i = 0; i < currencies.length; i++) {
+            uint256 amount = accumulatedFees[currencies[i]];
+            if (amount > 0) {
+                accumulatedFees[currencies[i]] = 0;
+                _transferCurrency(currencies[i], recipient, amount);
+                emit FeesWithdrawn(recipient, currencies[i], amount);
+            }
+        }
     }
 
     // ============ Internal Functions ============

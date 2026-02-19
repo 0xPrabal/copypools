@@ -80,6 +80,12 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
     /// @notice Initialize the contract
     function initialize(address _owner) external initializer {
         __V4Base_init(_owner);
+        protocolFee = 65; // 0.65%
+    }
+
+    /// @notice Re-initialize for upgrades (sets storage values that were missing in v1)
+    function initializeV2() external reinitializer(2) {
+        if (protocolFee == 0) protocolFee = 65;
     }
 
     /// @inheritdoc IV4AutoRange
@@ -90,6 +96,12 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
     {
         require(config.minRebalanceInterval >= MIN_REBALANCE_INTERVAL, "Interval too short");
         require(config.lowerDelta > 0 && config.upperDelta > 0, "Invalid deltas");
+
+        // L-06: Validate tick spacing alignment
+        (PoolKey memory poolKey,,,) = getPositionInfo(tokenId);
+        int24 tickSpacing = poolKey.tickSpacing;
+        require(config.lowerDelta % tickSpacing == 0, "lowerDelta not aligned");
+        require(config.upperDelta % tickSpacing == 0, "upperDelta not aligned");
 
         rangeConfigs[tokenId] = config;
         rangeConfigs[tokenId].enabled = true;
@@ -121,6 +133,13 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
     {
         require(config.minRebalanceInterval >= MIN_REBALANCE_INTERVAL, "Interval too short");
         require(config.lowerDelta > 0 && config.upperDelta > 0, "Invalid deltas");
+
+        // L-06: Validate tick spacing alignment
+        (PoolKey memory poolKey,,,) = getPositionInfo(tokenId);
+        int24 tickSpacing = poolKey.tickSpacing;
+        require(config.lowerDelta % tickSpacing == 0, "lowerDelta not aligned");
+        require(config.upperDelta % tickSpacing == 0, "upperDelta not aligned");
+
         rangeConfigs[tokenId] = config;
     }
 
@@ -202,8 +221,9 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         if (swapData.length > 0) {
             // External router swap
             _executeOptimalSwap(poolKey, newTickLower, newTickUpper, amount0, amount1, swapData, config.maxSwapSlippage);
-            amount0 = _getBalance(poolKey.currency0);
-            amount1 = _getBalance(poolKey.currency1);
+            // M-NEW-01: Use _getAvailableBalance to exclude previously accumulated protocol fees
+            amount0 = _getAvailableBalance(poolKey.currency0);
+            amount1 = _getAvailableBalance(poolKey.currency1);
         } else {
             // Check if internal swap is needed
             // If new range spans current tick, we need both tokens
@@ -407,7 +427,10 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
     /// @inheritdoc IV4AutoRange
     function setProtocolFee(uint256 newFee) external override onlyOwner {
         require(newFee <= MAX_PROTOCOL_FEE, "Fee too high");
-        require(block.timestamp >= lastFeeChangeTime + FEE_CHANGE_COOLDOWN, "Fee change cooldown");
+        // Skip cooldown for first change (lastFeeChangeTime == 0 means never changed)
+        if (lastFeeChangeTime > 0) {
+            require(block.timestamp >= lastFeeChangeTime + FEE_CHANGE_COOLDOWN, "Fee change cooldown");
+        }
         emit ProtocolFeeUpdated(protocolFee, newFee);
         protocolFee = newFee;
         lastFeeChangeTime = block.timestamp;
@@ -422,6 +445,18 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         _transferCurrency(currency, recipient, amount);
 
         emit FeesWithdrawn(recipient, currency, amount);
+    }
+
+    /// @inheritdoc IV4AutoRange
+    function batchWithdrawFees(Currency[] calldata currencies, address recipient) external override onlyOwner {
+        for (uint256 i = 0; i < currencies.length; i++) {
+            uint256 amount = accumulatedFees[currencies[i]];
+            if (amount > 0) {
+                accumulatedFees[currencies[i]] = 0;
+                _transferCurrency(currencies[i], recipient, amount);
+                emit FeesWithdrawn(recipient, currencies[i], amount);
+            }
+        }
     }
 
     // ============ External Helper for Try-Catch ============
@@ -548,6 +583,9 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
 
         // PositionManager validates slippage internally using SlippageCheck
         tokenId = positionManager.nextTokenId() - 1;
+
+        // M-06: Verify minted token belongs to expected recipient
+        require(IERC721(address(positionManager)).ownerOf(tokenId) == recipient, "Unexpected token owner");
     }
 
     function _executeOptimalSwap(
@@ -609,36 +647,10 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         uint256 amount1,
         uint256 maxSlippage
     ) internal returns (uint256 newAmount0, uint256 newAmount1) {
-        // Calculate how much of the dominant token to swap
-        // Based on where the current tick is within the new range
-        int24 rangeWidth = newTickUpper - newTickLower;
-        int24 tickPosition = currentTick - newTickLower;
-
-        // Calculate approximate ratio needed for token1 (0 to 1 scaled by 10000)
-        uint256 ratio1Bps = uint256(int256(tickPosition) * 10000 / int256(rangeWidth));
-        if (ratio1Bps > 10000) ratio1Bps = 10000;
-
-        bool zeroForOne;
-        uint256 swapAmount;
-
-        if (amount0 > 0 && amount1 == 0) {
-            // Have only token0, need to swap some to token1
-            zeroForOne = true;
-            uint256 swapRatio = ratio1Bps;
-            if (swapRatio < 3000) swapRatio = 3000;
-            if (swapRatio > 7000) swapRatio = 7000;
-            swapAmount = (amount0 * swapRatio) / 10000;
-        } else if (amount1 > 0 && amount0 == 0) {
-            // Have only token1, need to swap some to token0
-            zeroForOne = false;
-            uint256 swapRatio = 10000 - ratio1Bps;
-            if (swapRatio < 3000) swapRatio = 3000;
-            if (swapRatio > 7000) swapRatio = 7000;
-            swapAmount = (amount1 * swapRatio) / 10000;
-        } else {
-            // Have both tokens, no swap needed
-            return (amount0, amount1);
-        }
+        // L-NEW-01: Use PositionValueLib for optimal ratio instead of clamped heuristic
+        (bool zeroForOne, uint256 swapAmount) = PositionValueLib.calculateSwapForOptimalRatio(
+            amount0, amount1, sqrtPriceX96, newTickLower, newTickUpper
+        );
 
         if (swapAmount == 0) {
             return (amount0, amount1);
@@ -648,16 +660,18 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         uint256 minOutput = SwapLib.calculateMinOutput(swapAmount, sqrtPriceX96, maxSlippage, zeroForOne);
 
         // Execute swap through the pool
-        uint256 balance0Before = _getBalance(poolKey.currency0);
-        uint256 balance1Before = _getBalance(poolKey.currency1);
+        // Use _getAvailableBalance consistently to exclude accumulated protocol fees
+        uint256 balance0Before = _getAvailableBalance(poolKey.currency0);
+        uint256 balance1Before = _getAvailableBalance(poolKey.currency1);
 
         // Perform the swap using PoolManager's swap function
         _performPoolSwap(poolKey, zeroForOne, int256(swapAmount), minOutput);
 
-        newAmount0 = _getBalance(poolKey.currency0);
-        newAmount1 = _getBalance(poolKey.currency1);
+        // Use _getAvailableBalance to exclude previously accumulated protocol fees
+        newAmount0 = _getAvailableBalance(poolKey.currency0);
+        newAmount1 = _getAvailableBalance(poolKey.currency1);
 
-        // Verify we got some output
+        // Verify we got some output (both sides use _getAvailableBalance for consistency)
         if (zeroForOne && newAmount1 <= balance1Before) {
             revert InternalSwapFailed();
         }
@@ -687,14 +701,19 @@ contract V4AutoRange is V4Base, IV4AutoRange, IUnlockCallback {
         uint256 inputAmount = uint256(amountSpecified);
 
         if (!inputCurrency.isAddressZero()) {
-            // Approve and transfer ERC20
+            // H-04: Use forceApprove instead of safeIncreaseAllowance to prevent allowance accumulation
             address poolManagerAddr = address(poolManager);
-            IERC20(Currency.unwrap(inputCurrency)).safeIncreaseAllowance(poolManagerAddr, inputAmount);
+            IERC20(Currency.unwrap(inputCurrency)).forceApprove(poolManagerAddr, inputAmount);
         }
 
         // Execute swap via unlock
         // The swap will be executed inside unlockCallback
         poolManager.unlock(swapCallbackData);
+
+        // Reset approval to prevent leftover allowance
+        if (!inputCurrency.isAddressZero()) {
+            IERC20(Currency.unwrap(inputCurrency)).forceApprove(address(poolManager), 0);
+        }
     }
 
     /// @notice Callback from PoolManager.unlock for executing swaps

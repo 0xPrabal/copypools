@@ -235,7 +235,12 @@ library PositionValueLib {
         (uint256 ratio0,) = calculateOptimalRatio(sqrtPriceX96, tickLower, tickUpper);
 
         // Calculate current price from sqrtPriceX96
-        uint256 price = FullMath.mulDiv(uint256(sqrtPriceX96) * uint256(sqrtPriceX96), 1e18, 1 << 192);
+        // H-01: Use nested FullMath.mulDiv to avoid uint256 overflow for large sqrtPriceX96 values
+        uint256 price = FullMath.mulDiv(
+            FullMath.mulDiv(uint256(sqrtPriceX96), uint256(sqrtPriceX96), 1 << 96),
+            1e18,
+            1 << 96
+        );
 
         // Total value in terms of token1
         uint256 totalValue = FullMath.mulDiv(amount0Available, price, 1e18) + amount1Available;

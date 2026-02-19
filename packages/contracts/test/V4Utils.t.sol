@@ -69,7 +69,7 @@ contract V4UtilsTest is BaseTest {
     }
 
     function test_Version() public view {
-        assertEq(v4Utils.VERSION(), "1.1.0");
+        assertEq(v4Utils.VERSION(), "1.2.0");
     }
 
     // ============ Router Approval Tests ============
@@ -487,79 +487,6 @@ contract V4UtilsTest is BaseTest {
         v4Utils.moveRange(params);
     }
 
-    // ============ UnwrapWETH9 Tests ============
-
-    function test_UnwrapWETH9_Basic() public {
-        uint256 wethAmount = 1 ether;
-
-        // Send WETH to v4Utils
-        vm.prank(user1);
-        weth.deposit{value: wethAmount}();
-        vm.prank(user1);
-        weth.transfer(address(v4Utils), wethAmount);
-
-        uint256 balanceBefore = user1.balance;
-
-        vm.prank(user1);
-        v4Utils.unwrapWETH9(wethAmount, user1);
-
-        assertEq(user1.balance, balanceBefore + wethAmount, "Should receive ETH");
-    }
-
-    function test_UnwrapWETH9_RevertIfInsufficient() public {
-        vm.prank(user1);
-        vm.expectRevert();
-        v4Utils.unwrapWETH9(1 ether, user1);
-    }
-
-    // ============ SweepToken Tests ============
-
-    function test_SweepToken_Basic() public {
-        uint256 amount = 100e18;
-
-        // Send tokens to v4Utils
-        vm.prank(user1);
-        token0.transfer(address(v4Utils), amount);
-
-        uint256 balanceBefore = token0.balanceOf(user2);
-
-        vm.prank(user2);
-        v4Utils.sweepToken(Currency.wrap(address(token0)), amount, user2);
-
-        assertEq(token0.balanceOf(user2), balanceBefore + amount, "Should receive tokens");
-    }
-
-    function test_SweepToken_RevertIfInsufficient() public {
-        vm.prank(user1);
-        vm.expectRevert();
-        v4Utils.sweepToken(Currency.wrap(address(token0)), 1e18, user1);
-    }
-
-    // ============ RefundETH Tests ============
-
-    function test_RefundETH_Basic() public {
-        uint256 ethAmount = 1 ether;
-
-        // Send ETH to v4Utils
-        vm.deal(address(v4Utils), ethAmount);
-
-        uint256 balanceBefore = user1.balance;
-
-        vm.prank(user1);
-        v4Utils.refundETH();
-
-        assertEq(user1.balance, balanceBefore + ethAmount, "Should receive ETH");
-    }
-
-    function test_RefundETH_NoOp_WhenNoBalance() public {
-        uint256 balanceBefore = user1.balance;
-
-        vm.prank(user1);
-        v4Utils.refundETH();
-
-        assertEq(user1.balance, balanceBefore, "Balance should not change");
-    }
-
     // ============ Pause/Unpause Tests ============
 
     function test_Pause_AsOwner() public {
@@ -646,12 +573,13 @@ contract V4UtilsTest is BaseTest {
             })
         );
 
-        // Second call: sweep any leftover tokens
-        calls[1] = abi.encodeWithSelector(
-            V4Utils.sweepToken.selector,
-            Currency.wrap(address(token1)),
-            0,
-            user1
+        // Second call: collect fees on same position
+        calls[1] = abi.encodeCall(
+            v4Utils.collectFees,
+            IV4Utils.CollectFeesParams({
+                tokenId: tokenId,
+                deadline: block.timestamp + 1 hours
+            })
         );
 
         vm.prank(user1);
@@ -801,6 +729,224 @@ contract V4UtilsTest is BaseTest {
         (uint256 tokenId, uint128 liquidity,,) = v4Utils.swapAndMint(params);
 
         assertGt(tokenId, 0);
+    }
+
+    // ============ Protocol Fee Tests ============
+
+    function test_SetProtocolFee_AsOwner() public {
+        vm.prank(owner);
+        v4Utils.setProtocolFee(100);
+
+        assertEq(v4Utils.protocolFee(), 100);
+    }
+
+    function test_SetProtocolFee_EmitsEvent() public {
+        vm.expectEmit(false, false, false, true);
+        emit IV4Utils.ProtocolFeeUpdated(65, 100);
+
+        vm.prank(owner);
+        v4Utils.setProtocolFee(100);
+    }
+
+    function test_SetProtocolFee_RevertIfNotOwner() public {
+        vm.prank(user1);
+        vm.expectRevert();
+        v4Utils.setProtocolFee(100);
+    }
+
+    function test_SetProtocolFee_RevertIfTooHigh() public {
+        vm.prank(owner);
+        vm.expectRevert();
+        v4Utils.setProtocolFee(1001);
+    }
+
+    function test_SetProtocolFee_RevertIfCooldown() public {
+        vm.prank(owner);
+        v4Utils.setProtocolFee(100);
+
+        vm.prank(owner);
+        vm.expectRevert();
+        v4Utils.setProtocolFee(200);
+    }
+
+    function test_SetProtocolFee_AfterCooldown() public {
+        vm.prank(owner);
+        v4Utils.setProtocolFee(100);
+
+        vm.warp(block.timestamp + 24 hours + 1);
+
+        vm.prank(owner);
+        v4Utils.setProtocolFee(200);
+
+        assertEq(v4Utils.protocolFee(), 200);
+    }
+
+    function test_DefaultProtocolFee() public view {
+        assertEq(v4Utils.protocolFee(), 65);
+    }
+
+    // ============ WithdrawFees Tests ============
+
+    function test_WithdrawFees_RevertIfNoFees() public {
+        Currency currency0 = Currency.wrap(address(token0));
+
+        vm.prank(owner);
+        vm.expectRevert();
+        v4Utils.withdrawFees(currency0, owner);
+    }
+
+    function test_WithdrawFees_RevertIfNotOwner() public {
+        Currency currency0 = Currency.wrap(address(token0));
+
+        vm.prank(user1);
+        vm.expectRevert();
+        v4Utils.withdrawFees(currency0, user1);
+    }
+
+    // ============ DecreaseLiquidity Tests ============
+
+    function test_DecreaseLiquidity_Partial() public {
+        uint256 tokenId = _createPosition(user1, 100e18, 100e18);
+        uint128 liquidity = positionManager.getPositionLiquidity(tokenId);
+
+        IV4Utils.DecreaseLiquidityParams memory params = IV4Utils.DecreaseLiquidityParams({
+            tokenId: tokenId,
+            liquidity: liquidity / 2,
+            amount0Min: 0,
+            amount1Min: 0,
+            deadline: block.timestamp + 1 hours
+        });
+
+        uint256 balance0Before = token0.balanceOf(user1);
+        uint256 balance1Before = token1.balanceOf(user1);
+
+        vm.prank(user1);
+        (uint256 amount0, uint256 amount1) = v4Utils.decreaseLiquidity(params);
+
+        assertGt(token0.balanceOf(user1), balance0Before, "Should receive token0");
+        assertGt(token1.balanceOf(user1), balance1Before, "Should receive token1");
+        assertGt(positionManager.getPositionLiquidity(tokenId), 0, "Should have remaining liquidity");
+    }
+
+    function test_DecreaseLiquidity_Full() public {
+        uint256 tokenId = _createPosition(user1, 100e18, 100e18);
+
+        IV4Utils.DecreaseLiquidityParams memory params = IV4Utils.DecreaseLiquidityParams({
+            tokenId: tokenId,
+            liquidity: 0, // 0 means all
+            amount0Min: 0,
+            amount1Min: 0,
+            deadline: block.timestamp + 1 hours
+        });
+
+        vm.prank(user1);
+        v4Utils.decreaseLiquidity(params);
+
+        assertEq(positionManager.getPositionLiquidity(tokenId), 0, "Should have 0 liquidity");
+    }
+
+    function test_DecreaseLiquidity_RevertIfNotOwner() public {
+        uint256 tokenId = _createPosition(user1, 100e18, 100e18);
+
+        IV4Utils.DecreaseLiquidityParams memory params = IV4Utils.DecreaseLiquidityParams({
+            tokenId: tokenId,
+            liquidity: 0,
+            amount0Min: 0,
+            amount1Min: 0,
+            deadline: block.timestamp + 1 hours
+        });
+
+        vm.prank(user2);
+        vm.expectRevert();
+        v4Utils.decreaseLiquidity(params);
+    }
+
+    function test_DecreaseLiquidity_EmitsEvent() public {
+        uint256 tokenId = _createPosition(user1, 100e18, 100e18);
+        uint128 liquidity = positionManager.getPositionLiquidity(tokenId);
+
+        IV4Utils.DecreaseLiquidityParams memory params = IV4Utils.DecreaseLiquidityParams({
+            tokenId: tokenId,
+            liquidity: liquidity / 2,
+            amount0Min: 0,
+            amount1Min: 0,
+            deadline: block.timestamp + 1 hours
+        });
+
+        // Should emit LiquidityDecreased event
+        vm.prank(user1);
+        v4Utils.decreaseLiquidity(params);
+    }
+
+    // ============ CollectFees Tests ============
+
+    function test_CollectFees_Basic() public {
+        uint256 tokenId = _createPosition(user1, 100e18, 100e18);
+        positionManager.addFees(tokenId, 2e18, 2e18);
+
+        IV4Utils.CollectFeesParams memory params = IV4Utils.CollectFeesParams({
+            tokenId: tokenId,
+            deadline: block.timestamp + 1 hours
+        });
+
+        uint256 balance0Before = token0.balanceOf(user1);
+        uint256 balance1Before = token1.balanceOf(user1);
+
+        vm.prank(user1);
+        (uint256 amount0, uint256 amount1) = v4Utils.collectFees(params);
+
+        assertGt(token0.balanceOf(user1), balance0Before, "Should receive token0 fees");
+        assertGt(token1.balanceOf(user1), balance1Before, "Should receive token1 fees");
+    }
+
+    function test_CollectFees_RevertIfNotOwner() public {
+        uint256 tokenId = _createPosition(user1, 100e18, 100e18);
+
+        IV4Utils.CollectFeesParams memory params = IV4Utils.CollectFeesParams({
+            tokenId: tokenId,
+            deadline: block.timestamp + 1 hours
+        });
+
+        vm.prank(user2);
+        vm.expectRevert();
+        v4Utils.collectFees(params);
+    }
+
+    function test_CollectFees_EmitsEvent() public {
+        uint256 tokenId = _createPosition(user1, 100e18, 100e18);
+        positionManager.addFees(tokenId, 1e18, 1e18);
+
+        IV4Utils.CollectFeesParams memory params = IV4Utils.CollectFeesParams({
+            tokenId: tokenId,
+            deadline: block.timestamp + 1 hours
+        });
+
+        vm.prank(user1);
+        v4Utils.collectFees(params);
+    }
+
+    // ============ Slippage Tests ============
+
+    function test_SwapAndMint_RevertIfSlippageTooHigh() public {
+        IV4Utils.SwapAndMintParams memory params = IV4Utils.SwapAndMintParams({
+            poolKey: poolKey,
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            amount0Desired: 100e18,
+            amount1Desired: 100e18,
+            amount0Max: type(uint256).max,
+            amount1Max: type(uint256).max,
+            swapSourceCurrency: Currency.wrap(address(0)),
+            swapSourceAmount: 0,
+            swapData: "",
+            maxSwapSlippage: 5001, // Above MAX_SLIPPAGE (5000)
+            recipient: user1,
+            deadline: block.timestamp + 1 hours
+        });
+
+        vm.prank(user1);
+        vm.expectRevert();
+        v4Utils.swapAndMint(params);
     }
 
     // ============ Helper Functions ============

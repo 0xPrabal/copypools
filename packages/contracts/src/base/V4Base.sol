@@ -22,6 +22,8 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils
 /// @title V4Base
 /// @notice Base contract for all Revert V4 contracts
 /// @dev Provides common functionality for interacting with Uniswap V4
+/// @dev NOTE: Uses non-upgradeable ReentrancyGuard to preserve storage layout of deployed proxies.
+///      For new deployments (not upgrades of existing proxies), prefer ReentrancyGuardUpgradeable.
 abstract contract V4Base is
     ReentrancyGuard,
     PausableUpgradeable,
@@ -96,6 +98,9 @@ abstract contract V4Base is
     /// @param _positionManager The Uniswap V4 PositionManager address
     /// @param _weth9 The WETH9 address
     constructor(address _poolManager, address _positionManager, address _weth9) {
+        require(_poolManager != address(0), "Zero pool manager");
+        require(_positionManager != address(0), "Zero position manager");
+        require(_weth9 != address(0), "Zero WETH9");
         poolManager = IPoolManager(_poolManager);
         positionManager = IPositionManager(_positionManager);
         WETH9 = _weth9;

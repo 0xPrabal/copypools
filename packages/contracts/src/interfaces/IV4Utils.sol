@@ -185,20 +185,6 @@ interface IV4Utils {
     /// @return amount The amount of stablecoin received
     function exitToStablecoin(ExitToStablecoinParams calldata params) external returns (uint256 amount);
 
-    /// @notice Unwrap WETH9 and send ETH to recipient
-    /// @param minAmount Minimum amount to unwrap
-    /// @param recipient Address to receive ETH
-    function unwrapWETH9(uint256 minAmount, address recipient) external payable;
-
-    /// @notice Sweep any token held by this contract to recipient
-    /// @param currency The currency to sweep
-    /// @param minAmount Minimum amount to sweep
-    /// @param recipient Address to receive tokens
-    function sweepToken(Currency currency, uint256 minAmount, address recipient) external payable;
-
-    /// @notice Refund ETH to msg.sender
-    function refundETH() external payable;
-
     /// @notice Get protocol fee percentage (in basis points)
     /// @return fee The protocol fee (e.g., 65 = 0.65%)
     function protocolFee() external view returns (uint256 fee);

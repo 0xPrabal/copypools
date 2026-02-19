@@ -122,6 +122,11 @@ interface IV4AutoRange {
     /// @param recipient The recipient address
     function withdrawFees(Currency currency, address recipient) external;
 
+    /// @notice Batch withdraw accumulated protocol fees for multiple currencies
+    /// @param currencies Array of currencies to withdraw
+    /// @param recipient The recipient address
+    function batchWithdrawFees(Currency[] calldata currencies, address recipient) external;
+
     /// @notice Get accumulated fees for a currency
     /// @param currency The currency to check
     /// @return amount The accumulated fee amount
