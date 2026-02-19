@@ -2,6 +2,8 @@ import pg from 'pg';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import * as blockchain from './blockchain.js';
+import { getPositionConfigs, updatePositionConfig, batchUpdatePositionConfigs } from './database.js';
+import type { CompoundConfig, RangeConfig, ExitConfig } from './database.js';
 
 const subgraphLogger = logger.child({ module: 'subgraph' });
 

@@ -124,6 +124,17 @@ export interface RangeConfig {
   maxSlippage: number;
 }
 
+// Exit config interface (matches blockchain response)
+export interface ExitConfig {
+  enabled: boolean;
+  triggerTickLower: number;
+  triggerTickUpper: number;
+  exitOnRangeExit: boolean;
+  exitToken: string;
+  maxSwapSlippage: string;
+  minExitInterval: number;
+}
+
 // V4 Pool interface for pool listing
 export interface V4Pool {
   id: string;
@@ -172,6 +183,7 @@ export interface CachedPosition {
   inRange: boolean;
   compoundConfig: CompoundConfig | null;
   rangeConfig: RangeConfig | null;
+  exitConfig: ExitConfig | null;
   updatedAt: Date;
 }
 
@@ -260,6 +272,11 @@ export async function initializeDatabase(): Promise<void> {
         END IF;
         IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'positions' AND column_name = 'range_enabled') THEN
           ALTER TABLE positions DROP COLUMN range_enabled;
+        END IF;
+
+        -- Step 4: Add exit_config JSONB column if it doesn't exist
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'positions' AND column_name = 'exit_config') THEN
+          ALTER TABLE positions ADD COLUMN exit_config JSONB;
         END IF;
       END $$;
     `);
@@ -589,7 +606,7 @@ export async function getPositionsByOwner(
       pool,
       `SELECT token_id, owner, chain_id, pool_id, currency0, currency1,
               fee, tick_spacing, hooks, tick_lower, tick_upper, liquidity,
-              current_tick, in_range, compound_config, range_config, updated_at
+              current_tick, in_range, compound_config, range_config, exit_config, updated_at
        FROM positions
        WHERE LOWER(owner) = LOWER($1) AND chain_id = $2
        ORDER BY token_id DESC`,
@@ -613,6 +630,7 @@ export async function getPositionsByOwner(
       inRange: row.in_range,
       compoundConfig: row.compound_config as CompoundConfig | null,
       rangeConfig: row.range_config as RangeConfig | null,
+      exitConfig: row.exit_config as ExitConfig | null,
       updatedAt: row.updated_at,
     }));
   } catch (error) {
@@ -643,13 +661,15 @@ export async function savePosition(position: Omit<CachedPosition, 'updatedAt'>):
     maxSlippage: position.rangeConfig.maxSlippage,
   }) : null;
 
+  const exitConfigJson = position.exitConfig ? JSON.stringify(position.exitConfig) : null;
+
   try {
     await pool.query(
       `INSERT INTO positions (
         token_id, chain_id, owner, pool_id, currency0, currency1,
         fee, tick_spacing, hooks, tick_lower, tick_upper, liquidity,
-        current_tick, in_range, compound_config, range_config, updated_at
-      ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
+        current_tick, in_range, compound_config, range_config, exit_config, updated_at
+      ) VALUES ($1, $2, LOWER($3), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
       ON CONFLICT (token_id, chain_id)
       DO UPDATE SET
         owner = LOWER($3),
@@ -666,6 +686,7 @@ export async function savePosition(position: Omit<CachedPosition, 'updatedAt'>):
         in_range = $14,
         compound_config = $15,
         range_config = $16,
+        exit_config = $17,
         updated_at = NOW()`,
       [
         position.tokenId,
@@ -684,6 +705,7 @@ export async function savePosition(position: Omit<CachedPosition, 'updatedAt'>):
         position.inRange,
         compoundConfigJson,
         rangeConfigJson,
+        exitConfigJson,
       ]
     );
   } catch (error) {
@@ -715,6 +737,7 @@ export async function savePositions(positions: Omit<CachedPosition, 'updatedAt'>
     const inRanges: boolean[] = [];
     const compoundConfigs: (string | null)[] = [];
     const rangeConfigs: (string | null)[] = [];
+    const exitConfigs: (string | null)[] = [];
 
     for (const position of positions) {
       tokenIds.push(position.tokenId);
@@ -755,6 +778,10 @@ export async function savePositions(positions: Omit<CachedPosition, 'updatedAt'>
             })
           : null
       );
+
+      exitConfigs.push(
+        position.exitConfig ? JSON.stringify(position.exitConfig) : null
+      );
     }
 
     // Use unnest for efficient multi-row INSERT
@@ -763,17 +790,17 @@ export async function savePositions(positions: Omit<CachedPosition, 'updatedAt'>
       `INSERT INTO positions (
         token_id, chain_id, owner, pool_id, currency0, currency1,
         fee, tick_spacing, hooks, tick_lower, tick_upper, liquidity,
-        current_tick, in_range, compound_config, range_config, updated_at
+        current_tick, in_range, compound_config, range_config, exit_config, updated_at
       )
       SELECT * FROM unnest(
         $1::varchar[], $2::integer[], $3::varchar[], $4::varchar[],
         $5::varchar[], $6::varchar[], $7::integer[], $8::integer[],
         $9::varchar[], $10::integer[], $11::integer[], $12::varchar[],
-        $13::integer[], $14::boolean[], $15::jsonb[], $16::jsonb[]
+        $13::integer[], $14::boolean[], $15::jsonb[], $16::jsonb[], $17::jsonb[]
       ) AS t(
         token_id, chain_id, owner, pool_id, currency0, currency1,
         fee, tick_spacing, hooks, tick_lower, tick_upper, liquidity,
-        current_tick, in_range, compound_config, range_config
+        current_tick, in_range, compound_config, range_config, exit_config
       ),
       LATERAL (SELECT NOW() AS updated_at) AS time_val
       ON CONFLICT (token_id, chain_id)
@@ -792,6 +819,7 @@ export async function savePositions(positions: Omit<CachedPosition, 'updatedAt'>
         in_range = EXCLUDED.in_range,
         compound_config = EXCLUDED.compound_config,
         range_config = EXCLUDED.range_config,
+        exit_config = EXCLUDED.exit_config,
         updated_at = NOW()`,
       [
         tokenIds,
@@ -810,6 +838,7 @@ export async function savePositions(positions: Omit<CachedPosition, 'updatedAt'>
         inRanges,
         compoundConfigs,
         rangeConfigs,
+        exitConfigs,
       ]
     );
 
@@ -851,7 +880,7 @@ export async function getStalePositions(
     const result = await pool.query(
       `SELECT token_id, owner, chain_id, pool_id, currency0, currency1,
               fee, tick_spacing, hooks, tick_lower, tick_upper, liquidity,
-              current_tick, in_range, compound_config, range_config, updated_at
+              current_tick, in_range, compound_config, range_config, exit_config, updated_at
        FROM positions
        WHERE chain_id = $1 AND updated_at < NOW() - make_interval(mins => $2)
        ORDER BY updated_at ASC
@@ -876,6 +905,7 @@ export async function getStalePositions(
       inRange: row.in_range,
       compoundConfig: row.compound_config as CompoundConfig | null,
       rangeConfig: row.range_config as RangeConfig | null,
+      exitConfig: row.exit_config as ExitConfig | null,
       updatedAt: row.updated_at,
     }));
   } catch (error) {
@@ -935,6 +965,173 @@ export async function getStats(): Promise<{
     idleConnections: pool.idleCount,
     waitingClients: pool.waitingCount,
   };
+}
+
+// ============ Batch Config Functions (Phase 1 DB Caching) ============
+
+/**
+ * Batch read automation configs for multiple positions from DB.
+ * Returns a Map keyed by tokenId with compound, range, and exit configs.
+ */
+export async function getPositionConfigs(
+  tokenIds: string[],
+  chainId: number = 8453
+): Promise<Map<string, { compoundConfig: CompoundConfig | null; rangeConfig: RangeConfig | null; exitConfig: ExitConfig | null }>> {
+  const result = new Map<string, { compoundConfig: CompoundConfig | null; rangeConfig: RangeConfig | null; exitConfig: ExitConfig | null }>();
+
+  if (!pool || tokenIds.length === 0) {
+    return result;
+  }
+
+  try {
+    const queryResult = await timedQuery(
+      pool,
+      `SELECT token_id, compound_config, range_config, exit_config
+       FROM positions
+       WHERE token_id = ANY($1) AND chain_id = $2`,
+      [tokenIds, chainId]
+    );
+
+    for (const row of queryResult.rows) {
+      result.set(row.token_id, {
+        compoundConfig: row.compound_config as CompoundConfig | null,
+        rangeConfig: row.range_config as RangeConfig | null,
+        exitConfig: row.exit_config as ExitConfig | null,
+      });
+    }
+
+    dbLogger.debug({ count: queryResult.rows.length, requested: tokenIds.length }, 'Batch read position configs from DB');
+  } catch (error) {
+    dbLogger.error({ error, count: tokenIds.length }, 'Failed to batch read position configs');
+  }
+
+  return result;
+}
+
+/**
+ * Update a specific config column for a position (write-through cache).
+ */
+export async function updatePositionConfig(
+  tokenId: string,
+  chainId: number,
+  configType: 'compound_config' | 'range_config' | 'exit_config',
+  configData: CompoundConfig | RangeConfig | ExitConfig | null
+): Promise<void> {
+  if (!pool) return;
+
+  // Serialize bigint values for JSONB storage
+  const jsonData = configData ? JSON.stringify(configData, (_key, value) =>
+    typeof value === 'bigint' ? value.toString() : value
+  ) : null;
+
+  try {
+    await pool.query(
+      `UPDATE positions SET ${configType} = $1, updated_at = NOW()
+       WHERE token_id = $2 AND chain_id = $3`,
+      [jsonData, tokenId, chainId]
+    );
+  } catch (error) {
+    dbLogger.error({ error, tokenId, configType }, 'Failed to update position config');
+  }
+}
+
+/**
+ * Batch update configs for multiple positions (used by sync job).
+ */
+export async function batchUpdatePositionConfigs(
+  updates: Array<{
+    tokenId: string;
+    chainId: number;
+    compoundConfig?: CompoundConfig | null;
+    rangeConfig?: RangeConfig | null;
+    exitConfig?: ExitConfig | null;
+  }>
+): Promise<void> {
+  if (!pool || updates.length === 0) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    for (const update of updates) {
+      const setClauses: string[] = [];
+      const params: unknown[] = [];
+      let paramIdx = 1;
+
+      if (update.compoundConfig !== undefined) {
+        setClauses.push(`compound_config = $${paramIdx++}`);
+        params.push(update.compoundConfig ? JSON.stringify(update.compoundConfig, (_key, value) =>
+          typeof value === 'bigint' ? value.toString() : value
+        ) : null);
+      }
+      if (update.rangeConfig !== undefined) {
+        setClauses.push(`range_config = $${paramIdx++}`);
+        params.push(update.rangeConfig ? JSON.stringify(update.rangeConfig, (_key, value) =>
+          typeof value === 'bigint' ? value.toString() : value
+        ) : null);
+      }
+      if (update.exitConfig !== undefined) {
+        setClauses.push(`exit_config = $${paramIdx++}`);
+        params.push(update.exitConfig ? JSON.stringify(update.exitConfig, (_key, value) =>
+          typeof value === 'bigint' ? value.toString() : value
+        ) : null);
+      }
+
+      if (setClauses.length === 0) continue;
+
+      setClauses.push('updated_at = NOW()');
+      params.push(update.tokenId, update.chainId);
+
+      await client.query(
+        `UPDATE positions SET ${setClauses.join(', ')}
+         WHERE token_id = $${paramIdx++} AND chain_id = $${paramIdx}`,
+        params
+      );
+    }
+
+    await client.query('COMMIT');
+    dbLogger.debug({ count: updates.length }, 'Batch updated position configs');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    dbLogger.error({ error, count: updates.length }, 'Failed to batch update position configs');
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get positions with active liquidity that have null configs (need syncing).
+ * Used by the background sync job to find positions needing config refresh.
+ */
+export async function getPositionsNeedingConfigSync(
+  chainId: number = 8453,
+  limit: number = 50
+): Promise<Array<{ tokenId: string; compoundConfig: CompoundConfig | null; rangeConfig: RangeConfig | null; exitConfig: ExitConfig | null }>> {
+  if (!pool) return [];
+
+  try {
+    const result = await timedQuery(
+      pool,
+      `SELECT token_id, compound_config, range_config, exit_config
+       FROM positions
+       WHERE chain_id = $1
+         AND liquidity != '0'
+         AND (compound_config IS NULL OR range_config IS NULL OR exit_config IS NULL)
+       ORDER BY updated_at ASC
+       LIMIT $2`,
+      [chainId, limit]
+    );
+
+    return result.rows.map(row => ({
+      tokenId: row.token_id,
+      compoundConfig: row.compound_config as CompoundConfig | null,
+      rangeConfig: row.range_config as RangeConfig | null,
+      exitConfig: row.exit_config as ExitConfig | null,
+    }));
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to get positions needing config sync');
+    return [];
+  }
 }
 
 // ============ V4 Pool Functions ============

@@ -725,6 +725,136 @@ export async function getRangeConfig(tokenId: bigint): Promise<{ enabled: boolea
   }
 }
 
+// ============ Batch Config Functions (Phase 1 DB Caching) ============
+
+/**
+ * Batch read compound configs via multicall.
+ * Reads up to 50 configs in 1 RPC call instead of 50 individual calls.
+ */
+export async function batchGetCompoundConfigs(
+  tokenIds: bigint[]
+): Promise<Map<string, { enabled: boolean; minCompoundInterval: number; minRewardAmount: bigint }>> {
+  const result = new Map<string, { enabled: boolean; minCompoundInterval: number; minRewardAmount: bigint }>();
+  if (tokenIds.length === 0) return result;
+
+  try {
+    const calls = tokenIds.map(tokenId => ({
+      address: contracts.v4Compoundor as Address,
+      abi: V4CompoundorABI,
+      functionName: 'configs' as const,
+      args: [tokenId] as const,
+    }));
+
+    const results = await publicClient.multicall({
+      contracts: calls,
+      allowFailure: true,
+    });
+
+    for (let i = 0; i < tokenIds.length; i++) {
+      const res = results[i];
+      if (res.status === 'success' && res.result) {
+        const [enabled, minCompoundInterval, minRewardAmount] = res.result as [boolean, number, bigint];
+        result.set(tokenIds[i].toString(), { enabled, minCompoundInterval, minRewardAmount });
+      }
+    }
+
+    logger.debug({ requested: tokenIds.length, found: result.size }, 'Batch read compound configs via multicall');
+  } catch (error) {
+    logger.error({ error, count: tokenIds.length }, 'Failed to batch read compound configs');
+  }
+
+  return result;
+}
+
+/**
+ * Batch read range configs via multicall.
+ */
+export async function batchGetRangeConfigs(
+  tokenIds: bigint[]
+): Promise<Map<string, { enabled: boolean; lowerDelta: number; upperDelta: number; rebalanceThreshold: number }>> {
+  const result = new Map<string, { enabled: boolean; lowerDelta: number; upperDelta: number; rebalanceThreshold: number }>();
+  if (tokenIds.length === 0) return result;
+
+  try {
+    const calls = tokenIds.map(tokenId => ({
+      address: contracts.v4AutoRange as Address,
+      abi: V4AutoRangeABI,
+      functionName: 'rangeConfigs' as const,
+      args: [tokenId] as const,
+    }));
+
+    const results = await publicClient.multicall({
+      contracts: calls,
+      allowFailure: true,
+    });
+
+    for (let i = 0; i < tokenIds.length; i++) {
+      const res = results[i];
+      if (res.status === 'success' && res.result) {
+        const data = res.result as unknown as [boolean, number, number, number, number, boolean, bigint];
+        result.set(tokenIds[i].toString(), {
+          enabled: data[0],
+          lowerDelta: data[1],
+          upperDelta: data[2],
+          rebalanceThreshold: data[3],
+        });
+      }
+    }
+
+    logger.debug({ requested: tokenIds.length, found: result.size }, 'Batch read range configs via multicall');
+  } catch (error) {
+    logger.error({ error, count: tokenIds.length }, 'Failed to batch read range configs');
+  }
+
+  return result;
+}
+
+/**
+ * Batch read exit configs via multicall.
+ */
+export async function batchGetExitConfigs(
+  tokenIds: bigint[]
+): Promise<Map<string, { enabled: boolean; triggerTickLower: number; triggerTickUpper: number; exitOnRangeExit: boolean; exitToken: string; maxSwapSlippage: bigint; minExitInterval: number }>> {
+  const result = new Map<string, { enabled: boolean; triggerTickLower: number; triggerTickUpper: number; exitOnRangeExit: boolean; exitToken: string; maxSwapSlippage: bigint; minExitInterval: number }>();
+  if (tokenIds.length === 0) return result;
+
+  try {
+    const calls = tokenIds.map(tokenId => ({
+      address: contracts.v4AutoExit as Address,
+      abi: V4AutoExitABI,
+      functionName: 'getExitConfig' as const,
+      args: [tokenId] as const,
+    }));
+
+    const results = await publicClient.multicall({
+      contracts: calls,
+      allowFailure: true,
+    });
+
+    for (let i = 0; i < tokenIds.length; i++) {
+      const res = results[i];
+      if (res.status === 'success' && res.result) {
+        const data = res.result as any;
+        result.set(tokenIds[i].toString(), {
+          enabled: data.enabled,
+          triggerTickLower: Number(data.triggerTickLower),
+          triggerTickUpper: Number(data.triggerTickUpper),
+          exitOnRangeExit: data.exitOnRangeExit,
+          exitToken: data.exitToken,
+          maxSwapSlippage: BigInt(data.maxSwapSlippage),
+          minExitInterval: Number(data.minExitInterval),
+        });
+      }
+    }
+
+    logger.debug({ requested: tokenIds.length, found: result.size }, 'Batch read exit configs via multicall');
+  } catch (error) {
+    logger.error({ error, count: tokenIds.length }, 'Failed to batch read exit configs');
+  }
+
+  return result;
+}
+
 // Gas estimation (with caching)
 export async function getGasPrice(): Promise<bigint> {
   // Check cache first
