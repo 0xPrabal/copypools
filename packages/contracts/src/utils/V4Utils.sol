@@ -31,8 +31,6 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
 
-    string public constant VERSION = "1.2.0";
-
     uint256 public constant MAX_SLIPPAGE = 5000;
     uint256 public override protocolFee = 65;
     uint256 public constant MAX_PROTOCOL_FEE = 1000;
@@ -64,11 +62,6 @@ contract V4Utils is V4Base, Multicall, IV4Utils, IUnlockCallback {
     function initialize(address _owner) external initializer {
         __V4Base_init(_owner);
         protocolFee = 65; // 0.65%
-    }
-
-    /// @notice Re-initialize for upgrades (sets storage values that were missing in v1)
-    function initializeV2() external reinitializer(2) {
-        if (protocolFee == 0) protocolFee = 65;
     }
 
     // ============ Shared Internal: Swap + Receive ============
