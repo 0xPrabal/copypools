@@ -92,7 +92,26 @@ export async function getPosition(tokenId: string) {
   position.exitConfig = exitConfigs[0] || null;
   position.rangeConfig = rangeConfigs[0] || null;
 
-  // If no compound config in database, check on-chain
+  // Layer 2: Check positions DB cache for missing configs (0 RPC calls)
+  const missingCompound = !position.compoundConfig;
+  const missingRange = !position.rangeConfig;
+  const missingExit = !position.exitConfig;
+
+  if (missingCompound || missingRange || missingExit) {
+    try {
+      const dbConfigs = await getPositionConfigs([tokenId]);
+      const cached = dbConfigs.get(tokenId);
+      if (cached) {
+        if (missingCompound && cached.compoundConfig) position.compoundConfig = cached.compoundConfig;
+        if (missingRange && cached.rangeConfig) position.rangeConfig = cached.rangeConfig;
+        if (missingExit && cached.exitConfig) position.exitConfig = cached.exitConfig;
+      }
+    } catch (e) {
+      // DB cache miss is fine, fall through to RPC
+    }
+  }
+
+  // Layer 3: RPC fallback only for still-missing configs, with write-through to DB
   if (!position.compoundConfig) {
     try {
       const onChainConfig = await blockchain.getCompoundConfig(BigInt(tokenId));
@@ -102,13 +121,14 @@ export async function getPosition(tokenId: string) {
           minCompoundInterval: onChainConfig.minCompoundInterval,
           minRewardAmount: onChainConfig.minRewardAmount.toString(),
         };
+        // Write-through to DB cache
+        updatePositionConfig(tokenId, 8453, 'compound_config', position.compoundConfig as any).catch(() => {});
       }
     } catch (e) {
       // Position might not be registered
     }
   }
 
-  // If no range config in database, check on-chain
   if (!position.rangeConfig) {
     try {
       const onChainRangeConfig = await blockchain.getRangeConfig(BigInt(tokenId));
@@ -119,13 +139,14 @@ export async function getPosition(tokenId: string) {
           upperDelta: onChainRangeConfig.upperDelta,
           rebalanceThreshold: onChainRangeConfig.rebalanceThreshold,
         };
+        // Write-through to DB cache
+        updatePositionConfig(tokenId, 8453, 'range_config', position.rangeConfig as any).catch(() => {});
       }
     } catch (e) {
       // Position might not be registered
     }
   }
 
-  // If no exit config in database, check on-chain
   if (!position.exitConfig) {
     try {
       const onChainExitConfig = await blockchain.getExitConfig(BigInt(tokenId));
@@ -139,6 +160,8 @@ export async function getPosition(tokenId: string) {
           maxSwapSlippage: onChainExitConfig.maxSwapSlippage.toString(),
           minExitInterval: onChainExitConfig.minExitInterval,
         };
+        // Write-through to DB cache
+        updatePositionConfig(tokenId, 8453, 'exit_config', position.exitConfig as any).catch(() => {});
       }
     } catch (e) {
       // Position might not have exit config
