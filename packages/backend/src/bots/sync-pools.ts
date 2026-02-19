@@ -1,9 +1,16 @@
 import { CronJob } from 'cron';
 import { logger } from '../utils/logger.js';
 import { fetchAllPools } from '../services/uniswap-subgraph.js';
-import { batchUpsertV4Pools, getPoolsLastSyncTime, getPositionsNeedingConfigSync, batchUpdatePositionConfigs, upsertTokenPrices } from '../services/database.js';
+import {
+  batchUpsertV4Pools, getPoolsLastSyncTime, getPositionsNeedingConfigSync,
+  batchUpdatePositionConfigs, upsertTokenPrices, upsertPoolDayData,
+  upsertPoolSwaps, upsertPoolTicks
+} from '../services/database.js';
 import { batchGetCompoundConfigs, batchGetRangeConfigs, batchGetExitConfigs } from '../services/blockchain.js';
-import { fetchTokenPrices, fetchEthPrice, fetchTopTokens } from '../services/graph-client.js';
+import {
+  fetchTokenPrices, fetchEthPrice, fetchTopTokens,
+  fetchGraphPools, fetchPoolDayData, fetchSwaps, fetchTicks
+} from '../services/graph-client.js';
 
 const syncLogger = logger.child({ module: 'sync-pools' });
 
@@ -218,6 +225,133 @@ export function startConfigSyncJob(): CronJob {
         await syncAutomationConfigs();
       } catch (error) {
         syncLogger.error({ error }, 'Scheduled config sync failed');
+      }
+    },
+    null,
+    true
+  );
+
+  return job;
+}
+
+// ============ Pool Historical Data Sync (Phase 3 DB Caching) ============
+
+const HISTORICAL_SYNC_INTERVAL = '*/15 * * * *'; // Every 15 minutes
+let isHistoricalSyncing = false;
+
+/**
+ * Background sync job: fetches pool day data, swaps, and ticks from Graph
+ * for top pools and writes to DB. Eliminates Graph calls from request path.
+ */
+export async function syncPoolHistoricalData(): Promise<void> {
+  if (isHistoricalSyncing) {
+    syncLogger.info('Historical data sync already in progress, skipping');
+    return;
+  }
+
+  isHistoricalSyncing = true;
+  const startTime = Date.now();
+
+  try {
+    // Get top pools from Graph (these are the ones users are most likely to query)
+    const pools = await fetchGraphPools(50, 10, false);
+    if (!pools || pools.length === 0) {
+      syncLogger.warn('No pools returned from Graph for historical sync');
+      return;
+    }
+
+    syncLogger.info({ poolCount: pools.length }, 'Starting historical data sync for top pools');
+
+    let syncedDayData = 0;
+    let syncedSwaps = 0;
+    let syncedTicks = 0;
+
+    // Process pools in batches of 5 to avoid overwhelming the Graph API
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < pools.length; i += BATCH_SIZE) {
+      const batch = pools.slice(i, i + BATCH_SIZE);
+
+      await Promise.all(
+        batch.map(async (pool: any) => {
+          try {
+            // Fetch day data, swaps, and ticks in parallel per pool
+            const [dayData, swaps, ticks] = await Promise.all([
+              fetchPoolDayData(pool.id, 30),
+              fetchSwaps(pool.id, 50),
+              fetchTicks(pool.id, 200),
+            ]);
+
+            // Upsert day data
+            if (dayData.length > 0) {
+              await upsertPoolDayData(pool.id, dayData);
+              syncedDayData += dayData.length;
+            }
+
+            // Upsert swaps
+            if (swaps.length > 0) {
+              await upsertPoolSwaps(
+                swaps.map((s: any) => ({
+                  id: s.id,
+                  poolId: pool.id,
+                  timestamp: s.timestamp,
+                  sender: s.sender,
+                  token0Symbol: s.token0?.symbol || '',
+                  token1Symbol: s.token1?.symbol || '',
+                  amount0: s.amount0,
+                  amount1: s.amount1,
+                  amountUSD: s.amountUSD,
+                  tick: s.tick,
+                }))
+              );
+              syncedSwaps += swaps.length;
+            }
+
+            // Upsert ticks
+            if (ticks.length > 0) {
+              await upsertPoolTicks(pool.id, ticks);
+              syncedTicks += ticks.length;
+            }
+          } catch (error) {
+            syncLogger.warn({ error, poolId: pool.id }, 'Failed to sync historical data for pool');
+          }
+        })
+      );
+
+      // Brief delay between batches
+      if (i + BATCH_SIZE < pools.length) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    syncLogger.info(
+      { pools: pools.length, syncedDayData, syncedSwaps, syncedTicks, durationMs: duration },
+      'Pool historical data sync completed'
+    );
+  } catch (error) {
+    syncLogger.error({ error }, 'Pool historical data sync failed');
+  } finally {
+    isHistoricalSyncing = false;
+  }
+}
+
+export function startHistoricalDataSyncJob(): CronJob {
+  syncLogger.info('Starting pool historical data sync job (every 15 minutes)');
+
+  // Run initial sync after 60-second delay (let other syncs finish first)
+  setTimeout(() => {
+    syncPoolHistoricalData().catch((error) => {
+      syncLogger.error({ error }, 'Initial historical data sync failed');
+    });
+  }, 60000);
+
+  const job = new CronJob(
+    HISTORICAL_SYNC_INTERVAL,
+    async () => {
+      try {
+        await syncPoolHistoricalData();
+      } catch (error) {
+        syncLogger.error({ error }, 'Scheduled historical data sync failed');
       }
     },
     null,

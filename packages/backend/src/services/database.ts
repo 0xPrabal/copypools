@@ -428,6 +428,109 @@ export async function initializeDatabase(): Promise<void> {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_tp_updated ON token_prices(updated_at DESC)`);
 
+    // Create pool_day_data table for OHLCV chart data (Phase 3)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS pool_day_data (
+        pool_id VARCHAR(66) NOT NULL,
+        date INTEGER NOT NULL,
+        tvl_usd DECIMAL(24,2),
+        volume_usd DECIMAL(24,2),
+        fees_usd DECIMAL(24,2),
+        tx_count INTEGER,
+        token0_price DECIMAL(36,18),
+        token1_price DECIMAL(36,18),
+        open DECIMAL(36,18),
+        high DECIMAL(36,18),
+        low DECIMAL(36,18),
+        close DECIMAL(36,18),
+        liquidity VARCHAR(78),
+        PRIMARY KEY (pool_id, date)
+      )
+    `);
+
+    // Create pool_swaps table for recent swap activity (Phase 3)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS pool_swaps (
+        id VARCHAR(128) PRIMARY KEY,
+        pool_id VARCHAR(66) NOT NULL,
+        timestamp INTEGER NOT NULL,
+        sender VARCHAR(42),
+        token0_symbol VARCHAR(32),
+        token1_symbol VARCHAR(32),
+        amount0 DECIMAL(36,18),
+        amount1 DECIMAL(36,18),
+        amount_usd DECIMAL(24,2),
+        tick INTEGER
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pool_swaps_pool_time ON pool_swaps(pool_id, timestamp DESC)`);
+
+    // Create pool_ticks table for tick liquidity distribution (Phase 3)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS pool_ticks (
+        pool_id VARCHAR(66) NOT NULL,
+        tick_idx INTEGER NOT NULL,
+        liquidity_gross VARCHAR(78),
+        liquidity_net VARCHAR(78),
+        price0 DECIMAL(36,18),
+        price1 DECIMAL(36,18),
+        PRIMARY KEY (pool_id, tick_idx)
+      )
+    `);
+
+    // Add enriched columns to v4_pools if they don't exist (Phase 3)
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'tick') THEN
+          ALTER TABLE v4_pools ADD COLUMN tick INTEGER;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'sqrt_price') THEN
+          ALTER TABLE v4_pools ADD COLUMN sqrt_price VARCHAR(78);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'liquidity') THEN
+          ALTER TABLE v4_pools ADD COLUMN liquidity VARCHAR(78);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'token0_price') THEN
+          ALTER TABLE v4_pools ADD COLUMN token0_price DECIMAL(36,18);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'token1_price') THEN
+          ALTER TABLE v4_pools ADD COLUMN token1_price DECIMAL(36,18);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'tx_count') THEN
+          ALTER TABLE v4_pools ADD COLUMN tx_count INTEGER DEFAULT 0;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'lp_count') THEN
+          ALTER TABLE v4_pools ADD COLUMN lp_count INTEGER DEFAULT 0;
+        END IF;
+      END $$;
+    `);
+
+    // Create protocol_stats_cache table (Phase 4)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS protocol_stats_cache (
+        id VARCHAR(32) PRIMARY KEY DEFAULT 'latest',
+        pool_count INTEGER,
+        tx_count BIGINT,
+        total_volume_usd DECIMAL(24,2),
+        total_fees_usd DECIMAL(24,2),
+        total_value_locked_usd DECIMAL(24,2),
+        pool_manager_address VARCHAR(42),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      )
+    `);
+
+    // Create protocol_day_data table (Phase 4)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS protocol_day_data (
+        date INTEGER PRIMARY KEY,
+        volume_usd DECIMAL(24,2),
+        fees_usd DECIMAL(24,2),
+        tvl_usd DECIMAL(24,2),
+        tx_count INTEGER
+      )
+    `);
+
     dbLogger.info('Database schema initialized successfully');
   } catch (error) {
     dbLogger.error({ error }, 'Failed to initialize database schema');
@@ -1937,6 +2040,215 @@ export async function getActiveRangeTokenIds(): Promise<Set<string>> {
   } catch (error) {
     dbLogger.error({ error }, 'Failed to get active range token IDs');
     return new Set();
+  }
+}
+
+// ============ Pool Historical Data Functions (Phase 3 DB Caching) ============
+
+/**
+ * Get pool day data from DB (for chart endpoint).
+ */
+export async function getPoolDayDataFromDb(
+  poolId: string,
+  days: number = 30
+): Promise<any[]> {
+  if (!pool) return [];
+
+  try {
+    const result = await timedQuery(
+      pool,
+      `SELECT pool_id, date, tvl_usd, volume_usd, fees_usd, tx_count,
+              token0_price, token1_price, open, high, low, close, liquidity
+       FROM pool_day_data
+       WHERE LOWER(pool_id) = LOWER($1)
+       ORDER BY date DESC
+       LIMIT $2`,
+      [poolId, days]
+    );
+    return result.rows;
+  } catch (error) {
+    dbLogger.error({ error, poolId }, 'Failed to get pool day data from DB');
+    return [];
+  }
+}
+
+/**
+ * Get pool swaps from DB.
+ */
+export async function getPoolSwapsFromDb(
+  poolId: string,
+  limit: number = 50
+): Promise<any[]> {
+  if (!pool) return [];
+
+  try {
+    const result = await timedQuery(
+      pool,
+      `SELECT id, pool_id, timestamp, sender, token0_symbol, token1_symbol,
+              amount0, amount1, amount_usd, tick
+       FROM pool_swaps
+       WHERE LOWER(pool_id) = LOWER($1)
+       ORDER BY timestamp DESC
+       LIMIT $2`,
+      [poolId, limit]
+    );
+    return result.rows;
+  } catch (error) {
+    dbLogger.error({ error, poolId }, 'Failed to get pool swaps from DB');
+    return [];
+  }
+}
+
+/**
+ * Get pool ticks from DB.
+ */
+export async function getPoolTicksFromDb(
+  poolId: string,
+  limit: number = 200
+): Promise<any[]> {
+  if (!pool) return [];
+
+  try {
+    const result = await timedQuery(
+      pool,
+      `SELECT pool_id, tick_idx, liquidity_gross, liquidity_net, price0, price1
+       FROM pool_ticks
+       WHERE LOWER(pool_id) = LOWER($1)
+       ORDER BY tick_idx ASC
+       LIMIT $2`,
+      [poolId, limit]
+    );
+    return result.rows;
+  } catch (error) {
+    dbLogger.error({ error, poolId }, 'Failed to get pool ticks from DB');
+    return [];
+  }
+}
+
+/**
+ * Upsert pool day data (used by sync job).
+ */
+export async function upsertPoolDayData(
+  poolId: string,
+  dayData: Array<{
+    date: number;
+    tvlUSD: string;
+    volumeUSD: string;
+    feesUSD: string;
+    txCount: string;
+    token0Price: string;
+    token1Price: string;
+    open: string;
+    high: string;
+    low: string;
+    close: string;
+    liquidity: string;
+  }>
+): Promise<void> {
+  if (!pool || dayData.length === 0) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const d of dayData) {
+      await client.query(
+        `INSERT INTO pool_day_data (pool_id, date, tvl_usd, volume_usd, fees_usd, tx_count,
+           token0_price, token1_price, open, high, low, close, liquidity)
+         VALUES (LOWER($1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         ON CONFLICT (pool_id, date)
+         DO UPDATE SET
+           tvl_usd = $3, volume_usd = $4, fees_usd = $5, tx_count = $6,
+           token0_price = $7, token1_price = $8, open = $9, high = $10,
+           low = $11, close = $12, liquidity = $13`,
+        [poolId, d.date, d.tvlUSD, d.volumeUSD, d.feesUSD, d.txCount,
+         d.token0Price, d.token1Price, d.open, d.high, d.low, d.close, d.liquidity]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    dbLogger.error({ error, poolId, count: dayData.length }, 'Failed to upsert pool day data');
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Upsert pool swaps (used by sync job).
+ */
+export async function upsertPoolSwaps(
+  swaps: Array<{
+    id: string;
+    poolId: string;
+    timestamp: string;
+    sender: string;
+    token0Symbol: string;
+    token1Symbol: string;
+    amount0: string;
+    amount1: string;
+    amountUSD: string;
+    tick: string;
+  }>
+): Promise<void> {
+  if (!pool || swaps.length === 0) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const s of swaps) {
+      await client.query(
+        `INSERT INTO pool_swaps (id, pool_id, timestamp, sender, token0_symbol, token1_symbol,
+           amount0, amount1, amount_usd, tick)
+         VALUES ($1, LOWER($2), $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (id) DO UPDATE SET
+           amount0 = $7, amount1 = $8, amount_usd = $9`,
+        [s.id, s.poolId, s.timestamp, s.sender, s.token0Symbol, s.token1Symbol,
+         s.amount0, s.amount1, s.amountUSD, s.tick]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    dbLogger.error({ error, count: swaps.length }, 'Failed to upsert pool swaps');
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Upsert pool ticks (used by sync job).
+ */
+export async function upsertPoolTicks(
+  poolId: string,
+  ticks: Array<{
+    tickIdx: string;
+    liquidityGross: string;
+    liquidityNet: string;
+    price0: string;
+    price1: string;
+  }>
+): Promise<void> {
+  if (!pool || ticks.length === 0) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const t of ticks) {
+      await client.query(
+        `INSERT INTO pool_ticks (pool_id, tick_idx, liquidity_gross, liquidity_net, price0, price1)
+         VALUES (LOWER($1), $2, $3, $4, $5, $6)
+         ON CONFLICT (pool_id, tick_idx)
+         DO UPDATE SET
+           liquidity_gross = $3, liquidity_net = $4, price0 = $5, price1 = $6`,
+        [poolId, t.tickIdx, t.liquidityGross, t.liquidityNet, t.price0, t.price1]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    dbLogger.error({ error, poolId, count: ticks.length }, 'Failed to upsert pool ticks');
+  } finally {
+    client.release();
   }
 }
 

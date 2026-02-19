@@ -11,6 +11,11 @@ import {
   fetchTicks,
   searchPools,
 } from '../../services/graph-client.js';
+import {
+  getPoolDayDataFromDb,
+  getPoolSwapsFromDb,
+  getPoolTicksFromDb,
+} from '../../services/database.js';
 
 const router = Router();
 const routeLogger = logger.child({ route: 'pools' });
@@ -278,13 +283,26 @@ router.get('/:poolId/chart', async (req: Request, res: Response) => {
       });
     }
 
-    const data = await fetchPoolDayData(poolId, days);
-    if (res.headersSent) return;
-    res.json({
-      poolId,
-      granularity: 'day',
-      count: data.length,
-      data: data.map(d => ({
+    // Try DB first (populated by background sync), fall back to Graph
+    let data: any[] = [];
+    const dbData = await getPoolDayDataFromDb(poolId, days);
+    if (dbData.length > 0) {
+      data = dbData.map(d => ({
+        timestamp: d.date,
+        tvlUSD: parseFloat(d.tvl_usd) || 0,
+        volumeUSD: parseFloat(d.volume_usd) || 0,
+        feesUSD: parseFloat(d.fees_usd) || 0,
+        open: parseFloat(d.open) || 0,
+        high: parseFloat(d.high) || 0,
+        low: parseFloat(d.low) || 0,
+        close: parseFloat(d.close) || 0,
+        token0Price: parseFloat(d.token0_price) || 0,
+        token1Price: parseFloat(d.token1_price) || 0,
+        txCount: d.tx_count || 0,
+      }));
+    } else {
+      const graphData = await fetchPoolDayData(poolId, days);
+      data = graphData.map(d => ({
         timestamp: d.date,
         tvlUSD: parseFloat(d.tvlUSD),
         volumeUSD: parseFloat(d.volumeUSD),
@@ -296,7 +314,15 @@ router.get('/:poolId/chart', async (req: Request, res: Response) => {
         token0Price: parseFloat(d.token0Price),
         token1Price: parseFloat(d.token1Price),
         txCount: parseInt(d.txCount),
-      })),
+      }));
+    }
+
+    if (res.headersSent) return;
+    res.json({
+      poolId,
+      granularity: 'day',
+      count: data.length,
+      data,
     });
   } catch (error) {
     routeLogger.error({ error, poolId: req.params.poolId }, 'Failed to get pool chart data');
@@ -311,12 +337,24 @@ router.get('/:poolId/swaps', async (req: Request, res: Response) => {
     const { poolId } = req.params;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
 
-    const swaps = await fetchSwaps(poolId, limit);
-    if (res.headersSent) return;
-    res.json({
-      poolId,
-      count: swaps.length,
-      swaps: swaps.map(s => ({
+    // Try DB first, fall back to Graph
+    let swapData: any[] = [];
+    const dbSwaps = await getPoolSwapsFromDb(poolId, limit);
+    if (dbSwaps.length > 0) {
+      swapData = dbSwaps.map(s => ({
+        id: s.id,
+        timestamp: s.timestamp,
+        sender: s.sender,
+        amount0: parseFloat(s.amount0) || 0,
+        amount1: parseFloat(s.amount1) || 0,
+        amountUSD: parseFloat(s.amount_usd) || 0,
+        token0Symbol: s.token0_symbol,
+        token1Symbol: s.token1_symbol,
+        tick: s.tick,
+      }));
+    } else {
+      const graphSwaps = await fetchSwaps(poolId, limit);
+      swapData = graphSwaps.map(s => ({
         id: s.id,
         timestamp: parseInt(s.timestamp),
         sender: s.sender,
@@ -326,7 +364,14 @@ router.get('/:poolId/swaps', async (req: Request, res: Response) => {
         token0Symbol: s.token0.symbol,
         token1Symbol: s.token1.symbol,
         tick: parseInt(s.tick),
-      })),
+      }));
+    }
+
+    if (res.headersSent) return;
+    res.json({
+      poolId,
+      count: swapData.length,
+      swaps: swapData,
     });
   } catch (error) {
     routeLogger.error({ error, poolId: req.params.poolId }, 'Failed to get pool swaps');
@@ -341,18 +386,33 @@ router.get('/:poolId/ticks', async (req: Request, res: Response) => {
     const { poolId } = req.params;
     const limit = Math.min(parseInt(req.query.limit as string) || 200, 1000);
 
-    const ticks = await fetchTicks(poolId, limit);
-    if (res.headersSent) return;
-    res.json({
-      poolId,
-      count: ticks.length,
-      ticks: ticks.map(t => ({
+    // Try DB first, fall back to Graph
+    let tickData: any[] = [];
+    const dbTicks = await getPoolTicksFromDb(poolId, limit);
+    if (dbTicks.length > 0) {
+      tickData = dbTicks.map(t => ({
+        tickIdx: t.tick_idx,
+        liquidityGross: t.liquidity_gross,
+        liquidityNet: t.liquidity_net,
+        price0: parseFloat(t.price0) || 0,
+        price1: parseFloat(t.price1) || 0,
+      }));
+    } else {
+      const graphTicks = await fetchTicks(poolId, limit);
+      tickData = graphTicks.map(t => ({
         tickIdx: parseInt(t.tickIdx),
         liquidityGross: t.liquidityGross,
         liquidityNet: t.liquidityNet,
         price0: parseFloat(t.price0),
         price1: parseFloat(t.price1),
-      })),
+      }));
+    }
+
+    if (res.headersSent) return;
+    res.json({
+      poolId,
+      count: tickData.length,
+      ticks: tickData,
     });
   } catch (error) {
     routeLogger.error({ error, poolId: req.params.poolId }, 'Failed to get pool ticks');
