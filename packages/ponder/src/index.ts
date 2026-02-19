@@ -5,6 +5,8 @@ import {
   token,
   compoundConfig,
   compoundEvent,
+  exitConfig,
+  exitEvent,
   rangeConfig,
   rebalanceEvent,
   account,
@@ -1458,6 +1460,280 @@ ponder.on("PositionManager:Transfer", async ({ event, context }) => {
     }
   } catch (error) {
     console.error(`Error handling PositionManager:Transfer for tokenId ${event.args.tokenId}:`, error);
+    throw error;
+  }
+});
+
+// ============ V4AutoExit Event Handlers ============
+
+// Handle exit configuration
+// Event: ExitConfigured(uint256 indexed tokenId, address indexed owner, int24 triggerTickLower, int24 triggerTickUpper, bool exitOnRangeExit)
+ponder.on("V4AutoExit:ExitConfigured", async ({ event, context }) => {
+  try {
+    const { tokenId, owner, triggerTickLower, triggerTickUpper, exitOnRangeExit } = event.args;
+
+    const configId = `exit-${tokenId}`;
+    const timestamp = event.block.timestamp.toString();
+
+    // Check if config already exists
+    const existingConfig = await context.db.find(exitConfig, { id: configId });
+
+    if (existingConfig) {
+      // Update existing config
+      await context.db.update(exitConfig, { id: configId }).set({
+        enabled: true,
+        triggerTickLower: Number(triggerTickLower),
+        triggerTickUpper: Number(triggerTickUpper),
+        exitOnRangeExit: exitOnRangeExit,
+        configuredAt: timestamp,
+      });
+
+      // Update stats only if it was disabled before
+      if (!existingConfig.enabled) {
+        const acc = await context.db.find(account, { id: owner.toLowerCase() });
+        if (acc) {
+          await context.db.update(account, { id: owner.toLowerCase() }).set({
+            exitConfigsActive: acc.exitConfigsActive + 1,
+            lastActiveTimestamp: timestamp,
+          });
+        }
+
+        const stats = await context.db.find(protocolStats, { id: "1" });
+        if (stats) {
+          await context.db.update(protocolStats, { id: "1" }).set({
+            totalExitConfigs: stats.totalExitConfigs + 1,
+            lastUpdateTimestamp: timestamp,
+            lastUpdateBlockNumber: event.block.number.toString(),
+          });
+        }
+      }
+    } else {
+      // Create new config
+      try {
+        await context.db.insert(exitConfig).values({
+          id: configId,
+          positionId: tokenId.toString(),
+          enabled: true,
+          triggerTickLower: Number(triggerTickLower),
+          triggerTickUpper: Number(triggerTickUpper),
+          exitOnRangeExit: exitOnRangeExit,
+          exitToken: "0x0000000000000000000000000000000000000000",
+          maxSwapSlippage: "500",
+          minExitInterval: 300,
+          configuredAt: timestamp,
+        });
+      } catch (err: any) {
+        if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
+          throw err;
+        }
+      }
+
+      // Update account stats
+      const acc = await getOrCreateAccount(context, owner, timestamp);
+      if (acc) {
+        await context.db.update(account, { id: owner.toLowerCase() }).set({
+          exitConfigsActive: acc.exitConfigsActive + 1,
+          lastActiveTimestamp: timestamp,
+        });
+      }
+
+      // Update protocol stats
+      const stats = await getOrCreateProtocolStats(context, timestamp, event.block.number.toString());
+      if (stats) {
+        await context.db.update(protocolStats, { id: "1" }).set({
+          totalExitConfigs: stats.totalExitConfigs + 1,
+          lastUpdateTimestamp: timestamp,
+          lastUpdateBlockNumber: event.block.number.toString(),
+        });
+      }
+    }
+  } catch (error) {
+    console.error(`Error handling V4AutoExit:ExitConfigured for tokenId ${event.args.tokenId}:`, error);
+    throw error;
+  }
+});
+
+// Handle exit removal
+// Event: ExitRemoved(uint256 indexed tokenId)
+ponder.on("V4AutoExit:ExitRemoved", async ({ event, context }) => {
+  try {
+    const { tokenId } = event.args;
+
+    const configId = `exit-${tokenId}`;
+    const timestamp = event.block.timestamp.toString();
+
+    const existingConfig = await context.db.find(exitConfig, { id: configId });
+
+    if (existingConfig && existingConfig.enabled) {
+      await context.db.update(exitConfig, { id: configId }).set({
+        enabled: false,
+      });
+
+      // Find position owner
+      const pos = await context.db.find(position, { id: tokenId.toString() });
+      if (pos) {
+        const acc = await context.db.find(account, { id: pos.owner });
+        if (acc && acc.exitConfigsActive > 0) {
+          await context.db.update(account, { id: pos.owner }).set({
+            exitConfigsActive: acc.exitConfigsActive - 1,
+            lastActiveTimestamp: timestamp,
+          });
+        }
+      }
+
+      // Update protocol stats
+      const stats = await context.db.find(protocolStats, { id: "1" });
+      if (stats && stats.totalExitConfigs > 0) {
+        await context.db.update(protocolStats, { id: "1" }).set({
+          totalExitConfigs: stats.totalExitConfigs - 1,
+          lastUpdateTimestamp: timestamp,
+          lastUpdateBlockNumber: event.block.number.toString(),
+        });
+      }
+    }
+  } catch (error) {
+    console.error(`Error handling V4AutoExit:ExitRemoved for tokenId ${event.args.tokenId}:`, error);
+    throw error;
+  }
+});
+
+// Handle exit execution
+// Event: ExitExecuted(uint256 indexed tokenId, address indexed owner, uint8 exitReason, uint256 amount0Received, uint256 amount1Received, uint256 fee0, uint256 fee1, uint128 liquidityRemoved)
+ponder.on("V4AutoExit:ExitExecuted", async ({ event, context }) => {
+  try {
+    const { tokenId, owner, exitReason, amount0Received, amount1Received, fee0, fee1, liquidityRemoved } = event.args;
+
+    const configId = `exit-${tokenId}`;
+    const eventId = `${event.transaction.hash}-${event.log.logIndex}`;
+    const timestamp = event.block.timestamp.toString();
+    const blockNumber = event.block.number.toString();
+
+    // Disable the exit config (one-time exit)
+    const existingConfig = await context.db.find(exitConfig, { id: configId });
+    if (existingConfig) {
+      await context.db.update(exitConfig, { id: configId }).set({
+        enabled: false,
+      });
+    }
+
+    // Create exit event record
+    try {
+      await context.db.insert(exitEvent).values({
+        id: eventId,
+        configId: configId,
+        positionId: tokenId.toString(),
+        owner: owner.toLowerCase(),
+        timestamp: timestamp,
+        blockNumber: blockNumber,
+        transactionHash: event.transaction.hash,
+        exitReason: Number(exitReason),
+        amount0Received: amount0Received.toString(),
+        amount1Received: amount1Received.toString(),
+        fee0: fee0.toString(),
+        fee1: fee1.toString(),
+        liquidityRemoved: liquidityRemoved.toString(),
+      });
+    } catch (err: any) {
+      if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
+        throw err;
+      }
+    }
+
+    // Update position liquidity to 0 (exit removes all liquidity)
+    const pos = await context.db.find(position, { id: tokenId.toString() });
+    if (pos) {
+      await context.db.update(position, { id: tokenId.toString() }).set({
+        liquidity: "0",
+        closedAtTimestamp: timestamp,
+      });
+    }
+
+    // Update account stats
+    const acc = await context.db.find(account, { id: owner.toLowerCase() });
+    if (acc && acc.exitConfigsActive > 0) {
+      await context.db.update(account, { id: owner.toLowerCase() }).set({
+        exitConfigsActive: acc.exitConfigsActive - 1,
+        lastActiveTimestamp: timestamp,
+      });
+    }
+
+    // Update protocol stats
+    const stats = await context.db.find(protocolStats, { id: "1" });
+    if (stats) {
+      await context.db.update(protocolStats, { id: "1" }).set({
+        totalExitConfigs: Math.max(0, stats.totalExitConfigs - 1),
+        activePositions: Math.max(0, stats.activePositions - 1),
+        lastUpdateTimestamp: timestamp,
+        lastUpdateBlockNumber: blockNumber,
+      });
+    }
+
+    // Update daily stats
+    const daily = await getOrCreateDailyStats(context, event.block.timestamp);
+    if (daily) {
+      await context.db.update(dailyStats, { id: daily.id }).set({
+        exitsExecuted: daily.exitsExecuted + 1,
+      });
+    }
+  } catch (error) {
+    console.error(`Error handling V4AutoExit:ExitExecuted for tokenId ${event.args.tokenId}:`, error);
+    throw error;
+  }
+});
+
+// Handle V4AutoExit protocol fee update
+// Event: ProtocolFeeUpdated(uint256 oldFee, uint256 newFee)
+ponder.on("V4AutoExit:ProtocolFeeUpdated", async ({ event, context }) => {
+  try {
+    const { oldFee, newFee } = event.args;
+    const eventId = `${event.transaction.hash}-${event.log.logIndex}`;
+
+    try {
+      await context.db.insert(protocolFeeUpdate).values({
+        id: eventId,
+        contract: "V4AutoExit",
+        oldFee: oldFee.toString(),
+        newFee: newFee.toString(),
+        timestamp: event.block.timestamp.toString(),
+        blockNumber: event.block.number.toString(),
+        transactionHash: event.transaction.hash,
+      });
+    } catch (err: any) {
+      if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
+        throw err;
+      }
+    }
+  } catch (error) {
+    console.error("Error handling V4AutoExit:ProtocolFeeUpdated:", error);
+    throw error;
+  }
+});
+
+// Handle V4AutoExit fee withdrawal
+// Event: FeesWithdrawn(address indexed recipient, address currency, uint256 amount)
+ponder.on("V4AutoExit:FeesWithdrawn", async ({ event, context }) => {
+  try {
+    const { recipient, currency, amount } = event.args;
+    const eventId = `${event.transaction.hash}-${event.log.logIndex}`;
+
+    try {
+      await context.db.insert(feeWithdrawal).values({
+        id: eventId,
+        contract: "V4AutoExit",
+        recipient: recipient.toLowerCase(),
+        currency: currency.toLowerCase(),
+        amount: amount.toString(),
+        timestamp: event.block.timestamp.toString(),
+        blockNumber: event.block.number.toString(),
+        transactionHash: event.transaction.hash,
+      });
+    } catch (err: any) {
+      if (!err.message?.includes("duplicate") && !err.message?.includes("UNIQUE constraint")) {
+        throw err;
+      }
+    }
+  } catch (error) {
+    console.error("Error handling V4AutoExit:FeesWithdrawn:", error);
     throw error;
   }
 });

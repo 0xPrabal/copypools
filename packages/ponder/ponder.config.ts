@@ -2,19 +2,20 @@ import { createConfig } from "ponder";
 import { V4UtilsAbi } from "./abis/V4Utils";
 import { V4CompoundorAbi } from "./abis/V4Compoundor";
 import { V4AutoRangeAbi } from "./abis/V4AutoRange";
+import { V4AutoExitAbi } from "./abis/V4AutoExit";
 import { PositionManagerAbi } from "./abis/PositionManager";
 
 // ============ Base Mainnet ============
 const BASE_CONTRACTS = {
-  V4_UTILS: process.env.V4_UTILS_ADDRESS || "0x37A199B0Baea8943AD493f04Cc2da8c4fa7C2cE1",
-  V4_COMPOUNDOR: process.env.V4_COMPOUNDOR_ADDRESS || "0xB17265e7875416955dE583e3cd1d72Ab5Ed6f670",
-  V4_AUTO_RANGE: process.env.V4_AUTO_RANGE_ADDRESS || "0xa3671811324e8868e9fa83038e6b565A5b59719C",
+  V4_UTILS: process.env.V4_UTILS_ADDRESS || "0x8d81Bb4daA4c8D6ad99a741d1E7C9563EAFda423",
+  V4_COMPOUNDOR: process.env.V4_COMPOUNDOR_ADDRESS || "0x2056eDc7590B42b5464f357589810fA3441216E3",
+  V4_AUTO_RANGE: process.env.V4_AUTO_RANGE_ADDRESS || "0xB6E684266259d172a8CC85F524ab2E845886242b",
+  V4_AUTO_EXIT: process.env.V4_AUTO_EXIT_ADDRESS || "0xb9ab855339036df10790728A773dD3a8c9e538B0",
   // Uniswap V4 PositionManager - indexes ALL position ownership via Transfer events
   POSITION_MANAGER: process.env.POSITION_MANAGER_ADDRESS || "0x7C5f5A4bBd8fD63184577525326123B519429bDc",
 };
-// Start from very recent block for fast sync (~5k blocks = ~1-2 min sync)
-// Current block is ~40805000, start from 40800000 to catch recent events
-const BASE_START_BLOCK = 40800000;
+// Start from deployment block (Feb 19, 2026)
+const BASE_START_BLOCK = 42359600;
 
 // PositionManager start block - same as BASE_START_BLOCK for consistency
 const POSITION_MANAGER_START_BLOCK = 40800000;
@@ -63,6 +64,12 @@ export default createConfig({
       chain: "base",
       abi: V4AutoRangeAbi,
       address: BASE_CONTRACTS.V4_AUTO_RANGE as `0x${string}`,
+      startBlock: BASE_START_BLOCK,
+    },
+    V4AutoExit: {
+      chain: "base",
+      abi: V4AutoExitAbi,
+      address: BASE_CONTRACTS.V4_AUTO_EXIT as `0x${string}`,
       startBlock: BASE_START_BLOCK,
     },
     // PositionManager - indexes position ownership via ERC721 Transfer events

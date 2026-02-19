@@ -115,14 +115,14 @@ export const compoundEvent = onchainTable("compound_event", (t) => ({
 export const exitConfig = onchainTable("exit_config", (t) => ({
   id: t.text().primaryKey(),
   positionId: t.text().notNull(),
-  exitType: t.integer().notNull(),
-  triggerSqrtPriceX96: t.text().notNull(),
-  targetCurrency: t.text().notNull(),
-  maxPriceImpact: t.text().notNull(),
-  swapToSingleAsset: t.boolean().notNull(),
-  deadline: t.text().notNull(),
-  executed: t.boolean().notNull().default(false),
-  executedAt: t.text(),
+  enabled: t.boolean().notNull(),
+  triggerTickLower: t.integer().notNull(),
+  triggerTickUpper: t.integer().notNull(),
+  exitOnRangeExit: t.boolean().notNull(),
+  exitToken: t.text().notNull(),
+  maxSwapSlippage: t.text().notNull(),
+  minExitInterval: t.integer().notNull(),
+  configuredAt: t.text(),
 }));
 
 export const exitEvent = onchainTable("exit_event", (t) => ({
@@ -133,10 +133,12 @@ export const exitEvent = onchainTable("exit_event", (t) => ({
   timestamp: t.text().notNull(),
   blockNumber: t.text().notNull(),
   transactionHash: t.text().notNull(),
-  exitType: t.integer().notNull(),
+  exitReason: t.integer().notNull(),
   amount0Received: t.text().notNull(),
   amount1Received: t.text().notNull(),
-  totalValueReceived: t.text().notNull(),
+  fee0: t.text().notNull(),
+  fee1: t.text().notNull(),
+  liquidityRemoved: t.text().notNull(),
 }));
 
 export const rangeConfig = onchainTable("range_config", (t) => ({
