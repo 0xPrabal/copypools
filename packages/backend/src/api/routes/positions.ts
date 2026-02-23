@@ -24,6 +24,24 @@ import {
 const router = Router();
 const routeLogger = logger.child({ route: 'positions' });
 
+/**
+ * Recursively convert all BigInt values in an object to strings.
+ * Prevents "Do not know how to serialize a BigInt" errors from res.json().
+ */
+function sanitizeBigInts(obj: any): any {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj === 'bigint') return obj.toString();
+  if (Array.isArray(obj)) return obj.map(sanitizeBigInts);
+  if (typeof obj === 'object') {
+    const result: any = {};
+    for (const key of Object.keys(obj)) {
+      result[key] = sanitizeBigInts(obj[key]);
+    }
+    return result;
+  }
+  return obj;
+}
+
 // Promise timeout configuration
 const ENRICHMENT_TIMEOUT_MS = 10000; // 10 seconds for enrichment operations
 
@@ -273,9 +291,10 @@ router.get('/:tokenId', checkRpcHealth, async (req: Request, res: Response) => {
           }
         }
 
-        memoryCache.set(cacheKey, position, MEMORY_CACHE_TTL);
+        const sanitized = sanitizeBigInts(position);
+        memoryCache.set(cacheKey, sanitized, MEMORY_CACHE_TTL);
         routeLogger.debug({ tokenId, layer: 'ponder' }, 'Position from Ponder');
-        return res.json(position);
+        return res.json(sanitized);
       }
     } catch (e) {
       routeLogger.debug({ tokenId, error: e }, 'Ponder lookup failed, trying chain');
@@ -291,7 +310,11 @@ router.get('/:tokenId', checkRpcHealth, async (req: Request, res: Response) => {
     // Enrich with compound/range config from Ponder
     try {
       const compoundConfig = await blockchain.getCompoundConfig(BigInt(tokenId));
-      (position as any).compoundConfig = compoundConfig;
+      (position as any).compoundConfig = {
+        enabled: compoundConfig.enabled,
+        minCompoundInterval: compoundConfig.minCompoundInterval,
+        minRewardAmount: compoundConfig.minRewardAmount.toString(), // BigInt → string for JSON serialization
+      };
     } catch (e) {
       // Not registered for compounding
     }
@@ -344,12 +367,15 @@ router.get('/:tokenId', checkRpcHealth, async (req: Request, res: Response) => {
       }
     }
 
+    // Sanitize BigInt values before caching/returning (prevents JSON serialization errors)
+    const sanitizedPosition = sanitizeBigInts(position);
+
     // Cache the result to avoid RPC calls on next request
-    memoryCache.set(cacheKey, position, MEMORY_CACHE_TTL);
+    memoryCache.set(cacheKey, sanitizedPosition, MEMORY_CACHE_TTL);
     routeLogger.debug({ tokenId, layer: 'chain' }, 'Position fetched from chain and cached');
 
     if (res.headersSent) return;
-    res.json(position);
+    res.json(sanitizedPosition);
   } catch (error) {
     routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to get position');
     if (res.headersSent) return;
