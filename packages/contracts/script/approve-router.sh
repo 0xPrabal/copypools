@@ -1,39 +1,31 @@
 #!/bin/bash
 
-# Approve 0x Router on V4Utils Contract
-# Run this script with your private key
+# Approve KyberSwap Router on all CopyPools contracts
+# Usage: PRIVATE_KEY=0x... ./script/approve-router.sh
 
 set -e
 
-# Contract addresses
-V4_UTILS="0x37A199B0Baea8943AD493f04Cc2da8c4fa7C2cE1"
-ZEROX_ROUTER="0xDef1C0ded9bec7F1a1670819833240f027b25EfF"
-RPC_URL="https://mainnet.base.org"
+# Contract proxy addresses on Base Mainnet
+V4_UTILS="0x8d81Bb4daA4c8D6ad99a741d1E7C9563EAFda423"
+V4_COMPOUNDOR="0x2056eDc7590B42b5464f357589810fA3441216E3"
+V4_AUTO_RANGE="0xB6E684266259d172a8CC85F524ab2E845886242b"
+V4_AUTO_EXIT="0xb9ab855339036df10790728A773dD3a8c9e538B0"
+
+# KyberSwap Meta Aggregation Router V2 on Base
+KYBERSWAP_ROUTER="0x6131B5fae19EA4f9D964eAc0408E4408b66337b5"
+
+RPC_URL="${RPC_URL:-https://mainnet.base.org}"
 
 echo "=========================================="
-echo "V4Utils Router Approval Script"
+echo "KyberSwap Router Approval Script"
 echo "=========================================="
 echo ""
-echo "V4Utils Contract: $V4_UTILS"
-echo "0x Exchange Proxy: $ZEROX_ROUTER"
+echo "KyberSwap Router: $KYBERSWAP_ROUTER"
+echo "RPC URL: $RPC_URL"
 echo ""
 
-# Check current owner
-echo "Checking contract owner..."
-OWNER=$(cast call $V4_UTILS "owner()(address)" --rpc-url $RPC_URL)
-echo "Contract Owner: $OWNER"
-echo ""
-
-# Check if router is already approved
-echo "Checking current router approval status..."
-IS_APPROVED=$(cast call $V4_UTILS "approvedRouters(address)(bool)" $ZEROX_ROUTER --rpc-url $RPC_URL)
-echo "Router currently approved: $IS_APPROVED"
-echo ""
-
-if [ "$IS_APPROVED" = "true" ]; then
-    echo "Router is already approved! No action needed."
-    exit 0
-fi
+CONTRACTS=("$V4_UTILS" "$V4_COMPOUNDOR" "$V4_AUTO_RANGE" "$V4_AUTO_EXIT")
+NAMES=("V4Utils" "V4Compoundor" "V4AutoRange" "V4AutoExit")
 
 # Prompt for private key if not set
 if [ -z "$PRIVATE_KEY" ]; then
@@ -42,33 +34,48 @@ if [ -z "$PRIVATE_KEY" ]; then
     echo ""
 fi
 
-echo "Approving router..."
-echo ""
+for i in "${!CONTRACTS[@]}"; do
+    CONTRACT="${CONTRACTS[$i]}"
+    NAME="${NAMES[$i]}"
 
-# Send the transaction
-cast send $V4_UTILS \
-    "setRouterApproval(address,bool)" \
-    $ZEROX_ROUTER \
-    true \
-    --rpc-url $RPC_URL \
-    --private-key $PRIVATE_KEY
+    echo "--- $NAME ($CONTRACT) ---"
 
-echo ""
-echo "Transaction sent! Verifying..."
-echo ""
+    # Check owner
+    OWNER=$(cast call "$CONTRACT" "owner()(address)" --rpc-url "$RPC_URL")
+    echo "  Owner: $OWNER"
 
-# Wait a bit for confirmation
-sleep 3
+    # Check current approval
+    IS_APPROVED=$(cast call "$CONTRACT" "approvedRouters(address)(bool)" "$KYBERSWAP_ROUTER" --rpc-url "$RPC_URL")
+    echo "  Currently approved: $IS_APPROVED"
+
+    if [ "$IS_APPROVED" = "true" ]; then
+        echo "  -> Already approved, skipping"
+    else
+        echo "  -> Approving..."
+        cast send "$CONTRACT" \
+            "setRouterApproval(address,bool)" \
+            "$KYBERSWAP_ROUTER" \
+            true \
+            --rpc-url "$RPC_URL" \
+            --private-key "$PRIVATE_KEY"
+        echo "  -> Transaction sent!"
+    fi
+    echo ""
+done
+
+# Wait for confirmations
+echo "Waiting for confirmations..."
+sleep 5
 
 # Verify
-IS_APPROVED_NOW=$(cast call $V4_UTILS "approvedRouters(address)(bool)" $ZEROX_ROUTER --rpc-url $RPC_URL)
-echo "Router now approved: $IS_APPROVED_NOW"
 echo ""
+echo "=== Verification ==="
+for i in "${!CONTRACTS[@]}"; do
+    CONTRACT="${CONTRACTS[$i]}"
+    NAME="${NAMES[$i]}"
+    IS_APPROVED=$(cast call "$CONTRACT" "approvedRouters(address)(bool)" "$KYBERSWAP_ROUTER" --rpc-url "$RPC_URL")
+    echo "$NAME: approved=$IS_APPROVED"
+done
 
-if [ "$IS_APPROVED_NOW" = "true" ]; then
-    echo "SUCCESS! Router has been approved."
-    echo "One-Click Zap feature is now enabled!"
-else
-    echo "WARNING: Router approval may not have been confirmed yet."
-    echo "Please check the transaction on Basescan."
-fi
+echo ""
+echo "Done! One-Click Zap should now work."

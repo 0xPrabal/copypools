@@ -26,9 +26,8 @@ const POSITION_MANAGER_START_BLOCK = BASE_START_BLOCK;
 const BASE_RPCS = [
   // Paid RPCs first (more reliable, higher limits)
   process.env.QUICKNODE_BASE_RPC_URL,
-  process.env.INFURA_BASE_RPC_URL,
   process.env.PONDER_RPC_URL_8453,
-  // Reliable free RPCs as fallback (avoid rate-limited ones like llamarpc)
+  // Reliable free RPCs as fallback
   "https://mainnet.base.org",
   "https://base-rpc.publicnode.com",
 ].filter(Boolean) as string[];
