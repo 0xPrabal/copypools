@@ -297,10 +297,11 @@ router.get('/:tokenId', checkRpcHealth, async (req: Request, res: Response) => {
         return res.json(sanitized);
       }
     } catch (e) {
-      routeLogger.debug({ tokenId, error: e }, 'Ponder lookup failed, trying chain');
+      routeLogger.warn({ tokenId, error: e instanceof Error ? e.message : String(e) }, 'Ponder lookup failed, trying chain');
     }
 
     // LAYER 3: Fetch from chain (requires RPC calls)
+    routeLogger.info({ tokenId }, 'Fetching position from chain (Layer 3)');
     const position = await blockchain.getPositionInfo(BigInt(tokenId));
 
     if (!position) {
@@ -377,7 +378,11 @@ router.get('/:tokenId', checkRpcHealth, async (req: Request, res: Response) => {
     if (res.headersSent) return;
     res.json(sanitizedPosition);
   } catch (error) {
-    routeLogger.error({ error, tokenId: req.params.tokenId }, 'Failed to get position');
+    routeLogger.error({
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      tokenId: req.params.tokenId,
+    }, 'Failed to get position');
     if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to fetch position' });
   }
