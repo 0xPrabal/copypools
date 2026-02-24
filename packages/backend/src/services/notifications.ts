@@ -181,7 +181,7 @@ export async function checkCompoundOpportunities(): Promise<void> {
       }
     }
   } catch (error) {
-    notificationLogger.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to check compound opportunities');
+    notificationLogger.error({ error }, 'Failed to check compound opportunities');
   }
 }
 
@@ -218,7 +218,7 @@ export async function checkRebalanceNeeds(): Promise<void> {
       }
     }
   } catch (error) {
-    notificationLogger.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to check rebalance needs');
+    notificationLogger.error({ error }, 'Failed to check rebalance needs');
   }
 }
 

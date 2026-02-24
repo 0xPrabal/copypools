@@ -558,7 +558,7 @@ export async function checkRebalanceNeed(tokenId: string): Promise<{
       recommendation,
     };
   } catch (error) {
-    analyticsLogger.error({ tokenId, error: error instanceof Error ? error.message : String(error) }, 'Failed to check rebalance need');
+    analyticsLogger.error({ tokenId, error }, 'Failed to check rebalance need');
     return {
       needsRebalance: false,
       reason: 'Unable to determine',

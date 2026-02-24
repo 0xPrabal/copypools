@@ -465,7 +465,7 @@ export async function batchUpdatePositionsFromChain(
 
 // ============ Compound Queries ============
 
-export async function getCompoundablePositions(minReward: string, limit = 100) {
+export async function getCompoundablePositions(_minReward: string, limit = 100) {
   const configs = await queryWithRetry<any>(
     `SELECT cc.enabled,
        cc.min_compound_interval as "minCompoundInterval",
