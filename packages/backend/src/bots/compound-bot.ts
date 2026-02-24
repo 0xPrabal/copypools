@@ -62,7 +62,7 @@ async function processCompound(position: CompoundablePosition): Promise<boolean>
 
     return true;
   } catch (error) {
-    botLogger.error({ tokenId: position.tokenId, error }, 'Compound failed');
+    botLogger.error({ tokenId: position.tokenId, error: error instanceof Error ? error.message : String(error) }, 'Compound failed');
     return false;
   }
 }
@@ -128,7 +128,9 @@ async function runCompoundBot(): Promise<void> {
 
     botLogger.info({ successCount, failCount }, 'Compound bot run completed');
   } catch (error) {
-    botLogger.error({ error }, 'Compound bot run failed');
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    botLogger.error({ errorMessage, errorStack }, 'Compound bot run failed');
   }
 }
 

@@ -181,7 +181,7 @@ export async function checkCompoundOpportunities(): Promise<void> {
       }
     }
   } catch (error) {
-    notificationLogger.error({ error }, 'Failed to check compound opportunities');
+    notificationLogger.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to check compound opportunities');
   }
 }
 
@@ -194,16 +194,19 @@ export async function checkRebalanceNeeds(): Promise<void> {
     for (const config of configs) {
       if (!config.position) continue;
 
+      const tokenId = config.position.tokenId;
+      if (!tokenId) continue;
+
       try {
-        const rebalanceCheck = await analytics.checkRebalanceNeed(config.positionId);
+        const rebalanceCheck = await analytics.checkRebalanceNeed(tokenId);
 
         if (rebalanceCheck.needsRebalance) {
           await createNotification({
             type: 'rebalance_needed',
             severity: 'warning',
             title: 'Rebalance Recommended',
-            message: `Position #${config.positionId} is out of range. ${rebalanceCheck.reason}`,
-            positionId: config.positionId,
+            message: `Position #${tokenId} is out of range. ${rebalanceCheck.reason}`,
+            positionId: tokenId,
             owner: config.position.owner,
             data: {
               reason: rebalanceCheck.reason,
@@ -215,7 +218,7 @@ export async function checkRebalanceNeeds(): Promise<void> {
       }
     }
   } catch (error) {
-    notificationLogger.error({ error }, 'Failed to check rebalance needs');
+    notificationLogger.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to check rebalance needs');
   }
 }
 

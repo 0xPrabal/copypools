@@ -467,9 +467,18 @@ export async function batchUpdatePositionsFromChain(
 
 export async function getCompoundablePositions(minReward: string, limit = 100) {
   const configs = await queryWithRetry<any>(
-    `SELECT cc.*, p.*
+    `SELECT cc.enabled,
+       cc.min_compound_interval as "minCompoundInterval",
+       cc.min_reward_amount as "minRewardAmount",
+       cc.last_compound_timestamp as "lastCompoundTimestamp",
+       p.token_id as "tokenId",
+       p.owner,
+       p.pool_id as "poolId",
+       pool.token0_id as "token0",
+       pool.token1_id as "token1"
      FROM compound_config cc
      JOIN position p ON cc.position_id = p.token_id
+     LEFT JOIN pool ON p.pool_id = pool.id
      WHERE cc.enabled = true
        AND p.liquidity != '0'
        AND p.closed_at_timestamp IS NULL
@@ -477,7 +486,25 @@ export async function getCompoundablePositions(minReward: string, limit = 100) {
     [limit]
   );
 
-  return { compoundConfigs: configs };
+  // Transform to nested structure expected by compound bot and notifications
+  const compoundConfigs = configs.map((c: any) => ({
+    enabled: c.enabled,
+    minCompoundInterval: c.minCompoundInterval,
+    minRewardAmount: c.minRewardAmount,
+    lastCompoundTimestamp: c.lastCompoundTimestamp,
+    positionId: c.tokenId,
+    position: {
+      tokenId: c.tokenId,
+      owner: c.owner,
+      pool: {
+        id: c.poolId,
+        token0: { id: c.token0 || '' },
+        token1: { id: c.token1 || '' },
+      },
+    },
+  }));
+
+  return { compoundConfigs };
 }
 
 // ============ Exit Queries ============
