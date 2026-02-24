@@ -21,15 +21,11 @@ export const rpcConfigsPerChain: Record<number, RpcConfig[]> = {
 
   // Base Mainnet
   8453: [
-    { url: process.env.INFURA_BASE_RPC_URL || '', name: 'Infura' },
     { url: process.env.QUICKNODE_BASE_RPC_URL || '', name: 'QuickNode' },
     { url: process.env.RPC_URL || '', name: 'Primary (env)' },
     { url: 'https://mainnet.base.org', name: 'Base Official' },
-    { url: 'https://base.drpc.org', name: 'dRPC' },
     { url: 'https://base-rpc.publicnode.com', name: 'PublicNode' },
-    { url: 'https://base.meowrpc.com', name: 'MeowRPC' },
-    { url: 'https://1rpc.io/base', name: '1RPC' },
-    { url: 'https://base.llamarpc.com', name: 'LlamaRPC' },
+    { url: 'https://base.drpc.org', name: 'dRPC' },
   ],
 
   // // Arbitrum One
