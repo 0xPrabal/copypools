@@ -162,6 +162,13 @@ export async function executeCompound(tokenId: bigint, swapData: Hex): Promise<H
 
 // Auto-exit functions
 export async function checkExit(tokenId: bigint): Promise<{ shouldExit: boolean; reason: number }> {
+  // Check cache first
+  const cacheKey = `check_exit_${tokenId.toString()}`;
+  const cached = memoryCache.get<{ shouldExit: boolean; reason: number }>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const result = await publicClient.readContract({
     address: contracts.v4AutoExit as Address,
     abi: V4AutoExitABI,
@@ -169,7 +176,12 @@ export async function checkExit(tokenId: bigint): Promise<{ shouldExit: boolean;
     args: [tokenId],
   }) as [boolean, number];
 
-  return { shouldExit: result[0], reason: result[1] };
+  const value = { shouldExit: result[0], reason: result[1] };
+
+  // Cache for 5 minutes (exit conditions change slowly — tied to tick movement)
+  memoryCache.set(cacheKey, value, CACHE_TTL.CHECK_REBALANCE);
+
+  return value;
 }
 
 export async function executeExit(tokenId: bigint, swapData: Hex, swapData1: Hex = '0x'): Promise<Hex> {

@@ -96,7 +96,7 @@ export function startPoolSyncJob(): CronJob {
 
 // ============ Automation Config Sync (Phase 1 DB Caching) ============
 
-const CONFIG_SYNC_INTERVAL = '*/5 * * * *'; // Every 5 minutes
+const CONFIG_SYNC_INTERVAL = '*/10 * * * *'; // Every 10 minutes (was 5 — configs change rarely)
 let isConfigSyncing = false;
 
 /**
@@ -210,7 +210,7 @@ export async function syncAutomationConfigs(): Promise<void> {
 }
 
 export function startConfigSyncJob(): CronJob {
-  syncLogger.info('Starting automation config sync job (every 5 minutes)');
+  syncLogger.info('Starting automation config sync job (every 10 minutes)');
 
   // Run initial sync after a 30-second delay (let pool sync finish first)
   setTimeout(() => {

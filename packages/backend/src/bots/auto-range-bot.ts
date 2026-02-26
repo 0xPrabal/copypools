@@ -5,7 +5,8 @@ import * as subgraph from '../services/subgraph.js';
 import * as blockchain from '../services/blockchain.js';
 import { getRebalanceSwapData, calculateRebalanceSwap } from '../services/swap.js';
 import { publicClient, getLatestPositionInChain, getRebalancedTo } from '../services/blockchain.js';
-import { getTokenPriceUSD, getTokenInfo } from '../services/price.js';
+import { getTokenInfo } from '../services/price.js';
+import { getBatchTokenPricesFromDb } from '../services/database.js';
 import { Address, parseAbiItem } from 'viem';
 import {
   analyzePosition,
@@ -269,9 +270,9 @@ async function saveStateToDb(): Promise<void> {
   }
 }
 
-// Max blocks to scan per bot run to cap RPC usage (10 chunks × 3 parallel getLogs = 30 RPC calls max)
-const MAX_CHUNKS_PER_RUN = 10;
-const CHUNK_SIZE = BigInt(10000);
+// Max blocks to scan per bot run to cap RPC usage (5 chunks × 3 parallel getLogs = 15 RPC calls max)
+const MAX_CHUNKS_PER_RUN = 5;
+const CHUNK_SIZE = BigInt(20000); // Larger chunks to cover same range with fewer RPC calls
 
 // Scan blockchain for RangeConfigured events
 async function scanForRangeConfiguredEvents(): Promise<void> {
@@ -419,15 +420,18 @@ async function processPositionSmart(tokenId: string): Promise<{ rebalanced: bool
       const token0Info = getTokenInfo(positionInfo.poolKey.currency0, config.CHAIN_ID);
       const token1Info = getTokenInfo(positionInfo.poolKey.currency1, config.CHAIN_ID);
 
-      const [token0Price, token1Price] = await Promise.all([
-        getTokenPriceUSD(positionInfo.poolKey.currency0, config.CHAIN_ID),
-        getTokenPriceUSD(positionInfo.poolKey.currency1, config.CHAIN_ID),
-      ]);
+      // Use DB prices instead of external API calls to save RPC/API credits
+      const dbPrices = await getBatchTokenPricesFromDb(
+        [positionInfo.poolKey.currency0, positionInfo.poolKey.currency1],
+        config.CHAIN_ID
+      );
+      const token0PriceUsd = dbPrices.get(positionInfo.poolKey.currency0.toLowerCase())?.priceUsd ?? 0;
+      const token1PriceUsd = dbPrices.get(positionInfo.poolKey.currency1.toLowerCase())?.priceUsd ?? 0;
 
       const amount0Human = Number(amount0) / Math.pow(10, token0Info.decimals);
       const amount1Human = Number(amount1) / Math.pow(10, token1Info.decimals);
-      const value0Usd = amount0Human * (token0Price.priceUSD ?? 0);
-      const value1Usd = amount1Human * (token1Price.priceUSD ?? 0);
+      const value0Usd = amount0Human * token0PriceUsd;
+      const value1Usd = amount1Human * token1PriceUsd;
       const totalValueUsd = value0Usd + value1Usd;
 
       if (totalValueUsd < MIN_POSITION_VALUE_USD) {

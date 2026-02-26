@@ -75,7 +75,7 @@ export function startAllBots(): void {
   // Start automation config sync job (syncs compound/range/exit configs every 5 minutes)
   const configSyncJob = startConfigSyncJob();
   activeJobs.push(configSyncJob);
-  botsLogger.info('Automation config sync job started (every 5 minutes)');
+  botsLogger.info('Automation config sync job started (every 10 minutes)');
 
   // Start token price sync job (syncs prices from Graph every 5 minutes)
   const priceSyncJob = startTokenPriceSyncJob();

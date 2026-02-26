@@ -238,7 +238,7 @@ async function runLiveIndexer(): Promise<void> {
     } catch (error) {
       indexerLogger.error({ error }, 'Live indexer error');
     }
-  }, 60000); // 1 minute (optimized for faster position updates)
+  }, 300000); // 5 minutes (reduced from 1 min to cut RPC calls by 80%)
 }
 
 // Start the position indexer
