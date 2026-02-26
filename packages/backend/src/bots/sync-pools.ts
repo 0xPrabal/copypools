@@ -237,7 +237,7 @@ export function startConfigSyncJob(): CronJob {
 
 // ============ Pool Historical Data Sync (Phase 3 DB Caching) ============
 
-const HISTORICAL_SYNC_INTERVAL = '*/15 * * * *'; // Every 15 minutes
+const HISTORICAL_SYNC_INTERVAL = '*/30 * * * *'; // Every 30 minutes (was 15 — reduced Graph API usage)
 let isHistoricalSyncing = false;
 
 /**
@@ -254,8 +254,8 @@ export async function syncPoolHistoricalData(): Promise<void> {
   const startTime = Date.now();
 
   try {
-    // Get top pools from Graph (these are the ones users are most likely to query)
-    const pools = await fetchGraphPools(50, 10, false);
+    // Get top 10 pools from Graph (reduced from 50 to cut API credits ~5x)
+    const pools = await fetchGraphPools(10, 0, false);
     if (!pools || pools.length === 0) {
       syncLogger.warn('No pools returned from Graph for historical sync');
       return;
@@ -267,60 +267,50 @@ export async function syncPoolHistoricalData(): Promise<void> {
     let syncedSwaps = 0;
     let syncedTicks = 0;
 
-    // Process pools in batches of 5 to avoid overwhelming the Graph API
-    const BATCH_SIZE = 5;
-    for (let i = 0; i < pools.length; i += BATCH_SIZE) {
-      const batch = pools.slice(i, i + BATCH_SIZE);
+    // Process pools sequentially to minimize Graph API burst
+    for (const pool of pools) {
+      try {
+        // Only fetch day data every run (needed for APR calculations)
+        // Swaps and ticks are fetched less frequently (only every other run)
+        const dayData = await fetchPoolDayData(pool.id, 30);
 
-      await Promise.all(
-        batch.map(async (pool: any) => {
-          try {
-            // Fetch day data, swaps, and ticks in parallel per pool
-            const [dayData, swaps, ticks] = await Promise.all([
-              fetchPoolDayData(pool.id, 30),
-              fetchSwaps(pool.id, 50),
-              fetchTicks(pool.id, 200),
-            ]);
+        if (dayData.length > 0) {
+          await upsertPoolDayData(pool.id, dayData);
+          syncedDayData += dayData.length;
+        }
 
-            // Upsert day data
-            if (dayData.length > 0) {
-              await upsertPoolDayData(pool.id, dayData);
-              syncedDayData += dayData.length;
-            }
+        // Fetch swaps and ticks only for top 5 pools to save API credits
+        if (pools.indexOf(pool) < 5) {
+          const [swaps, ticks] = await Promise.all([
+            fetchSwaps(pool.id, 50),
+            fetchTicks(pool.id, 200),
+          ]);
 
-            // Upsert swaps
-            if (swaps.length > 0) {
-              await upsertPoolSwaps(
-                swaps.map((s: any) => ({
-                  id: s.id,
-                  poolId: pool.id,
-                  timestamp: s.timestamp,
-                  sender: s.sender,
-                  token0Symbol: s.token0?.symbol || '',
-                  token1Symbol: s.token1?.symbol || '',
-                  amount0: s.amount0,
-                  amount1: s.amount1,
-                  amountUSD: s.amountUSD,
-                  tick: s.tick,
-                }))
-              );
-              syncedSwaps += swaps.length;
-            }
-
-            // Upsert ticks
-            if (ticks.length > 0) {
-              await upsertPoolTicks(pool.id, ticks);
-              syncedTicks += ticks.length;
-            }
-          } catch (error) {
-            syncLogger.warn({ error, poolId: pool.id }, 'Failed to sync historical data for pool');
+          if (swaps.length > 0) {
+            await upsertPoolSwaps(
+              swaps.map((s: any) => ({
+                id: s.id,
+                poolId: pool.id,
+                timestamp: s.timestamp,
+                sender: s.sender,
+                token0Symbol: s.token0?.symbol || '',
+                token1Symbol: s.token1?.symbol || '',
+                amount0: s.amount0,
+                amount1: s.amount1,
+                amountUSD: s.amountUSD,
+                tick: s.tick,
+              }))
+            );
+            syncedSwaps += swaps.length;
           }
-        })
-      );
 
-      // Brief delay between batches
-      if (i + BATCH_SIZE < pools.length) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+          if (ticks.length > 0) {
+            await upsertPoolTicks(pool.id, ticks);
+            syncedTicks += ticks.length;
+          }
+        }
+      } catch (error) {
+        syncLogger.warn({ error, poolId: pool.id }, 'Failed to sync historical data for pool');
       }
     }
 
@@ -364,7 +354,7 @@ export function startHistoricalDataSyncJob(): CronJob {
 
 // ============ Token Price Sync (Phase 2 DB Caching) ============
 
-const PRICE_SYNC_INTERVAL = '*/2 * * * *'; // Every 2 minutes
+const PRICE_SYNC_INTERVAL = '*/5 * * * *'; // Every 5 minutes (was 2 — reduced Graph API usage)
 let isPriceSyncing = false;
 
 /**

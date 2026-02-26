@@ -10,8 +10,7 @@ import {
 } from '../services/database.js';
 import { getAllPositionsWithPool } from '../services/subgraph.js';
 import { liquidityToAmounts } from '../services/price.js';
-import { fetchGraphPools } from '../services/graph-client.js';
-import { getPoolDayDataFromDb } from '../services/database.js';
+import { getPoolDayDataFromDb, getV4Pools } from '../services/database.js';
 
 const syncLogger = logger.child({ module: 'sync-top-positions' });
 
@@ -67,9 +66,6 @@ export async function syncTopPositions(): Promise<void> {
     // Step 2: Collect unique token addresses and batch-fetch prices
     const tokenAddresses = new Set<string>();
     for (const pos of allPositions) {
-      const poolId = pos.poolId || '';
-      // Pool ID format: poolId contains token addresses
-      // We get token addresses from the JOIN data
       if (pos.token0Id || pos.currency0) {
         tokenAddresses.add((pos.token0Id || pos.currency0 || '').toLowerCase());
       }
@@ -263,18 +259,30 @@ export async function syncTopPositions(): Promise<void> {
  */
 export async function syncPoolLeaderboardMetrics(): Promise<void> {
   try {
-    // Get pools from Graph for current tick + tick spacing
-    const pools = await fetchGraphPools(100, 0, false);
+    // Get pools from local DB (no Graph API call — pools synced by syncPools job)
+    const { pools } = await getV4Pools({ limit: 100, sortBy: 'tvl', sortOrder: 'desc' });
     if (!pools || pools.length === 0) return;
+
+    // Build a pool→tick map from the top_positions we just synced (avoids Graph call)
+    const poolTickMap = new Map<string, number>();
+    try {
+      const { positions: topPos } = await import('../services/database.js')
+        .then(m => m.getTopPositions({ limit: 500, sortBy: 'apr' }));
+      for (const tp of topPos) {
+        if (tp.poolId && tp.currentTick !== null && !poolTickMap.has(tp.poolId)) {
+          poolTickMap.set(tp.poolId, tp.currentTick);
+        }
+      }
+    } catch { /* non-fatal */ }
 
     syncLogger.info({ poolCount: pools.length }, 'Enriching pools with leaderboard metrics');
 
     for (const pool of pools) {
       try {
         const poolId = pool.id;
-        const tvlUsd = parseFloat(pool.totalValueLockedUSD || '0');
-        const tick = pool.tick ? parseInt(pool.tick) : 0;
-        const tickSpacing = parseInt(pool.tickSpacing || '10');
+        const tvlUsd = pool.tvlUsd || 0;
+        const tick = poolTickMap.get(poolId) || 0;
+        const tickSpacing = pool.tickSpacing || 10;
 
         // Get pool day data from DB (populated by historical sync)
         const dayData = await getPoolDayDataFromDb(poolId, 30);

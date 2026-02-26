@@ -77,15 +77,15 @@ export function startAllBots(): void {
   activeJobs.push(configSyncJob);
   botsLogger.info('Automation config sync job started (every 5 minutes)');
 
-  // Start token price sync job (syncs prices from Graph every 2 minutes)
+  // Start token price sync job (syncs prices from Graph every 5 minutes)
   const priceSyncJob = startTokenPriceSyncJob();
   activeJobs.push(priceSyncJob);
-  botsLogger.info('Token price sync job started (every 2 minutes)');
+  botsLogger.info('Token price sync job started (every 5 minutes)');
 
-  // Start pool historical data sync job (syncs day data, swaps, ticks every 15 minutes)
+  // Start pool historical data sync job (syncs day data, swaps, ticks every 30 minutes)
   const historicalSyncJob = startHistoricalDataSyncJob();
   activeJobs.push(historicalSyncJob);
-  botsLogger.info('Pool historical data sync job started (every 15 minutes)');
+  botsLogger.info('Pool historical data sync job started (every 30 minutes)');
 
   // Start protocol stats sync job (syncs protocol stats + daily data every 15 minutes)
   const protocolStatsSyncJob = startProtocolStatsSyncJob();
