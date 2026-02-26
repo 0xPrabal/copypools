@@ -13,6 +13,7 @@ import { positionCacheRouter } from './routes/position-cache.js';
 import { healthRouter } from './routes/health.js';
 import { pricesRouter } from './routes/prices.js';
 import { swapRouter } from './routes/swap.js';
+import { leaderboardRouter } from './routes/leaderboard.js';
 import { initializeDatabase, healthCheck as dbHealthCheck, getStats as dbStats } from '../services/database.js';
 import { memoryCache } from '../services/cache.js';
 import { initializeWebhooks } from '../services/notifications.js';
@@ -106,6 +107,7 @@ export function createServer() {
   app.use('/api/position-cache', positionCacheRouter);
   app.use('/api/prices', pricesRouter);
   app.use('/api/exchange', swapRouter); // Named 'exchange' to avoid ad blocker blocking 'swap' URLs
+  app.use('/api/leaderboard', leaderboardRouter);
 
   // Error handling
   app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {

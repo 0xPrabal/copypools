@@ -5,6 +5,7 @@ import { startAutoRangeBot } from './auto-range-bot.js';
 import { startLiquidationBot } from './liquidation-bot.js';
 import { startPositionIndexer } from './position-indexer.js';
 import { startPoolSyncJob, startConfigSyncJob, startTokenPriceSyncJob, startHistoricalDataSyncJob, startProtocolStatsSyncJob } from './sync-pools.js';
+import { startTopPositionSyncJob } from './sync-top-positions.js';
 import { runNotificationChecks } from '../services/notifications.js';
 import { logger } from '../utils/logger.js';
 import { config, contracts } from '../config/index.js';
@@ -90,6 +91,11 @@ export function startAllBots(): void {
   const protocolStatsSyncJob = startProtocolStatsSyncJob();
   activeJobs.push(protocolStatsSyncJob);
   botsLogger.info('Protocol stats sync job started (every 15 minutes)');
+
+  // Start top positions sync job (syncs leaderboard positions every 10 minutes)
+  const topPosSyncJob = startTopPositionSyncJob();
+  activeJobs.push(topPosSyncJob);
+  botsLogger.info('Top positions sync job started (every 10 minutes)');
 }
 
 export function stopAllBots(): void {

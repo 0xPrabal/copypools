@@ -187,6 +187,58 @@ export interface CachedPosition {
   updatedAt: Date;
 }
 
+// Top position interface for leaderboard
+export interface TopPosition {
+  tokenId: string;
+  chainId: number;
+  owner: string;
+  poolId: string | null;
+  token0Address: string | null;
+  token1Address: string | null;
+  token0Symbol: string | null;
+  token1Symbol: string | null;
+  token0Decimals: number;
+  token1Decimals: number;
+  fee: number | null;
+  tickSpacing: number | null;
+  tickLower: number | null;
+  tickUpper: number | null;
+  liquidity: string | null;
+  currentTick: number | null;
+  sqrtPriceX96: string | null;
+  inRange: boolean;
+  positionValueUsd: number;
+  depositedToken0: string;
+  depositedToken1: string;
+  collectedFeesToken0: string;
+  collectedFeesToken1: string;
+  pendingFeesUsd: number;
+  feeApr: number;
+  totalApr: number;
+  pnlUsd: number;
+  roi: number;
+  ageDays: number;
+  compoundEnabled: boolean;
+  rangeEnabled: boolean;
+  exitEnabled: boolean;
+  compoundConfig: CompoundConfig | null;
+  rangeConfig: RangeConfig | null;
+  exitConfig: ExitConfig | null;
+  rankByApr: number | null;
+  rankByValue: number | null;
+  rankByFees: number | null;
+  lastSyncedAt: Date;
+}
+
+// Suggested range for copy pool strategies
+export interface SuggestedRange {
+  tickLower: number;
+  tickUpper: number;
+  expectedApr: number;
+  label: string;
+  risk: 'low' | 'medium' | 'high';
+}
+
 // Initialize database schema
 export async function initializeDatabase(): Promise<void> {
   if (!pool) {
@@ -529,6 +581,90 @@ export async function initializeDatabase(): Promise<void> {
         tvl_usd DECIMAL(24,2),
         tx_count INTEGER
       )
+    `);
+
+    // Create top_positions table for leaderboard
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS top_positions (
+        token_id VARCHAR(78) NOT NULL,
+        chain_id INTEGER NOT NULL DEFAULT 8453,
+        owner VARCHAR(42) NOT NULL,
+        pool_id VARCHAR(66),
+        token0_address VARCHAR(42),
+        token1_address VARCHAR(42),
+        token0_symbol VARCHAR(32),
+        token1_symbol VARCHAR(32),
+        token0_decimals INTEGER DEFAULT 18,
+        token1_decimals INTEGER DEFAULT 18,
+        fee INTEGER,
+        tick_spacing INTEGER,
+        tick_lower INTEGER,
+        tick_upper INTEGER,
+        liquidity VARCHAR(78),
+        current_tick INTEGER,
+        sqrt_price_x96 VARCHAR(78),
+        in_range BOOLEAN DEFAULT true,
+        position_value_usd DECIMAL(24,2) DEFAULT 0,
+        deposited_token0 VARCHAR(78) DEFAULT '0',
+        deposited_token1 VARCHAR(78) DEFAULT '0',
+        collected_fees_token0 VARCHAR(78) DEFAULT '0',
+        collected_fees_token1 VARCHAR(78) DEFAULT '0',
+        pending_fees_usd DECIMAL(24,2) DEFAULT 0,
+        fee_apr DECIMAL(12,4) DEFAULT 0,
+        total_apr DECIMAL(12,4) DEFAULT 0,
+        pnl_usd DECIMAL(24,2) DEFAULT 0,
+        roi DECIMAL(12,4) DEFAULT 0,
+        age_days INTEGER DEFAULT 0,
+        compound_enabled BOOLEAN DEFAULT false,
+        range_enabled BOOLEAN DEFAULT false,
+        exit_enabled BOOLEAN DEFAULT false,
+        compound_config JSONB,
+        range_config JSONB,
+        exit_config JSONB,
+        rank_by_apr INTEGER,
+        rank_by_value INTEGER,
+        rank_by_fees INTEGER,
+        last_synced_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        PRIMARY KEY (token_id, chain_id)
+      )
+    `);
+
+    // Indexes for top_positions leaderboard queries
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_top_pos_apr ON top_positions(total_apr DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_top_pos_value ON top_positions(position_value_usd DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_top_pos_fees ON top_positions(fee_apr DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_top_pos_pool ON top_positions(pool_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_top_pos_range ON top_positions(in_range) WHERE in_range = true`);
+
+    // Add leaderboard columns to v4_pools if they don't exist
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'fees_7d_usd') THEN
+          ALTER TABLE v4_pools ADD COLUMN fees_7d_usd DECIMAL(24,2);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'fees_30d_usd') THEN
+          ALTER TABLE v4_pools ADD COLUMN fees_30d_usd DECIMAL(24,2);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'apr_7d') THEN
+          ALTER TABLE v4_pools ADD COLUMN apr_7d DECIMAL(12,4);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'apr_30d') THEN
+          ALTER TABLE v4_pools ADD COLUMN apr_30d DECIMAL(12,4);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'suggested_range_full') THEN
+          ALTER TABLE v4_pools ADD COLUMN suggested_range_full JSONB;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'suggested_range_wide') THEN
+          ALTER TABLE v4_pools ADD COLUMN suggested_range_wide JSONB;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'suggested_range_concentrated') THEN
+          ALTER TABLE v4_pools ADD COLUMN suggested_range_concentrated JSONB;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v4_pools' AND column_name = 'position_count') THEN
+          ALTER TABLE v4_pools ADD COLUMN position_count INTEGER DEFAULT 0;
+        END IF;
+      END $$;
     `);
 
     dbLogger.info('Database schema initialized successfully');
@@ -2520,6 +2656,520 @@ export async function upsertTokenPrices(
     dbLogger.error({ error, count: prices.length }, 'Failed to upsert token prices');
   } finally {
     client.release();
+  }
+}
+
+// ============ Top Positions (Leaderboard) Functions ============
+
+/**
+ * Batch upsert top positions for the leaderboard.
+ */
+export async function upsertTopPositions(positions: TopPosition[]): Promise<void> {
+  if (!pool || positions.length === 0) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    for (const p of positions) {
+      await client.query(
+        `INSERT INTO top_positions (
+          token_id, chain_id, owner, pool_id,
+          token0_address, token1_address, token0_symbol, token1_symbol,
+          token0_decimals, token1_decimals,
+          fee, tick_spacing, tick_lower, tick_upper, liquidity,
+          current_tick, sqrt_price_x96, in_range,
+          position_value_usd, deposited_token0, deposited_token1,
+          collected_fees_token0, collected_fees_token1, pending_fees_usd,
+          fee_apr, total_apr, pnl_usd, roi, age_days,
+          compound_enabled, range_enabled, exit_enabled,
+          compound_config, range_config, exit_config,
+          rank_by_apr, rank_by_value, rank_by_fees,
+          last_synced_at
+        ) VALUES (
+          $1, $2, $3, $4,
+          $5, $6, $7, $8,
+          $9, $10,
+          $11, $12, $13, $14, $15,
+          $16, $17, $18,
+          $19, $20, $21,
+          $22, $23, $24,
+          $25, $26, $27, $28, $29,
+          $30, $31, $32,
+          $33, $34, $35,
+          $36, $37, $38,
+          NOW()
+        )
+        ON CONFLICT (token_id, chain_id)
+        DO UPDATE SET
+          owner = $3, pool_id = $4,
+          token0_address = COALESCE($5, top_positions.token0_address),
+          token1_address = COALESCE($6, top_positions.token1_address),
+          token0_symbol = COALESCE($7, top_positions.token0_symbol),
+          token1_symbol = COALESCE($8, top_positions.token1_symbol),
+          token0_decimals = COALESCE($9, top_positions.token0_decimals),
+          token1_decimals = COALESCE($10, top_positions.token1_decimals),
+          fee = $11, tick_spacing = $12,
+          tick_lower = $13, tick_upper = $14, liquidity = $15,
+          current_tick = $16, sqrt_price_x96 = $17, in_range = $18,
+          position_value_usd = $19,
+          deposited_token0 = $20, deposited_token1 = $21,
+          collected_fees_token0 = $22, collected_fees_token1 = $23,
+          pending_fees_usd = $24,
+          fee_apr = $25, total_apr = $26, pnl_usd = $27, roi = $28, age_days = $29,
+          compound_enabled = $30, range_enabled = $31, exit_enabled = $32,
+          compound_config = $33, range_config = $34, exit_config = $35,
+          rank_by_apr = $36, rank_by_value = $37, rank_by_fees = $38,
+          last_synced_at = NOW()`,
+        [
+          p.tokenId, p.chainId, p.owner, p.poolId,
+          p.token0Address, p.token1Address, p.token0Symbol, p.token1Symbol,
+          p.token0Decimals, p.token1Decimals,
+          p.fee, p.tickSpacing, p.tickLower, p.tickUpper, p.liquidity,
+          p.currentTick, p.sqrtPriceX96, p.inRange,
+          p.positionValueUsd, p.depositedToken0, p.depositedToken1,
+          p.collectedFeesToken0, p.collectedFeesToken1, p.pendingFeesUsd,
+          p.feeApr, p.totalApr, p.pnlUsd, p.roi, p.ageDays,
+          p.compoundEnabled, p.rangeEnabled, p.exitEnabled,
+          p.compoundConfig ? JSON.stringify(p.compoundConfig) : null,
+          p.rangeConfig ? JSON.stringify(p.rangeConfig) : null,
+          p.exitConfig ? JSON.stringify(p.exitConfig) : null,
+          p.rankByApr, p.rankByValue, p.rankByFees,
+        ]
+      );
+    }
+
+    await client.query('COMMIT');
+    dbLogger.info({ count: positions.length }, 'Batch upserted top positions');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    dbLogger.error({ error, count: positions.length }, 'Failed to batch upsert top positions');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get top positions with pagination and sorting for the leaderboard.
+ */
+export async function getTopPositions(options: {
+  page?: number;
+  limit?: number;
+  sortBy?: 'apr' | 'feeApr' | 'value' | 'pnl' | 'roi' | 'fees';
+  sortOrder?: 'asc' | 'desc';
+  poolId?: string;
+  inRangeOnly?: boolean;
+  minValueUsd?: number;
+}): Promise<{ positions: TopPosition[]; total: number }> {
+  if (!pool) return { positions: [], total: 0 };
+
+  const {
+    page = 1,
+    limit = 20,
+    sortBy = 'apr',
+    sortOrder = 'desc',
+    poolId,
+    inRangeOnly = false,
+    minValueUsd,
+  } = options;
+
+  const offset = (page - 1) * Math.min(limit, 100);
+  const safeLimit = Math.min(limit, 100);
+
+  const sortColumnMap: Record<string, string> = {
+    apr: 'total_apr',
+    feeApr: 'fee_apr',
+    value: 'position_value_usd',
+    pnl: 'pnl_usd',
+    roi: 'roi',
+    fees: 'pending_fees_usd',
+  };
+  const sortColumn = sortColumnMap[sortBy] || 'total_apr';
+  const order = sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+  // Build WHERE clause dynamically
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  let paramIdx = 1;
+
+  if (poolId) {
+    conditions.push(`LOWER(pool_id) = LOWER($${paramIdx})`);
+    params.push(poolId);
+    paramIdx++;
+  }
+
+  if (inRangeOnly) {
+    conditions.push(`in_range = true`);
+  }
+
+  if (minValueUsd !== undefined && minValueUsd > 0) {
+    conditions.push(`position_value_usd >= $${paramIdx}`);
+    params.push(minValueUsd);
+    paramIdx++;
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  try {
+    const countResult = await timedQuery(
+      pool,
+      `SELECT COUNT(*) FROM top_positions ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].count, 10);
+
+    const queryParams = [...params, safeLimit, offset];
+    const result = await timedQuery(
+      pool,
+      `SELECT token_id, chain_id, owner, pool_id,
+              token0_address, token1_address, token0_symbol, token1_symbol,
+              token0_decimals, token1_decimals,
+              fee, tick_spacing, tick_lower, tick_upper, liquidity,
+              current_tick, sqrt_price_x96, in_range,
+              position_value_usd, deposited_token0, deposited_token1,
+              collected_fees_token0, collected_fees_token1, pending_fees_usd,
+              fee_apr, total_apr, pnl_usd, roi, age_days,
+              compound_enabled, range_enabled, exit_enabled,
+              compound_config, range_config, exit_config,
+              rank_by_apr, rank_by_value, rank_by_fees,
+              last_synced_at
+       FROM top_positions
+       ${whereClause}
+       ORDER BY ${sortColumn} ${order} NULLS LAST
+       LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
+      queryParams
+    );
+
+    const positions: TopPosition[] = result.rows.map(row => ({
+      tokenId: row.token_id,
+      chainId: row.chain_id,
+      owner: row.owner,
+      poolId: row.pool_id,
+      token0Address: row.token0_address,
+      token1Address: row.token1_address,
+      token0Symbol: row.token0_symbol,
+      token1Symbol: row.token1_symbol,
+      token0Decimals: row.token0_decimals || 18,
+      token1Decimals: row.token1_decimals || 18,
+      fee: row.fee,
+      tickSpacing: row.tick_spacing,
+      tickLower: row.tick_lower,
+      tickUpper: row.tick_upper,
+      liquidity: row.liquidity,
+      currentTick: row.current_tick,
+      sqrtPriceX96: row.sqrt_price_x96,
+      inRange: row.in_range,
+      positionValueUsd: parseFloat(row.position_value_usd) || 0,
+      depositedToken0: row.deposited_token0 || '0',
+      depositedToken1: row.deposited_token1 || '0',
+      collectedFeesToken0: row.collected_fees_token0 || '0',
+      collectedFeesToken1: row.collected_fees_token1 || '0',
+      pendingFeesUsd: parseFloat(row.pending_fees_usd) || 0,
+      feeApr: parseFloat(row.fee_apr) || 0,
+      totalApr: parseFloat(row.total_apr) || 0,
+      pnlUsd: parseFloat(row.pnl_usd) || 0,
+      roi: parseFloat(row.roi) || 0,
+      ageDays: row.age_days || 0,
+      compoundEnabled: row.compound_enabled || false,
+      rangeEnabled: row.range_enabled || false,
+      exitEnabled: row.exit_enabled || false,
+      compoundConfig: row.compound_config || null,
+      rangeConfig: row.range_config || null,
+      exitConfig: row.exit_config || null,
+      rankByApr: row.rank_by_apr,
+      rankByValue: row.rank_by_value,
+      rankByFees: row.rank_by_fees,
+      lastSyncedAt: row.last_synced_at,
+    }));
+
+    return { positions, total };
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to get top positions');
+    return { positions: [], total: 0 };
+  }
+}
+
+/**
+ * Get a single top position by token ID (for copy detail page).
+ */
+export async function getTopPositionByTokenId(
+  tokenId: string,
+  chainId: number = 8453
+): Promise<TopPosition | null> {
+  if (!pool) return null;
+
+  try {
+    const result = await timedQuery(
+      pool,
+      `SELECT token_id, chain_id, owner, pool_id,
+              token0_address, token1_address, token0_symbol, token1_symbol,
+              token0_decimals, token1_decimals,
+              fee, tick_spacing, tick_lower, tick_upper, liquidity,
+              current_tick, sqrt_price_x96, in_range,
+              position_value_usd, deposited_token0, deposited_token1,
+              collected_fees_token0, collected_fees_token1, pending_fees_usd,
+              fee_apr, total_apr, pnl_usd, roi, age_days,
+              compound_enabled, range_enabled, exit_enabled,
+              compound_config, range_config, exit_config,
+              rank_by_apr, rank_by_value, rank_by_fees,
+              last_synced_at
+       FROM top_positions
+       WHERE token_id = $1 AND chain_id = $2`,
+      [tokenId, chainId]
+    );
+
+    if (result.rows.length === 0) return null;
+
+    const row = result.rows[0];
+    return {
+      tokenId: row.token_id,
+      chainId: row.chain_id,
+      owner: row.owner,
+      poolId: row.pool_id,
+      token0Address: row.token0_address,
+      token1Address: row.token1_address,
+      token0Symbol: row.token0_symbol,
+      token1Symbol: row.token1_symbol,
+      token0Decimals: row.token0_decimals || 18,
+      token1Decimals: row.token1_decimals || 18,
+      fee: row.fee,
+      tickSpacing: row.tick_spacing,
+      tickLower: row.tick_lower,
+      tickUpper: row.tick_upper,
+      liquidity: row.liquidity,
+      currentTick: row.current_tick,
+      sqrtPriceX96: row.sqrt_price_x96,
+      inRange: row.in_range,
+      positionValueUsd: parseFloat(row.position_value_usd) || 0,
+      depositedToken0: row.deposited_token0 || '0',
+      depositedToken1: row.deposited_token1 || '0',
+      collectedFeesToken0: row.collected_fees_token0 || '0',
+      collectedFeesToken1: row.collected_fees_token1 || '0',
+      pendingFeesUsd: parseFloat(row.pending_fees_usd) || 0,
+      feeApr: parseFloat(row.fee_apr) || 0,
+      totalApr: parseFloat(row.total_apr) || 0,
+      pnlUsd: parseFloat(row.pnl_usd) || 0,
+      roi: parseFloat(row.roi) || 0,
+      ageDays: row.age_days || 0,
+      compoundEnabled: row.compound_enabled || false,
+      rangeEnabled: row.range_enabled || false,
+      exitEnabled: row.exit_enabled || false,
+      compoundConfig: row.compound_config || null,
+      rangeConfig: row.range_config || null,
+      exitConfig: row.exit_config || null,
+      rankByApr: row.rank_by_apr,
+      rankByValue: row.rank_by_value,
+      rankByFees: row.rank_by_fees,
+      lastSyncedAt: row.last_synced_at,
+    };
+  } catch (error) {
+    dbLogger.error({ error, tokenId }, 'Failed to get top position by token ID');
+    return null;
+  }
+}
+
+/**
+ * Delete stale top positions that are no longer in the active set.
+ */
+export async function deleteStaleTopPositions(
+  validTokenIds: string[],
+  chainId: number = 8453
+): Promise<number> {
+  if (!pool) return 0;
+
+  try {
+    if (validTokenIds.length === 0) {
+      // Delete all positions for this chain if no valid IDs
+      const result = await pool.query(
+        `DELETE FROM top_positions WHERE chain_id = $1`,
+        [chainId]
+      );
+      return result.rowCount ?? 0;
+    }
+
+    const result = await pool.query(
+      `DELETE FROM top_positions
+       WHERE chain_id = $1
+         AND token_id != ALL($2)`,
+      [chainId, validTokenIds]
+    );
+    const deleted = result.rowCount ?? 0;
+    if (deleted > 0) {
+      dbLogger.info({ deleted, chainId }, 'Deleted stale top positions');
+    }
+    return deleted;
+  } catch (error) {
+    dbLogger.error({ error, chainId }, 'Failed to delete stale top positions');
+    return 0;
+  }
+}
+
+/**
+ * Get enhanced pool data for leaderboard (includes 7d/30d metrics and suggested ranges).
+ */
+export async function getLeaderboardPools(options: {
+  page?: number;
+  limit?: number;
+  sortBy?: 'tvl' | 'apr' | 'apr7d' | 'apr30d' | 'volume1d' | 'fees7d';
+  sortOrder?: 'asc' | 'desc';
+  minTvl?: number;
+}): Promise<{ pools: (V4Pool & {
+  fees7dUsd: number | null;
+  fees30dUsd: number | null;
+  apr7d: number | null;
+  apr30d: number | null;
+  suggestedRangeFull: SuggestedRange | null;
+  suggestedRangeWide: SuggestedRange | null;
+  suggestedRangeConcentrated: SuggestedRange | null;
+  positionCount: number;
+})[]; total: number }> {
+  if (!pool) return { pools: [], total: 0 };
+
+  const {
+    page = 1,
+    limit = 20,
+    sortBy = 'apr',
+    sortOrder = 'desc',
+    minTvl,
+  } = options;
+
+  const offset = (page - 1) * Math.min(limit, 100);
+  const safeLimit = Math.min(limit, 100);
+
+  const sortColumnMap: Record<string, string> = {
+    tvl: 'tvl_usd',
+    apr: 'pool_apr',
+    apr7d: 'apr_7d',
+    apr30d: 'apr_30d',
+    volume1d: 'volume_1d_usd',
+    fees7d: 'fees_7d_usd',
+  };
+  const sortColumn = sortColumnMap[sortBy] || 'pool_apr';
+  const order = sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+  const conditions: string[] = ['chain_id = $1'];
+  const params: unknown[] = [8453];
+  let paramIdx = 2;
+
+  if (minTvl !== undefined && minTvl > 0) {
+    conditions.push(`tvl_usd >= $${paramIdx}`);
+    params.push(minTvl);
+    paramIdx++;
+  }
+
+  const whereClause = `WHERE ${conditions.join(' AND ')}`;
+
+  try {
+    const countResult = await timedQuery(
+      pool,
+      `SELECT COUNT(*) FROM v4_pools ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].count, 10);
+
+    const queryParams = [...params, safeLimit, offset];
+    const result = await timedQuery(
+      pool,
+      `SELECT id, chain_id, currency0, currency1, token0_symbol, token1_symbol,
+              token0_logo, token1_logo, token0_decimals, token1_decimals,
+              fee, tick_spacing, hooks, tvl_usd, volume_1d_usd, volume_30d_usd,
+              fees_1d_usd, pool_apr, reward_apr,
+              fees_7d_usd, fees_30d_usd, apr_7d, apr_30d,
+              suggested_range_full, suggested_range_wide, suggested_range_concentrated,
+              position_count,
+              last_synced_at, created_at
+       FROM v4_pools
+       ${whereClause}
+       ORDER BY ${sortColumn} ${order} NULLS LAST
+       LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
+      queryParams
+    );
+
+    const pools = result.rows.map(row => ({
+      id: row.id,
+      chainId: row.chain_id,
+      currency0: row.currency0,
+      currency1: row.currency1,
+      token0Symbol: row.token0_symbol || 'UNKNOWN',
+      token1Symbol: row.token1_symbol || 'UNKNOWN',
+      token0Logo: row.token0_logo,
+      token1Logo: row.token1_logo,
+      token0Decimals: row.token0_decimals || 18,
+      token1Decimals: row.token1_decimals || 18,
+      fee: row.fee,
+      tickSpacing: row.tick_spacing,
+      hooks: row.hooks,
+      tvlUsd: parseFloat(row.tvl_usd) || 0,
+      volume1dUsd: parseFloat(row.volume_1d_usd) || 0,
+      volume30dUsd: parseFloat(row.volume_30d_usd) || 0,
+      fees1dUsd: parseFloat(row.fees_1d_usd) || 0,
+      poolApr: parseFloat(row.pool_apr) || 0,
+      rewardApr: row.reward_apr ? parseFloat(row.reward_apr) : null,
+      fees7dUsd: row.fees_7d_usd ? parseFloat(row.fees_7d_usd) : null,
+      fees30dUsd: row.fees_30d_usd ? parseFloat(row.fees_30d_usd) : null,
+      apr7d: row.apr_7d ? parseFloat(row.apr_7d) : null,
+      apr30d: row.apr_30d ? parseFloat(row.apr_30d) : null,
+      suggestedRangeFull: row.suggested_range_full || null,
+      suggestedRangeWide: row.suggested_range_wide || null,
+      suggestedRangeConcentrated: row.suggested_range_concentrated || null,
+      positionCount: row.position_count || 0,
+      lastSyncedAt: row.last_synced_at,
+      createdAt: row.created_at,
+    }));
+
+    return { pools, total };
+  } catch (error) {
+    dbLogger.error({ error }, 'Failed to get leaderboard pools');
+    return { pools: [], total: 0 };
+  }
+}
+
+/**
+ * Update v4_pools with leaderboard-specific metrics (7d/30d fees, APR, suggested ranges).
+ */
+export async function updatePoolLeaderboardMetrics(
+  poolId: string,
+  metrics: {
+    fees7dUsd?: number;
+    fees30dUsd?: number;
+    apr7d?: number;
+    apr30d?: number;
+    suggestedRangeFull?: SuggestedRange;
+    suggestedRangeWide?: SuggestedRange;
+    suggestedRangeConcentrated?: SuggestedRange;
+    positionCount?: number;
+  }
+): Promise<void> {
+  if (!pool) return;
+
+  try {
+    await pool.query(
+      `UPDATE v4_pools SET
+        fees_7d_usd = COALESCE($2, fees_7d_usd),
+        fees_30d_usd = COALESCE($3, fees_30d_usd),
+        apr_7d = COALESCE($4, apr_7d),
+        apr_30d = COALESCE($5, apr_30d),
+        suggested_range_full = COALESCE($6, suggested_range_full),
+        suggested_range_wide = COALESCE($7, suggested_range_wide),
+        suggested_range_concentrated = COALESCE($8, suggested_range_concentrated),
+        position_count = COALESCE($9, position_count),
+        last_synced_at = NOW()
+       WHERE LOWER(id) = LOWER($1)`,
+      [
+        poolId,
+        metrics.fees7dUsd ?? null,
+        metrics.fees30dUsd ?? null,
+        metrics.apr7d ?? null,
+        metrics.apr30d ?? null,
+        metrics.suggestedRangeFull ? JSON.stringify(metrics.suggestedRangeFull) : null,
+        metrics.suggestedRangeWide ? JSON.stringify(metrics.suggestedRangeWide) : null,
+        metrics.suggestedRangeConcentrated ? JSON.stringify(metrics.suggestedRangeConcentrated) : null,
+        metrics.positionCount ?? null,
+      ]
+    );
+  } catch (error) {
+    dbLogger.error({ error, poolId }, 'Failed to update pool leaderboard metrics');
   }
 }
 
