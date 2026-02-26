@@ -4,11 +4,12 @@ import {
   upsertTopPositions,
   deleteStaleTopPositions,
   updatePoolLeaderboardMetrics,
+  getBatchTokenPricesFromDb,
   type TopPosition,
   type SuggestedRange,
 } from '../services/database.js';
 import { getAllPositionsWithPool } from '../services/subgraph.js';
-import { getTokenPriceUSD, liquidityToAmounts } from '../services/price.js';
+import { liquidityToAmounts } from '../services/price.js';
 import { fetchGraphPools } from '../services/graph-client.js';
 import { getPoolDayDataFromDb } from '../services/database.js';
 
@@ -77,19 +78,14 @@ export async function syncTopPositions(): Promise<void> {
       }
     }
 
-    // Fetch prices for all unique tokens
+    // Fetch prices from DB cache (populated by syncTokenPrices cron — no RPC/API calls)
     const priceMap = new Map<string, number>();
-    const pricePromises = Array.from(tokenAddresses).map(async (addr) => {
-      try {
-        const price = await getTokenPriceUSD(addr, 8453);
-        if (price.priceUSD > 0) {
-          priceMap.set(addr, price.priceUSD);
-        }
-      } catch (err) {
-        // Price fetch failures are non-fatal
+    const dbPrices = await getBatchTokenPricesFromDb(Array.from(tokenAddresses), 8453);
+    for (const [addr, dbPrice] of dbPrices) {
+      if (dbPrice.priceUsd != null && dbPrice.priceUsd > 0) {
+        priceMap.set(addr, dbPrice.priceUsd);
       }
-    });
-    await Promise.all(pricePromises);
+    }
 
     syncLogger.info({ pricesFound: priceMap.size, tokensTotal: tokenAddresses.size }, 'Fetched token prices');
 
