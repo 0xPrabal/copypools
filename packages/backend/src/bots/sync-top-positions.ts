@@ -211,14 +211,18 @@ async function buildPriceMap(
         const t1Price = parseFloat(gp.token1Price || '0'); // price of token1 in terms of token0
 
         if (t0Price > 0 && priceMap.has(t1) && !priceMap.has(t0)) {
-          // token0_usd = token0Price_in_token1 * token1_usd
-          priceMap.set(t0, t0Price * priceMap.get(t1)!);
-          derivedCount++;
+          const derived = t0Price * priceMap.get(t1)!;
+          if (derived > 0 && derived < 1_000_000) { // Cap at $1M per token
+            priceMap.set(t0, derived);
+            derivedCount++;
+          }
         }
         if (t1Price > 0 && priceMap.has(t0) && !priceMap.has(t1)) {
-          // token1_usd = token1Price_in_token0 * token0_usd
-          priceMap.set(t1, t1Price * priceMap.get(t0)!);
-          derivedCount++;
+          const derived = t1Price * priceMap.get(t0)!;
+          if (derived > 0 && derived < 1_000_000) { // Cap at $1M per token
+            priceMap.set(t1, derived);
+            derivedCount++;
+          }
         }
       }
     }
@@ -386,6 +390,12 @@ export async function syncTopPositions(): Promise<void> {
           ? (pnlUsd / depositedValueUsd) * (365 / ageDays) * 100
           : 0;
 
+        // Skip positions with non-finite values (NaN/Infinity from bad price data)
+        if (!isFinite(positionValueUsd) || !isFinite(feeApr) || !isFinite(totalApr) || !isFinite(pnlUsd) || !isFinite(roi)) {
+          skipReasons.noPrice++;
+          continue;
+        }
+
         // In-range check
         const inRange = currentTick >= tickLower && currentTick < tickUpper;
 
@@ -408,16 +418,16 @@ export async function syncTopPositions(): Promise<void> {
           currentTick,
           sqrtPriceX96: sqrtPriceX96Str,
           inRange,
-          positionValueUsd: Math.round(positionValueUsd * 100) / 100,
+          positionValueUsd: Math.min(Math.round(positionValueUsd * 100) / 100, 9999999999),
           depositedToken0: pos.depositedToken0 || '0',
           depositedToken1: pos.depositedToken1 || '0',
           collectedFeesToken0: pos.collectedFeesToken0 || '0',
           collectedFeesToken1: pos.collectedFeesToken1 || '0',
           pendingFeesUsd: 0,
-          feeApr: Math.round(feeApr * 100) / 100,
-          totalApr: Math.round(totalApr * 100) / 100,
-          pnlUsd: Math.round(pnlUsd * 100) / 100,
-          roi: Math.round(roi * 100) / 100,
+          feeApr: Math.max(-9999999, Math.min(Math.round(feeApr * 100) / 100, 9999999)),
+          totalApr: Math.max(-9999999, Math.min(Math.round(totalApr * 100) / 100, 9999999)),
+          pnlUsd: Math.max(-9999999999, Math.min(Math.round(pnlUsd * 100) / 100, 9999999999)),
+          roi: Math.max(-9999999, Math.min(Math.round(roi * 100) / 100, 9999999)),
           ageDays,
           compoundEnabled: false,
           rangeEnabled: false,
