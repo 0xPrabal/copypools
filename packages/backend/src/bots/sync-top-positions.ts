@@ -59,10 +59,11 @@ async function buildPoolDataMap(
   // Primary: Graph subgraph — paginate to fetch ALL pools (not just top 200)
   try {
     let graphSkip = 0;
-    const graphBatch = 200;
+    const graphBatch = 1000;
+    const MAX_GRAPH_POOLS = 5000; // Graph skip limit is 5000
     let hasMorePools = true;
-    while (hasMorePools) {
-      const graphPools = await fetchGraphPools(graphBatch, graphSkip, false);
+    while (hasMorePools && graphSkip < MAX_GRAPH_POOLS) {
+      const graphPools = await fetchGraphPools(graphBatch, graphSkip, false, 0);
       if (graphPools && graphPools.length > 0) {
         graphPoolsRaw.push(...graphPools);
         for (const gp of graphPools) {

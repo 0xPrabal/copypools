@@ -229,7 +229,7 @@ export async function fetchPoolsFromGecko(): Promise<Partial<V4Pool>[]> {
 // Fetch pools from The Graph decentralized network (Uniswap V4 Base subgraphs)
 export async function fetchPoolsFromSubgraph(): Promise<Partial<V4Pool>[]> {
   try {
-    const graphPools = await fetchGraphPools(100, 10, true);
+    const graphPools = await fetchGraphPools(100, 0, true, 10);
 
     if (graphPools.length === 0) {
       subgraphLogger.info('Graph returned no pools');

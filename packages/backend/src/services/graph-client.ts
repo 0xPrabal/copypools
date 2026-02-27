@@ -196,10 +196,11 @@ export interface GraphUniswapDayData {
  */
 export async function fetchGraphPools(
   first: number = 100,
-  minTxCount: number = 10,
+  skip: number = 0,
   includeDayData: boolean = true,
+  minTxCount: number = 10,
 ): Promise<GraphPool[]> {
-  const cacheKey = `pools:${first}:${minTxCount}:${includeDayData}`;
+  const cacheKey = `pools:${first}:${skip}:${minTxCount}:${includeDayData}`;
   const cached = getCached<GraphPool[]>(cacheKey);
   if (cached) return cached;
 
@@ -213,6 +214,7 @@ export async function fetchGraphPools(
   const query = `{
     pools(
       first: ${first}
+      skip: ${skip}
       orderBy: totalValueLockedUSD
       orderDirection: desc
       where: { txCount_gt: "${minTxCount}" }

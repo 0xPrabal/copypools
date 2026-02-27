@@ -255,7 +255,7 @@ export async function syncPoolHistoricalData(): Promise<void> {
 
   try {
     // Get top 10 pools from Graph (reduced from 50 to cut API credits ~5x)
-    const pools = await fetchGraphPools(10, 0, false);
+    const pools = await fetchGraphPools(10, 0, false, 0);
     if (!pools || pools.length === 0) {
       syncLogger.warn('No pools returned from Graph for historical sync');
       return;
