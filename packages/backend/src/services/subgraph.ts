@@ -356,38 +356,92 @@ export async function getAllPositions(first = 100, skip = 0, activeOnly = false)
 }
 
 /**
- * Get all positions with pool and token symbol data via JOINs
- * Used by top-positions to avoid empty symbol/fee fields
+ * Get all positions with pool and token symbol data.
+ * Uses separate SELECT * queries to avoid column naming issues with Ponder's onchainTable.
+ * Ponder may use camelCase or snake_case columns depending on version — SELECT * + toCamelCase
+ * is robust regardless.
  */
 export async function getAllPositionsWithPool(first = 100, skip = 0, activeOnly = false) {
-  let sql = `
-    SELECT
-      p.*,
-      pool.fee AS pool_fee,
-      pool.tick AS pool_tick,
-      pool.tick_spacing AS pool_tick_spacing,
-      pool.sqrt_price_x96 AS pool_sqrt_price_x96,
-      pool.token0_id AS token0_id,
-      pool.token1_id AS token1_id,
-      t0.symbol AS token0_symbol,
-      t0.decimals AS token0_decimals,
-      t1.symbol AS token1_symbol,
-      t1.decimals AS token1_decimals
-    FROM position p
-    LEFT JOIN pool ON p.pool_id = pool.id
-    LEFT JOIN token t0 ON pool.token0_id = t0.id
-    LEFT JOIN token t1 ON pool.token1_id = t1.id
-  `;
-
+  // Step 1: Fetch positions
+  let posSql = `SELECT * FROM position`;
   if (activeOnly) {
-    sql += ` WHERE p.liquidity != '0' AND p.closed_at_timestamp IS NULL`;
+    posSql += ` WHERE liquidity != '0' AND closed_at_timestamp IS NULL`;
+  }
+  posSql += ` ORDER BY created_at_timestamp DESC LIMIT $1 OFFSET $2`;
+
+  const positions = await queryWithRetry<any>(posSql, [first, skip]);
+  if (positions.length === 0) {
+    return { positions: { items: [] } };
   }
 
-  sql += ` ORDER BY p.created_at_timestamp DESC LIMIT $1 OFFSET $2`;
+  // Step 2: Collect unique pool IDs and fetch pools
+  const poolIds = [...new Set(positions.map((p: any) => p.poolId).filter(Boolean))];
+  let poolMap = new Map<string, any>();
 
-  const positions = await queryWithRetry<any>(sql, [first, skip]);
+  if (poolIds.length > 0) {
+    try {
+      const pools = await queryWithRetry<any>(
+        `SELECT * FROM pool WHERE id = ANY($1)`,
+        [poolIds]
+      );
+      for (const pool of pools) {
+        poolMap.set(pool.id, pool);
+      }
+    } catch (e) {
+      subgraphLogger.warn({ error: (e as Error).message }, 'Failed to fetch pools for position enrichment');
+    }
+  }
 
-  return { positions: { items: positions } };
+  // Step 3: Collect unique token IDs from pools and fetch tokens
+  const tokenIds = new Set<string>();
+  for (const pool of poolMap.values()) {
+    if (pool.token0Id) tokenIds.add(pool.token0Id);
+    if (pool.token1Id) tokenIds.add(pool.token1Id);
+  }
+
+  let tokenMap = new Map<string, any>();
+  if (tokenIds.size > 0) {
+    try {
+      const tokens = await queryWithRetry<any>(
+        `SELECT * FROM token WHERE id = ANY($1)`,
+        [Array.from(tokenIds)]
+      );
+      for (const token of tokens) {
+        tokenMap.set(token.id, token);
+      }
+    } catch (e) {
+      subgraphLogger.warn({ error: (e as Error).message }, 'Failed to fetch tokens for position enrichment');
+    }
+  }
+
+  // Step 4: Join in JS — add pool and token fields with prefixed keys
+  const enriched = positions.map((pos: any) => {
+    const pool = poolMap.get(pos.poolId);
+    const token0 = pool ? tokenMap.get(pool.token0Id) : null;
+    const token1 = pool ? tokenMap.get(pool.token1Id) : null;
+
+    return {
+      ...pos,
+      // Pool fields (prefixed to avoid conflicts)
+      poolFee: pool?.fee ?? null,
+      poolTick: pool?.tick ?? null,
+      poolTickSpacing: pool?.tickSpacing ?? null,
+      poolSqrtPriceX96: pool?.sqrtPriceX96 ?? null,
+      // Token addresses from pool
+      token0Id: pool?.token0Id ?? null,
+      token1Id: pool?.token1Id ?? null,
+      // Token metadata
+      token0Symbol: token0?.symbol ?? null,
+      token0Decimals: token0?.decimals ?? 18,
+      token1Symbol: token1?.symbol ?? null,
+      token1Decimals: token1?.decimals ?? 18,
+      // Token prices from Ponder (fallback when Graph price sync is down)
+      token0PriceUsd: token0?.priceUsd ?? token0?.priceUSD ?? null,
+      token1PriceUsd: token1?.priceUsd ?? token1?.priceUSD ?? null,
+    };
+  });
+
+  return { positions: { items: enriched } };
 }
 
 /**

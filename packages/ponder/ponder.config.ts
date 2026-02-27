@@ -3,23 +3,17 @@ import { V4UtilsAbi } from "./abis/V4Utils";
 import { V4CompoundorAbi } from "./abis/V4Compoundor";
 import { V4AutoRangeAbi } from "./abis/V4AutoRange";
 import { V4AutoExitAbi } from "./abis/V4AutoExit";
-import { PositionManagerAbi } from "./abis/PositionManager";
-
 // ============ Base Mainnet ============
+// Only index OUR 4 contracts — NOT PositionManager (indexes ALL V4 positions = 90%+ of RPC usage)
+// Position ownership is handled by backend's position-indexer.ts + Graph subgraph
 const BASE_CONTRACTS = {
   V4_UTILS: process.env.V4_UTILS_ADDRESS || "0x8d81Bb4daA4c8D6ad99a741d1E7C9563EAFda423",
   V4_COMPOUNDOR: process.env.V4_COMPOUNDOR_ADDRESS || "0x2056eDc7590B42b5464f357589810fA3441216E3",
   V4_AUTO_RANGE: process.env.V4_AUTO_RANGE_ADDRESS || "0xB6E684266259d172a8CC85F524ab2E845886242b",
   V4_AUTO_EXIT: process.env.V4_AUTO_EXIT_ADDRESS || "0xb9ab855339036df10790728A773dD3a8c9e538B0",
-  // Uniswap V4 PositionManager - indexes ALL position ownership via Transfer events
-  POSITION_MANAGER: process.env.POSITION_MANAGER_ADDRESS || "0x7C5f5A4bBd8fD63184577525326123B519429bDc",
 };
 // Start from deployment block (Feb 19, 2026)
 const BASE_START_BLOCK = 42359600;
-
-// PositionManager start block - use same as deployment block to avoid heavy backfill
-// Older positions are fetched via Alchemy NFT API or RPC fallback
-const POSITION_MANAGER_START_BLOCK = BASE_START_BLOCK;
 
 // Base Mainnet RPC URLs - Prioritize paid/reliable RPCs first
 // IMPORTANT: Keep list short to avoid spreading requests across too many endpoints
@@ -43,7 +37,12 @@ export default createConfig({
       id: 8453,
       rpc: BASE_RPCS.length > 0 ? BASE_RPCS : "https://mainnet.base.org",
       pollingInterval: 120_000, // Poll every 2 minutes to reduce RPC pressure
-      maxRequestsPerSecond: 1, // Throttled to avoid Alchemy concurrent request limits
+      maxRequestsPerSecond: 3, // Increased from 1 since each request now covers 2000 blocks
+      // CRITICAL: Without this, Ponder scans block-by-block (1 getLogs per block per event).
+      // With 5 contracts × ~10 events × 440K blocks = millions of calls.
+      // Setting to 2000 reduces getLogs calls by ~2000x during backfill.
+      // QuikNode and Base mainnet both support 2000+ block ranges.
+      ethGetLogsBlockRange: 2000,
     },
   },
   contracts: {
@@ -71,15 +70,6 @@ export default createConfig({
       abi: V4AutoExitAbi,
       address: BASE_CONTRACTS.V4_AUTO_EXIT as `0x${string}`,
       startBlock: BASE_START_BLOCK,
-    },
-    // PositionManager - indexes position ownership via ERC721 Transfer events
-    // Only indexes recent blocks (~50k) to avoid slow initial sync
-    // Older positions are fetched via Alchemy NFT API or RPC fallback
-    PositionManager: {
-      chain: "base",
-      abi: PositionManagerAbi,
-      address: BASE_CONTRACTS.POSITION_MANAGER as `0x${string}`,
-      startBlock: POSITION_MANAGER_START_BLOCK,
     },
   },
 });
