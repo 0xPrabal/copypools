@@ -129,14 +129,27 @@ async function buildPriceMap(
 ): Promise<Map<string, number>> {
   const priceMap = new Map<string, number>();
 
-  // Source 1: Graph subgraph — direct query for token prices
+  // Source 1: Graph subgraph — direct query for token prices (batched to avoid query size limits)
   try {
-    const graphPrices = await fetchTokenPrices(Array.from(tokenAddresses));
-    if (graphPrices && graphPrices.size > 0) {
-      for (const [addr, price] of graphPrices) {
-        if (price > 0) priceMap.set(addr, price);
+    const allAddrs = Array.from(tokenAddresses);
+    const BATCH_SIZE = 100;
+    let graphTotal = 0;
+    for (let i = 0; i < allAddrs.length; i += BATCH_SIZE) {
+      const batch = allAddrs.slice(i, i + BATCH_SIZE);
+      try {
+        const graphPrices = await fetchTokenPrices(batch);
+        if (graphPrices && graphPrices.size > 0) {
+          for (const [addr, price] of graphPrices) {
+            if (price > 0) priceMap.set(addr, price);
+            graphTotal++;
+          }
+        }
+      } catch {
+        // Individual batch failed, continue with next
       }
-      syncLogger.info({ count: priceMap.size }, 'Loaded prices from Graph subgraph');
+    }
+    if (graphTotal > 0) {
+      syncLogger.info({ count: graphTotal }, 'Loaded prices from Graph subgraph');
     }
   } catch (error) {
     syncLogger.warn({ error: (error as Error).message }, 'Graph subgraph unavailable for prices');
@@ -292,7 +305,8 @@ export async function syncTopPositions(): Promise<void> {
     // Step 2: Build pool data map — Graph subgraph is primary, Ponder is fallback
     const poolDataMap = await buildPoolDataMap(allPositions);
 
-    // Step 3: Collect token addresses and build price map (multi-source)
+    // Step 3: Collect token addresses ONLY from positions that have pool data
+    // (positions without pool data will be skipped as "noPool" anyway)
     const tokenAddresses = new Set<string>();
     for (const pos of allPositions) {
       const poolId = (pos.poolId || '').toLowerCase();
@@ -300,9 +314,6 @@ export async function syncTopPositions(): Promise<void> {
       if (poolData) {
         tokenAddresses.add(poolData.token0Address);
         tokenAddresses.add(poolData.token1Address);
-      } else if (pos.token0Id || pos.token1Id) {
-        if (pos.token0Id) tokenAddresses.add(pos.token0Id.toLowerCase());
-        if (pos.token1Id) tokenAddresses.add(pos.token1Id.toLowerCase());
       }
     }
     // Remove empty string
