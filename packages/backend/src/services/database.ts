@@ -589,7 +589,7 @@ export async function initializeDatabase(): Promise<void> {
         token_id VARCHAR(78) NOT NULL,
         chain_id INTEGER NOT NULL DEFAULT 8453,
         owner VARCHAR(42) NOT NULL,
-        pool_id VARCHAR(66),
+        pool_id VARCHAR(256),
         token0_address VARCHAR(42),
         token1_address VARCHAR(42),
         token0_symbol VARCHAR(32),
@@ -635,6 +635,20 @@ export async function initializeDatabase(): Promise<void> {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_top_pos_fees ON top_positions(fee_apr DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_top_pos_pool ON top_positions(pool_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_top_pos_range ON top_positions(in_range) WHERE in_range = true`);
+
+    // Migrate top_positions.pool_id from VARCHAR(66) to VARCHAR(256) for Ponder format pool IDs
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'top_positions' AND column_name = 'pool_id'
+          AND character_maximum_length < 256
+        ) THEN
+          ALTER TABLE top_positions ALTER COLUMN pool_id TYPE VARCHAR(256);
+        END IF;
+      END $$
+    `);
 
     // Add leaderboard columns to v4_pools if they don't exist
     await pool.query(`
