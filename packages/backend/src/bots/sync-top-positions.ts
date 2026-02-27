@@ -62,7 +62,7 @@ async function buildPoolDataMap(
     if (graphPools && graphPools.length > 0) {
       graphPoolsRaw = graphPools; // Store for price derivation
       for (const gp of graphPools) {
-        poolMap.set(gp.id.toLowerCase(), {
+        const poolData = {
           tick: parseInt(gp.tick || '0'),
           sqrtPriceX96: gp.sqrtPrice || '0',
           fee: parseInt(gp.feeTier || '0'),
@@ -73,7 +73,12 @@ async function buildPoolDataMap(
           token1Symbol: gp.token1.symbol,
           token0Decimals: parseInt(gp.token0.decimals || '18'),
           token1Decimals: parseInt(gp.token1.decimals || '18'),
-        });
+        };
+        // Index by Graph pool ID (hash)
+        poolMap.set(gp.id.toLowerCase(), poolData);
+        // Also index by Ponder pool ID format: "token0-token1-fee"
+        const ponderPoolId = `${gp.token0.id.toLowerCase()}-${gp.token1.id.toLowerCase()}-${gp.feeTier}`;
+        poolMap.set(ponderPoolId, poolData);
       }
       syncLogger.info({ count: poolMap.size }, 'Loaded pool data from Graph subgraph');
     }
