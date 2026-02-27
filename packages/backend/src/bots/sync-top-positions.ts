@@ -37,6 +37,9 @@ let isSyncing = false;
  * Build pool data map from Graph subgraph (primary) with Ponder fallback.
  * Graph provides: tick, sqrtPrice, fee, tickSpacing, token0/token1 addresses + symbols + decimals
  */
+// Store raw Graph pool data for price derivation
+let graphPoolsRaw: any[] = [];
+
 async function buildPoolDataMap(
   ponderPositions: any[]
 ): Promise<Map<string, {
@@ -57,6 +60,7 @@ async function buildPoolDataMap(
   try {
     const graphPools = await fetchGraphPools(200, 0, false);
     if (graphPools && graphPools.length > 0) {
+      graphPoolsRaw = graphPools; // Store for price derivation
       for (const gp of graphPools) {
         poolMap.set(gp.id.toLowerCase(), {
           tick: parseInt(gp.tick || '0'),
@@ -189,10 +193,39 @@ async function buildPriceMap(
     syncLogger.warn({ count: fallbackCount }, 'Used hardcoded fallback prices for well-known tokens');
   }
 
+  // Source 5: Derive prices from Graph pool pair data (token0Price/token1Price)
+  // If we know one token's USD price and the pool has a relative price, derive the other
+  if (graphPoolsRaw.length > 0) {
+    let derivedCount = 0;
+    // Multiple passes to propagate prices through pool pairs
+    for (let pass = 0; pass < 3; pass++) {
+      for (const gp of graphPoolsRaw) {
+        const t0 = gp.token0.id.toLowerCase();
+        const t1 = gp.token1.id.toLowerCase();
+        const t0Price = parseFloat(gp.token0Price || '0'); // price of token0 in terms of token1
+        const t1Price = parseFloat(gp.token1Price || '0'); // price of token1 in terms of token0
+
+        if (t0Price > 0 && priceMap.has(t1) && !priceMap.has(t0)) {
+          // token0_usd = token0Price_in_token1 * token1_usd
+          priceMap.set(t0, t0Price * priceMap.get(t1)!);
+          derivedCount++;
+        }
+        if (t1Price > 0 && priceMap.has(t0) && !priceMap.has(t1)) {
+          // token1_usd = token1Price_in_token0 * token0_usd
+          priceMap.set(t1, t1Price * priceMap.get(t0)!);
+          derivedCount++;
+        }
+      }
+    }
+    if (derivedCount > 0) {
+      syncLogger.info({ count: derivedCount }, 'Derived token prices from Graph pool pair data');
+    }
+  }
+
   syncLogger.info({
     pricesFound: priceMap.size,
     tokensTotal: tokenAddresses.size,
-    samplePrices: Array.from(priceMap.entries()).slice(0, 5).map(([k, v]) => `${k.slice(0, 10)}=$${v.toFixed(2)}`),
+    samplePrices: Array.from(priceMap.entries()).slice(0, 8).map(([k, v]) => `${k.slice(0, 10)}=$${v.toFixed(2)}`),
   }, 'Price map built');
 
   return priceMap;
@@ -217,6 +250,7 @@ export async function syncTopPositions(): Promise<void> {
 
   try {
     syncLogger.info('Starting top positions sync...');
+    graphPoolsRaw = []; // Reset for fresh data
 
     // Step 1: Fetch all active positions from Ponder
     // Ponder is the ONLY source for position-specific data (ticks, liquidity, deposited/collected)
@@ -270,11 +304,12 @@ export async function syncTopPositions(): Promise<void> {
     // Step 4: Calculate metrics for each position
     const now = Math.floor(Date.now() / 1000);
     const candidates: TopPosition[] = [];
+    const skipReasons = { zeroLiq: 0, noPool: 0, zeroSqrt: 0, noTokens: 0, noPrice: 0, lowValue: 0, youngAge: 0 };
 
     for (const pos of allPositions) {
       try {
         const liquidity = BigInt(pos.liquidity || '0');
-        if (liquidity === 0n) continue;
+        if (liquidity === 0n) { skipReasons.zeroLiq++; continue; }
 
         const tickLower = pos.tickLower;
         const tickUpper = pos.tickUpper;
@@ -282,10 +317,11 @@ export async function syncTopPositions(): Promise<void> {
 
         // Get pool data from our multi-source pool map
         const poolData = poolDataMap.get(poolId);
+        if (!poolData && !pos.poolTick && !pos.poolSqrtPriceX96) { skipReasons.noPool++; continue; }
         const currentTick = poolData?.tick ?? pos.poolTick ?? 0;
         const sqrtPriceX96Str = poolData?.sqrtPriceX96 || pos.poolSqrtPriceX96 || '0';
         const sqrtPriceX96 = BigInt(sqrtPriceX96Str);
-        if (sqrtPriceX96 === 0n) continue;
+        if (sqrtPriceX96 === 0n) { skipReasons.zeroSqrt++; continue; }
 
         // Token addresses and metadata from pool data
         const token0Address = poolData?.token0Address || (pos.token0Id || '').toLowerCase();
@@ -297,7 +333,7 @@ export async function syncTopPositions(): Promise<void> {
         const fee = poolData?.fee || pos.poolFee || null;
         const tickSpacing = poolData?.tickSpacing || pos.poolTickSpacing || null;
 
-        if (!token0Address && !token1Address) continue;
+        if (!token0Address && !token1Address) { skipReasons.noTokens++; continue; }
 
         // Calculate token amounts from liquidity
         const { amount0, amount1 } = liquidityToAmounts(
@@ -310,18 +346,18 @@ export async function syncTopPositions(): Promise<void> {
         // Get prices from our multi-source price map
         const price0 = priceMap.get(token0Address) || 0;
         const price1 = priceMap.get(token1Address) || 0;
-        if (price0 === 0 && price1 === 0) continue;
+        if (price0 === 0 && price1 === 0) { skipReasons.noPrice++; continue; }
 
         // Calculate position value
         const amount0Float = Number(amount0) / (10 ** token0Decimals);
         const amount1Float = Number(amount1) / (10 ** token1Decimals);
         const positionValueUsd = (amount0Float * price0) + (amount1Float * price1);
-        if (positionValueUsd < MIN_POSITION_VALUE_USD) continue;
+        if (positionValueUsd < MIN_POSITION_VALUE_USD) { skipReasons.lowValue++; continue; }
 
         // Calculate age
         const createdAt = parseInt(pos.createdAtTimestamp || '0');
         const ageDays = createdAt > 0 ? Math.floor((now - createdAt) / 86400) : 0;
-        if (ageDays < MIN_AGE_DAYS) continue;
+        if (ageDays < MIN_AGE_DAYS) { skipReasons.youngAge++; continue; }
 
         // Calculate deposited value
         const deposited0 = Number(BigInt(pos.depositedToken0 || '0')) / (10 ** token0Decimals);
@@ -394,7 +430,7 @@ export async function syncTopPositions(): Promise<void> {
       }
     }
 
-    syncLogger.info({ candidates: candidates.length }, 'Calculated metrics for positions');
+    syncLogger.info({ candidates: candidates.length, skipReasons }, 'Calculated metrics for positions');
 
     if (candidates.length === 0) {
       syncLogger.warn('No qualifying positions after filtering');
