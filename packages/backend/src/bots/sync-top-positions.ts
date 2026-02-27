@@ -56,40 +56,49 @@ async function buildPoolDataMap(
 }>> {
   const poolMap = new Map<string, any>();
 
-  // Primary: Graph subgraph — has tick, sqrtPrice, fee, tickSpacing, token metadata
+  // Primary: Graph subgraph — paginate to fetch ALL pools (not just top 200)
   try {
-    const graphPools = await fetchGraphPools(200, 0, false);
-    if (graphPools && graphPools.length > 0) {
-      graphPoolsRaw = graphPools; // Store for price derivation
-      for (const gp of graphPools) {
-        const poolData = {
-          tick: parseInt(gp.tick || '0'),
-          sqrtPriceX96: gp.sqrtPrice || '0',
-          fee: parseInt(gp.feeTier || '0'),
-          tickSpacing: parseInt(gp.tickSpacing || '10'),
-          token0Address: gp.token0.id.toLowerCase(),
-          token1Address: gp.token1.id.toLowerCase(),
-          token0Symbol: gp.token0.symbol,
-          token1Symbol: gp.token1.symbol,
-          token0Decimals: parseInt(gp.token0.decimals || '18'),
-          token1Decimals: parseInt(gp.token1.decimals || '18'),
-        };
-        // Index by Graph pool ID (hash)
-        poolMap.set(gp.id.toLowerCase(), poolData);
-        // Also index by Ponder pool ID format: "token0-token1-fee"
-        const ponderPoolId = `${gp.token0.id.toLowerCase()}-${gp.token1.id.toLowerCase()}-${gp.feeTier}`;
-        poolMap.set(ponderPoolId, poolData);
+    let graphSkip = 0;
+    const graphBatch = 200;
+    let hasMorePools = true;
+    while (hasMorePools) {
+      const graphPools = await fetchGraphPools(graphBatch, graphSkip, false);
+      if (graphPools && graphPools.length > 0) {
+        graphPoolsRaw.push(...graphPools);
+        for (const gp of graphPools) {
+          const poolData = {
+            tick: parseInt(gp.tick || '0'),
+            sqrtPriceX96: gp.sqrtPrice || '0',
+            fee: parseInt(gp.feeTier || '0'),
+            tickSpacing: parseInt(gp.tickSpacing || '10'),
+            token0Address: gp.token0.id.toLowerCase(),
+            token1Address: gp.token1.id.toLowerCase(),
+            token0Symbol: gp.token0.symbol,
+            token1Symbol: gp.token1.symbol,
+            token0Decimals: parseInt(gp.token0.decimals || '18'),
+            token1Decimals: parseInt(gp.token1.decimals || '18'),
+          };
+          // Index by Graph pool ID (hash)
+          poolMap.set(gp.id.toLowerCase(), poolData);
+          // Also index by Ponder pool ID format: "token0-token1-fee"
+          const ponderPoolId = `${gp.token0.id.toLowerCase()}-${gp.token1.id.toLowerCase()}-${gp.feeTier}`;
+          poolMap.set(ponderPoolId, poolData);
+        }
+        graphSkip += graphBatch;
+        hasMorePools = graphPools.length === graphBatch;
+      } else {
+        hasMorePools = false;
       }
-      syncLogger.info({ count: poolMap.size }, 'Loaded pool data from Graph subgraph');
+    }
+    if (graphPoolsRaw.length > 0) {
+      syncLogger.info({ graphPools: graphPoolsRaw.length, mapEntries: poolMap.size }, 'Loaded pool data from Graph subgraph');
     }
   } catch (error) {
     syncLogger.warn({ error: (error as Error).message }, 'Graph subgraph unavailable for pool data');
   }
 
   // Fallback: Fill gaps from Ponder position data (already joined with pool + token)
-  if (poolMap.size === 0) {
-    syncLogger.warn('Graph returned no pools, using Ponder pool data as fallback');
-  }
+  let ponderFallbackCount = 0;
 
   for (const pos of ponderPositions) {
     const poolId = (pos.poolId || '').toLowerCase();
@@ -109,7 +118,12 @@ async function buildPoolDataMap(
         token0Decimals: pos.token0Decimals || 18,
         token1Decimals: pos.token1Decimals || 18,
       });
+      ponderFallbackCount++;
     }
+  }
+
+  if (ponderFallbackCount > 0) {
+    syncLogger.info({ count: ponderFallbackCount }, 'Added pool data from Ponder fallback');
   }
 
   syncLogger.info({ totalPools: poolMap.size }, 'Pool data map built');
