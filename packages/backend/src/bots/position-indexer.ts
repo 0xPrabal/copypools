@@ -17,8 +17,6 @@ interface IndexerState {
   chainId: number;
 }
 
-// Reuse the shared public client from blockchain service (with multicall batching and rate limiting)
-
 // Get indexer state from database
 async function getIndexerState(): Promise<IndexerState | null> {
   const pool = database.pool;
@@ -152,7 +150,12 @@ async function processTransferEvents(
   }
 }
 
-// Main indexing loop
+// Cap on how many chunks to process per startup to limit RPC usage
+// 10 chunks × 50k blocks = 500k blocks max per startup (~1 day on Base)
+const MAX_CATCHUP_CHUNKS = 10;
+const CHUNK_SIZE = 50000n; // 50k blocks per chunk (larger to reduce RPC calls)
+
+// Main indexing loop — only catches up recent blocks, NOT full history
 async function runIndexer(): Promise<void> {
   if (!database.isDatabaseAvailable()) {
     indexerLogger.warn('Database not available - position indexer disabled');
@@ -164,24 +167,49 @@ async function runIndexer(): Promise<void> {
   // Get current chain block
   const latestBlock = await publicClient.getBlockNumber();
 
-  // Get start block from state or use V4 PositionManager deployment block
-  // V4 was deployed on Base mainnet around block 39369847 (Jan 2025)
-  // This ensures we catch ALL positions, not just recent ones
-  const V4_DEPLOYMENT_BLOCK = 39369847n;
-  let state = await getIndexerState();
-  let currentBlock = state?.lastIndexedBlock || V4_DEPLOYMENT_BLOCK;
+  // Get saved state from DB
+  const state = await getIndexerState();
+
+  // If no saved state, DON'T scan from deployment block (that's ~17M blocks = 1700+ RPC calls).
+  // Ponder is the primary source for historical positions.
+  // This indexer only needs to track RECENT transfers as a backup layer.
+  // Start from (latest - 100k blocks) which covers ~2-3 days on Base.
+  const RECENT_LOOKBACK = 100000n;
+  let currentBlock: bigint;
+
+  if (state?.lastIndexedBlock) {
+    currentBlock = state.lastIndexedBlock;
+
+    // Safety: if saved state is way too far behind (>500k blocks), skip to recent
+    const gap = latestBlock - currentBlock;
+    if (gap > 500000n) {
+      indexerLogger.warn(
+        { savedBlock: currentBlock.toString(), latestBlock: latestBlock.toString(), gap: gap.toString() },
+        'Saved state too far behind, skipping to recent blocks (Ponder covers history)'
+      );
+      currentBlock = latestBlock - RECENT_LOOKBACK;
+      await saveIndexerState(currentBlock);
+    }
+  } else {
+    // No saved state — start from recent blocks only
+    currentBlock = latestBlock > RECENT_LOOKBACK ? latestBlock - RECENT_LOOKBACK : 0n;
+    indexerLogger.info(
+      { startBlock: currentBlock.toString(), latestBlock: latestBlock.toString() },
+      'No saved state — starting from recent blocks only (Ponder covers historical positions)'
+    );
+  }
 
   indexerLogger.info(
     { startBlock: currentBlock.toString(), latestBlock: latestBlock.toString() },
-    'Position indexer starting from block'
+    'Position indexer catching up'
   );
 
-  // Process in chunks
-  const chunkSize = 10000n;
+  // Process in chunks with a cap to limit RPC burst on startup
   let totalEvents = 0;
+  let chunksProcessed = 0;
 
-  while (currentBlock < latestBlock) {
-    const toBlock = currentBlock + chunkSize > latestBlock ? latestBlock : currentBlock + chunkSize;
+  while (currentBlock < latestBlock && chunksProcessed < MAX_CATCHUP_CHUNKS) {
+    const toBlock = currentBlock + CHUNK_SIZE > latestBlock ? latestBlock : currentBlock + CHUNK_SIZE;
 
     try {
       const eventCount = await processTransferEvents(currentBlock, toBlock);
@@ -190,34 +218,40 @@ async function runIndexer(): Promise<void> {
       // Save progress
       await saveIndexerState(toBlock);
       currentBlock = toBlock + 1n;
+      chunksProcessed++;
 
-      // Log progress every 100k blocks
-      if ((toBlock - (state?.lastIndexedBlock || 0n)) % 100000n < chunkSize) {
-        indexerLogger.info(
-          { currentBlock: toBlock.toString(), latestBlock: latestBlock.toString(), totalEvents },
-          'Indexer progress'
-        );
+      // Small delay between chunks to avoid RPC rate limiting
+      if (currentBlock < latestBlock) {
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
     } catch (error) {
-      indexerLogger.error({ error, currentBlock: currentBlock.toString() }, 'Indexer error, retrying in 10s');
-      await new Promise(resolve => setTimeout(resolve, 10000));
+      indexerLogger.error({ error, currentBlock: currentBlock.toString() }, 'Indexer error, skipping to live mode');
+      // Don't retry forever — move to live mode and catch up incrementally
+      break;
     }
   }
 
-  indexerLogger.info({ totalEvents }, 'Initial indexing complete, switching to live mode');
+  if (chunksProcessed >= MAX_CATCHUP_CHUNKS && currentBlock < latestBlock) {
+    indexerLogger.info(
+      { chunksProcessed, currentBlock: currentBlock.toString(), latestBlock: latestBlock.toString(), totalEvents },
+      'Catchup chunk limit reached — will continue in live mode'
+    );
+  } else {
+    indexerLogger.info({ totalEvents, chunksProcessed }, 'Catchup complete, switching to live mode');
+  }
 }
 
-// Live indexing - subscribe to new blocks
+// Live indexing — poll for new blocks
 async function runLiveIndexer(): Promise<void> {
   if (!database.isDatabaseAvailable()) {
     return;
   }
 
-  indexerLogger.info('Starting live position indexer');
+  indexerLogger.info('Starting live position indexer (every 5 minutes)');
 
   let lastProcessedBlock = await publicClient.getBlockNumber();
 
-  // Poll for new blocks every 1 minute for faster position updates
+  // Poll every 5 minutes — position ownership changes are rare
   setInterval(async () => {
     try {
       const currentBlock = await publicClient.getBlockNumber();
@@ -238,13 +272,13 @@ async function runLiveIndexer(): Promise<void> {
     } catch (error) {
       indexerLogger.error({ error }, 'Live indexer error');
     }
-  }, 300000); // 5 minutes (reduced from 1 min to cut RPC calls by 80%)
+  }, 300000); // 5 minutes
 }
 
 // Start the position indexer
 export async function startPositionIndexer(): Promise<void> {
   try {
-    // First, catch up with historical events
+    // Catch up recent blocks (capped at MAX_CATCHUP_CHUNKS)
     await runIndexer();
 
     // Then switch to live mode

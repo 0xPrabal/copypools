@@ -15,8 +15,8 @@ import { getPoolDayDataFromDb, getV4Pools } from '../services/database.js';
 const syncLogger = logger.child({ module: 'sync-top-positions' });
 
 const SYNC_INTERVAL = '*/10 * * * *'; // Every 10 minutes
-const MIN_POSITION_VALUE_USD = 500;
-const MIN_AGE_DAYS = 1;
+const MIN_POSITION_VALUE_USD = 100; // Lowered from 500 to capture more positions
+const MIN_AGE_DAYS = 0; // Allow all ages (was 1 day — too restrictive for new protocol)
 const MAX_POSITIONS = 500;
 
 let isSyncing = false;
@@ -83,7 +83,12 @@ export async function syncTopPositions(): Promise<void> {
       }
     }
 
-    syncLogger.info({ pricesFound: priceMap.size, tokensTotal: tokenAddresses.size }, 'Fetched token prices');
+    syncLogger.info({
+      pricesFound: priceMap.size,
+      tokensTotal: tokenAddresses.size,
+      sampleTokens: Array.from(tokenAddresses).slice(0, 5),
+      samplePrices: Array.from(priceMap.entries()).slice(0, 5).map(([k, v]) => `${k.slice(0, 10)}=$${v.toFixed(2)}`),
+    }, 'Fetched token prices');
 
     // Step 3: Calculate metrics for each position
     const now = Math.floor(Date.now() / 1000);
@@ -101,12 +106,17 @@ export async function syncTopPositions(): Promise<void> {
         const sqrtPriceX96 = BigInt(sqrtPriceX96Str);
         if (sqrtPriceX96 === 0n) continue;
 
-        // Extract token addresses from poolId or join data
+        // Extract token addresses from joined pool data
         const poolId = pos.poolId || '';
-        const token0Address = (pos.token0Id || '').toLowerCase();
-        const token1Address = (pos.token1Id || '').toLowerCase();
+        const token0Address = (pos.token0Id || pos.currency0 || '').toLowerCase();
+        const token1Address = (pos.token1Id || pos.currency1 || '').toLowerCase();
         const token0Decimals = pos.token0Decimals || 18;
         const token1Decimals = pos.token1Decimals || 18;
+
+        if (!token0Address && !token1Address) {
+          syncLogger.debug({ tokenId: pos.tokenId }, 'Skipping: no token addresses from pool join');
+          continue;
+        }
 
         // Calculate token amounts from liquidity
         const { amount0, amount1 } = liquidityToAmounts(
@@ -172,7 +182,7 @@ export async function syncTopPositions(): Promise<void> {
           token0Decimals,
           token1Decimals,
           fee: pos.poolFee || null,
-          tickSpacing: pos.tickSpacing || null,
+          tickSpacing: pos.poolTickSpacing || pos.tickSpacing || null,
           tickLower,
           tickUpper,
           liquidity: pos.liquidity,

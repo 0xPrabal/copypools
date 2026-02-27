@@ -188,9 +188,10 @@ router.get('/pools', async (req: Request, res: Response) => {
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
     const sortBy = (req.query.sortBy as string) || 'apr';
     const sortOrder = (req.query.sortOrder as string) === 'asc' ? 'asc' : 'desc';
+    // Default min TVL of $10K to filter out low-liquidity meme pools with inflated APR
     const minTvl = req.query.minTvl
       ? parseFloat(req.query.minTvl as string)
-      : undefined;
+      : 10000;
 
     const validSortBy = VALID_POOL_SORTS.includes(sortBy as PoolSortField)
       ? (sortBy as PoolSortField)

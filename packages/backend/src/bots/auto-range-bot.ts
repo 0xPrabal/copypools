@@ -589,7 +589,8 @@ async function runAutoRangeBot(): Promise<void> {
     // Check gas price
     await blockchain.getGasPrice();
 
-    // PRIMARY: Load positions from Ponder database (much faster than event scanning)
+    // PRIMARY: Load positions from Ponder database (0 RPC calls)
+    let ponderLoaded = false;
     try {
       const { rangeConfigs } = await subgraph.getRebalanceablePositions(500);
       if (rangeConfigs && rangeConfigs.length > 0) {
@@ -599,14 +600,18 @@ async function runAutoRangeBot(): Promise<void> {
             knownRangePositions.add(config.position.tokenId.toString());
           }
         }
+        ponderLoaded = true;
         botLogger.info({ fromDatabase: rangeConfigs.length }, 'Loaded positions from Ponder database');
       }
     } catch (dbError) {
       botLogger.warn({ error: dbError instanceof Error ? dbError.message : String(dbError) }, 'Failed to load from database, falling back to event scanning');
     }
 
-    // FALLBACK: Scan for new events (catches any not in database yet)
-    await scanForRangeConfiguredEvents();
+    // ONLY scan events if Ponder failed — event scanning uses 3× getLogs per chunk (expensive)
+    if (!ponderLoaded) {
+      botLogger.info('Ponder unavailable, scanning on-chain events as fallback');
+      await scanForRangeConfiguredEvents();
+    }
 
     botLogger.info({ positionCount: knownRangePositions.size }, 'Monitoring positions');
 
