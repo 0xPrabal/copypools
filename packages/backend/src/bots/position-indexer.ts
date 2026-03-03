@@ -1,10 +1,40 @@
 import { parseAbiItem } from 'viem';
+import pg from 'pg';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import * as database from '../services/database.js';
 import { publicClient } from '../services/blockchain.js';
 
 const indexerLogger = logger.child({ module: 'position-indexer' });
+
+// ============ Ponder DB connection (separate pool with ponder schema search_path) ============
+// Must match the schema used by subgraph.ts / Ponder deployment
+const RAW_PONDER_SCHEMA = process.env.PONDER_SCHEMA || 'ponder_base';
+const PONDER_SCHEMA = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(RAW_PONDER_SCHEMA)
+  ? RAW_PONDER_SCHEMA
+  : 'ponder_base';
+
+let ponderPool: pg.Pool | null = null;
+
+function getPonderPool(): pg.Pool | null {
+  if (ponderPool) return ponderPool;
+  if (!config.DATABASE_URL) return null;
+
+  ponderPool = new pg.Pool({
+    connectionString: config.DATABASE_URL,
+    max: 3, // Small pool — only used for ownership updates
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
+    statement_timeout: 15000,
+  });
+
+  // Set search_path to ponder schema on each connection
+  ponderPool.on('connect', (client) => {
+    client.query(`SET search_path TO "${PONDER_SCHEMA}", public`);
+  });
+
+  return ponderPool;
+}
 
 // Transfer event signature for ERC721
 const TRANSFER_EVENT = parseAbiItem(
@@ -67,7 +97,112 @@ async function saveIndexerState(lastIndexedBlock: bigint): Promise<void> {
   }
 }
 
-// Process Transfer events and update position cache
+// ============ Ponder DB: Sync ownership on transfers (Bug fix — 0 extra RPC calls) ============
+
+/**
+ * Update position.owner in the Ponder schema for transferred positions.
+ * This fixes BUG-006 issue #2 (stale ownership data).
+ * Pure DB write — no RPC calls.
+ */
+async function syncOwnershipToPonder(
+  transfers: Array<{ tokenId: string; newOwner: string }>,
+  blockTimestamp: string
+): Promise<number> {
+  const pPool = getPonderPool();
+  if (!pPool || transfers.length === 0) return 0;
+
+  let updated = 0;
+  try {
+    for (const { tokenId, newOwner } of transfers) {
+      // Update owner in Ponder's position table
+      // Match on both id and token_id since Ponder uses id = tokenId string
+      const result = await pPool.query(
+        `UPDATE position SET owner = $2 WHERE id = $1 OR token_id = $1`,
+        [tokenId, newOwner]
+      );
+      if (result.rowCount && result.rowCount > 0) {
+        updated++;
+      }
+    }
+
+    if (updated > 0) {
+      indexerLogger.info({ updated, total: transfers.length }, 'Synced ownership to Ponder position table');
+    }
+  } catch (error) {
+    // Non-fatal — position_cache is still correct, Ponder data is best-effort
+    indexerLogger.warn({ error: (error as Error).message }, 'Failed to sync ownership to Ponder (non-fatal)');
+  }
+
+  return updated;
+}
+
+/**
+ * Insert stub position rows in the Ponder schema for newly minted positions.
+ * This fixes BUG-006 issue #1 (new positions not indexed).
+ * Creates minimal rows that will be enriched on first API access via on-chain lookup.
+ * Pure DB write — no RPC calls.
+ */
+async function insertMintedPositionsToPonder(
+  mints: Array<{ tokenId: string; owner: string; blockNumber: string; blockTimestamp: string }>
+): Promise<number> {
+  const pPool = getPonderPool();
+  if (!pPool || mints.length === 0) return 0;
+
+  let inserted = 0;
+  try {
+    for (const { tokenId, owner, blockNumber, blockTimestamp } of mints) {
+      // Use INSERT ... ON CONFLICT DO NOTHING to avoid overwriting positions already indexed by Ponder
+      const result = await pPool.query(
+        `INSERT INTO position (
+          id, token_id, owner, pool_id, tick_lower, tick_upper, liquidity,
+          deposited_token0, deposited_token1, withdrawn_token0, withdrawn_token1,
+          collected_fees_token0, collected_fees_token1,
+          created_at_timestamp, created_at_block_number
+        ) VALUES ($1, $1, $2, 'unknown', 0, 0, '0', '0', '0', '0', '0', '0', '0', $3, $4)
+        ON CONFLICT (id) DO NOTHING`,
+        [tokenId, owner, blockTimestamp, blockNumber]
+      );
+      if (result.rowCount && result.rowCount > 0) {
+        inserted++;
+      }
+    }
+
+    if (inserted > 0) {
+      indexerLogger.info({ inserted, total: mints.length }, 'Inserted stub positions into Ponder for newly minted tokens');
+    }
+  } catch (error) {
+    // Non-fatal — positions will still be found via on-chain fallback (Layer 4)
+    indexerLogger.warn({ error: (error as Error).message }, 'Failed to insert minted positions to Ponder (non-fatal)');
+  }
+
+  return inserted;
+}
+
+/**
+ * Update owner in the backend positions cache table for transferred positions.
+ * This ensures Layer 2 (DB cache) in the positions API also reflects correct ownership.
+ * Pure DB write — no RPC calls.
+ */
+async function syncOwnershipToBackendCache(
+  transfers: Array<{ tokenId: string; newOwner: string }>
+): Promise<void> {
+  const backendPool = database.pool;
+  if (!backendPool || transfers.length === 0) return;
+
+  try {
+    for (const { tokenId, newOwner } of transfers) {
+      await backendPool.query(
+        `UPDATE positions SET owner = $2, updated_at = NOW() WHERE token_id = $1`,
+        [tokenId, newOwner]
+      );
+    }
+  } catch (error) {
+    // Non-fatal
+    indexerLogger.debug({ error: (error as Error).message }, 'Failed to sync ownership to backend positions cache');
+  }
+}
+
+// Process Transfer events and update position cache + Ponder ownership + backend cache
 async function processTransferEvents(
   fromBlock: bigint,
   toBlock: bigint
@@ -93,24 +228,45 @@ async function processTransferEvents(
       'Processing Transfer events'
     );
 
-    // Group events by address for batch updates
+    const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+    // Group events by address for batch updates (position_cache)
     const addressUpdates = new Map<string, { incoming: Set<string>; outgoing: Set<string> }>();
+
+    // Collect ownership transfers and mints for Ponder sync (no additional RPC)
+    const ownershipTransfers: Array<{ tokenId: string; newOwner: string }> = [];
+    const newMints: Array<{ tokenId: string; owner: string; blockNumber: string; blockTimestamp: string }> = [];
 
     for (const log of logs) {
       const from = (log.args.from as string).toLowerCase();
       const to = (log.args.to as string).toLowerCase();
       const tokenId = (log.args.tokenId as bigint).toString();
 
-      // Skip zero address (minting)
-      if (from !== '0x0000000000000000000000000000000000000000') {
+      // Track mints (from == 0x0) — new positions to insert into Ponder
+      if (from === ZERO_ADDRESS && to !== ZERO_ADDRESS) {
+        newMints.push({
+          tokenId,
+          owner: to,
+          blockNumber: log.blockNumber.toString(),
+          // Use block number as timestamp proxy (actual timestamp would need an RPC call)
+          blockTimestamp: Math.floor(Date.now() / 1000).toString(),
+        });
+      }
+
+      // Track ownership transfers (both regular transfers and mints set the new owner)
+      if (to !== ZERO_ADDRESS) {
+        ownershipTransfers.push({ tokenId, newOwner: to });
+      }
+
+      // position_cache updates (existing logic)
+      if (from !== ZERO_ADDRESS) {
         if (!addressUpdates.has(from)) {
           addressUpdates.set(from, { incoming: new Set(), outgoing: new Set() });
         }
         addressUpdates.get(from)!.outgoing.add(tokenId);
       }
 
-      // Skip zero address (burning)
-      if (to !== '0x0000000000000000000000000000000000000000') {
+      if (to !== ZERO_ADDRESS) {
         if (!addressUpdates.has(to)) {
           addressUpdates.set(to, { incoming: new Set(), outgoing: new Set() });
         }
@@ -118,29 +274,41 @@ async function processTransferEvents(
       }
     }
 
-    // Update cache for each affected address
+    // Update position_cache for each affected address (existing logic)
     for (const [address, updates] of addressUpdates) {
-      // Get existing cache
       const existing = await database.getPositionCache(address, config.CHAIN_ID);
       let tokenIds = new Set<string>(existing?.tokenIds || []);
 
-      // Add incoming tokens
       for (const tokenId of updates.incoming) {
         tokenIds.add(tokenId);
       }
-
-      // Remove outgoing tokens
       for (const tokenId of updates.outgoing) {
         tokenIds.delete(tokenId);
       }
 
-      // Save updated cache
       await database.savePositionCache(
         address,
         config.CHAIN_ID,
         toBlock.toString(),
         Array.from(tokenIds)
       );
+    }
+
+    // ============ NEW: Sync to Ponder + backend DB (pure DB writes, 0 RPC calls) ============
+
+    // 1. Insert stub positions for newly minted tokens (fixes: new positions not indexed)
+    if (newMints.length > 0) {
+      await insertMintedPositionsToPonder(newMints);
+    }
+
+    // 2. Update ownership in Ponder position table (fixes: stale ownership)
+    if (ownershipTransfers.length > 0) {
+      await syncOwnershipToPonder(ownershipTransfers, toBlock.toString());
+    }
+
+    // 3. Update ownership in backend positions cache table
+    if (ownershipTransfers.length > 0) {
+      await syncOwnershipToBackendCache(ownershipTransfers);
     }
 
     return logs.length;
@@ -285,5 +453,13 @@ export async function startPositionIndexer(): Promise<void> {
     await runLiveIndexer();
   } catch (error) {
     indexerLogger.error({ error }, 'Failed to start position indexer');
+  }
+}
+
+// Graceful shutdown — close Ponder pool
+export async function stopPositionIndexer(): Promise<void> {
+  if (ponderPool) {
+    await ponderPool.end();
+    ponderPool = null;
   }
 }
