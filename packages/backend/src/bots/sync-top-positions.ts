@@ -11,7 +11,7 @@ import {
 import { getAllPositionsWithPool } from '../services/subgraph.js';
 import { liquidityToAmounts } from '../services/price.js';
 import { getPoolDayDataFromDb, getV4Pools } from '../services/database.js';
-import { fetchGraphPools, fetchTokenPrices } from '../services/graph-client.js';
+import { fetchGraphPools, fetchTokenPrices, fetchPoolDayData } from '../services/graph-client.js';
 
 const syncLogger = logger.child({ module: 'sync-top-positions' });
 
@@ -269,12 +269,79 @@ async function buildPriceMap(
 }
 
 /**
+ * Build pool fee rate map from Graph data for estimating position APR
+ * when Ponder hasn't finished indexing collected fees.
+ *
+ * Priority: 7-day poolDayData average → lifetime average from total feesUSD
+ */
+async function buildPoolFeeRateMap(
+  positionPoolIds: Set<string>,
+): Promise<Map<string, { dailyFeeRate: number; tvlUsd: number; poolApr: number }>> {
+  const feeRateMap = new Map<string, { dailyFeeRate: number; tvlUsd: number; poolApr: number }>();
+  const now = Math.floor(Date.now() / 1000);
+
+  // Index graph pools by ID for quick lookup
+  const graphPoolMap = new Map<string, any>();
+  for (const gp of graphPoolsRaw) {
+    graphPoolMap.set(gp.id.toLowerCase(), gp);
+    // Also index by ponder format
+    const ponderPoolId = `${gp.token0.id.toLowerCase()}-${gp.token1.id.toLowerCase()}-${gp.feeTier}`;
+    graphPoolMap.set(ponderPoolId, gp);
+  }
+
+  // For top pools with positions, try to get recent 7-day fee data (more accurate)
+  const uniquePoolIds = Array.from(positionPoolIds).slice(0, 30); // Cap API calls
+  let dayDataHits = 0;
+
+  for (const poolId of uniquePoolIds) {
+    try {
+      // Find the Graph pool ID (may be different from Ponder poolId format)
+      const gp = graphPoolMap.get(poolId);
+      const graphPoolId = gp?.id?.toLowerCase() || poolId;
+
+      const dayData = await fetchPoolDayData(graphPoolId, 7);
+      if (dayData && dayData.length >= 3) {
+        const totalFees7d = dayData.reduce((sum: number, d: any) => sum + parseFloat(d.feesUSD || '0'), 0);
+        const avgTvl = dayData.reduce((sum: number, d: any) => sum + parseFloat(d.tvlUSD || '0'), 0) / dayData.length;
+
+        if (totalFees7d > 0 && avgTvl > 0) {
+          const dailyFeeRate = totalFees7d / dayData.length;
+          const poolApr = (dailyFeeRate * 365 / avgTvl) * 100;
+          feeRateMap.set(poolId, { dailyFeeRate, tvlUsd: avgTvl, poolApr: Math.min(poolApr, 10000) });
+          dayDataHits++;
+          continue;
+        }
+      }
+    } catch { /* fall through to lifetime estimate */ }
+
+    // Fallback: lifetime average from Graph pool total feesUSD
+    const gp = graphPoolMap.get(poolId);
+    if (gp) {
+      const feesUsd = parseFloat(gp.feesUSD || '0');
+      const tvlUsd = parseFloat(gp.totalValueLockedUSD || '0');
+      const createdAt = parseInt(gp.createdAtTimestamp || '0');
+
+      if (feesUsd > 0 && tvlUsd > 0 && createdAt > 0) {
+        const ageDays = Math.max(1, (now - createdAt) / 86400);
+        const dailyFeeRate = feesUsd / ageDays;
+        const poolApr = (dailyFeeRate * 365 / tvlUsd) * 100;
+        feeRateMap.set(poolId, { dailyFeeRate, tvlUsd, poolApr: Math.min(poolApr, 10000) });
+      }
+    }
+  }
+
+  syncLogger.info({ poolsWithFeeData: feeRateMap.size, dayDataHits, lifetimeFallbacks: feeRateMap.size - dayDataHits }, 'Built pool fee rate map');
+  return feeRateMap;
+}
+
+/**
  * Sync top positions from Ponder into the leaderboard table.
  *
  * Data flow:
  * - Positions (ticks, liquidity, fees): Ponder (Graph doesn't have position tick/liquidity data)
  * - Pool data (currentTick, sqrtPrice): Graph subgraph (primary) → Ponder (fallback)
  * - Token prices: Graph subgraph → DB cache → Ponder → hardcoded fallbacks
+ * - Fee APR estimation: Graph poolDayData → lifetime average (when Ponder fees not yet indexed)
  */
 export async function syncTopPositions(): Promise<void> {
   if (isSyncing) {
@@ -335,6 +402,16 @@ export async function syncTopPositions(): Promise<void> {
     tokenAddresses.delete('');
 
     const priceMap = await buildPriceMap(tokenAddresses, allPositions);
+
+    // Step 3b: Build pool fee rate map for APR estimation
+    // When Ponder hasn't finished indexing collected fees, we use Graph fee data
+    // to estimate position APR based on pool fee rate × concentration factor
+    const positionPoolIds = new Set<string>();
+    for (const pos of allPositions) {
+      const poolId = (pos.poolId || '').toLowerCase();
+      if (poolId) positionPoolIds.add(poolId);
+    }
+    const poolFeeRateMap = await buildPoolFeeRateMap(positionPoolIds);
 
     // Step 4: Calculate metrics for each position
     const now = Math.floor(Date.now() / 1000);
@@ -410,18 +487,52 @@ export async function syncTopPositions(): Promise<void> {
         const collected0 = Number(BigInt(pos.collectedFeesToken0 || '0')) / (10 ** token0Decimals);
         const collected1 = Number(BigInt(pos.collectedFeesToken1 || '0')) / (10 ** token1Decimals);
         const collectedFeesUsd = (collected0 * price0) + (collected1 * price1);
+        const hasRealFeeData = collectedFeesUsd > 0;
 
-        // PnL = current value + collected fees - deposited value
-        // When deposited = current value (fallback), PnL = collected fees only (conservative)
-        const pnlUsd = positionValueUsd + collectedFeesUsd - depositedValueUsd;
-        const roi = depositedValueUsd > 0 ? (pnlUsd / depositedValueUsd) * 100 : 0;
+        // In-range check (needed for APR estimation below)
+        const inRange = currentTick >= tickLower && currentTick < tickUpper;
 
-        // APR calculations — only from real data, never estimated
-        const feeApr = positionValueUsd > 0 && ageDays > 0 && collectedFeesUsd > 0
+        // === Fee APR estimation from Graph pool data ===
+        // When Ponder hasn't indexed collected fees yet, estimate from pool fee rates
+        let estimatedFeeApr = 0;
+        let estimatedPendingFeesUsd = 0;
+
+        if (!hasRealFeeData && positionValueUsd > 0) {
+          const poolFeeRate = poolFeeRateMap.get(poolId);
+          if (poolFeeRate && poolFeeRate.poolApr > 0 && poolFeeRate.tvlUsd > 0) {
+            // Concentration factor: narrower range earns proportionally more fees
+            const MIN_TICK = -887272;
+            const MAX_TICK = 887272;
+            const fullRange = MAX_TICK - MIN_TICK;
+            const posRange = tickUpper - tickLower;
+            // Cap concentration at 50x to avoid absurd values for very narrow positions
+            const concentrationFactor = posRange > 0 ? Math.min(fullRange / posRange, 50) : 1;
+
+            // In-range positions earn fees; out-of-range earn nothing currently
+            // but have historical average (use 1x pool rate as conservative estimate)
+            const effectiveConcentration = inRange ? concentrationFactor : 1;
+
+            estimatedFeeApr = Math.min(poolFeeRate.poolApr * effectiveConcentration, 10000);
+
+            // Estimate accrued pending fees from position value × daily rate × age
+            if (ageDays > 0) {
+              estimatedPendingFeesUsd = positionValueUsd * (estimatedFeeApr / 100) * (Math.min(ageDays, 365) / 365);
+            }
+          }
+        }
+
+        // Final APR: prefer real Ponder data, fall back to Graph-based estimate
+        const feeApr = hasRealFeeData && positionValueUsd > 0 && ageDays > 0
           ? (collectedFeesUsd / positionValueUsd) * (365 / ageDays) * 100
-          : 0;
-        const totalApr = depositedValueUsd > 0 && ageDays > 0
-          ? (pnlUsd / depositedValueUsd) * (365 / ageDays) * 100
+          : estimatedFeeApr;
+
+        // PnL = current value + collected fees + estimated pending - deposited value
+        const effectiveFees = hasRealFeeData ? collectedFeesUsd : estimatedPendingFeesUsd;
+        const pnlUsd = positionValueUsd + effectiveFees - depositedValueUsd;
+
+        const totalApr = feeApr; // Use fee APR as total when IL data not available from Ponder
+        const roi = depositedValueUsd > 0 && pnlUsd !== 0
+          ? (pnlUsd / depositedValueUsd) * 100
           : 0;
 
         // Skip positions with non-finite values (NaN/Infinity from bad price data)
@@ -429,9 +540,6 @@ export async function syncTopPositions(): Promise<void> {
           skipReasons.noPrice++;
           continue;
         }
-
-        // In-range check
-        const inRange = currentTick >= tickLower && currentTick < tickUpper;
 
         candidates.push({
           tokenId: pos.tokenId,
@@ -457,7 +565,7 @@ export async function syncTopPositions(): Promise<void> {
           depositedToken1: pos.depositedToken1 || '0',
           collectedFeesToken0: pos.collectedFeesToken0 || '0',
           collectedFeesToken1: pos.collectedFeesToken1 || '0',
-          pendingFeesUsd: 0,
+          pendingFeesUsd: Math.round(estimatedPendingFeesUsd * 100) / 100,
           feeApr: Math.max(-9999999, Math.min(Math.round(feeApr * 100) / 100, 9999999)),
           totalApr: Math.max(-9999999, Math.min(Math.round(totalApr * 100) / 100, 9999999)),
           pnlUsd: Math.max(-9999999999, Math.min(Math.round(pnlUsd * 100) / 100, 9999999999)),
