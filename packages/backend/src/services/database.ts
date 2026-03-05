@@ -3028,6 +3028,8 @@ export async function getLeaderboardPools(options: {
   sortBy?: 'tvl' | 'apr' | 'apr7d' | 'apr30d' | 'volume1d' | 'fees7d';
   sortOrder?: 'asc' | 'desc';
   minTvl?: number;
+  /** BUG-5 FIX: Optional pool ID filter to avoid full table scan */
+  poolId?: string;
 }): Promise<{ pools: (V4Pool & {
   fees7dUsd: number | null;
   fees30dUsd: number | null;
@@ -3046,6 +3048,7 @@ export async function getLeaderboardPools(options: {
     sortBy = 'apr',
     sortOrder = 'desc',
     minTvl,
+    poolId,
   } = options;
 
   const offset = (page - 1) * Math.min(limit, 100);
@@ -3069,6 +3072,13 @@ export async function getLeaderboardPools(options: {
   if (minTvl !== undefined && minTvl > 0) {
     conditions.push(`tvl_usd >= $${paramIdx}`);
     params.push(minTvl);
+    paramIdx++;
+  }
+
+  // BUG-5 FIX: Filter by specific pool ID if provided
+  if (poolId) {
+    conditions.push(`LOWER(id) = LOWER($${paramIdx})`);
+    params.push(poolId);
     paramIdx++;
   }
 

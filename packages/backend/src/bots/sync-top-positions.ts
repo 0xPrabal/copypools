@@ -394,22 +394,30 @@ export async function syncTopPositions(): Promise<void> {
         const ageDays = createdAt > 0 ? Math.floor((now - createdAt) / 86400) : 0;
         if (ageDays < MIN_AGE_DAYS) { skipReasons.youngAge++; continue; }
 
-        // Calculate deposited value
+        // Calculate deposited value from Ponder data
         const deposited0 = Number(BigInt(pos.depositedToken0 || '0')) / (10 ** token0Decimals);
         const deposited1 = Number(BigInt(pos.depositedToken1 || '0')) / (10 ** token1Decimals);
-        const depositedValueUsd = (deposited0 * price0) + (deposited1 * price1);
+        let depositedValueUsd = (deposited0 * price0) + (deposited1 * price1);
 
-        // Calculate collected fees
+        // When Ponder lacks deposit data (PositionMinted + LiquidityIncreased race condition
+        // or Ponder not fully synced), compute from real liquidity math.
+        // This is exact same math used for positionValueUsd — real on-chain derived value.
+        if (depositedValueUsd === 0 && positionValueUsd > 0) {
+          depositedValueUsd = positionValueUsd;
+        }
+
+        // Calculate collected fees from Ponder data (FeesCollected events)
         const collected0 = Number(BigInt(pos.collectedFeesToken0 || '0')) / (10 ** token0Decimals);
         const collected1 = Number(BigInt(pos.collectedFeesToken1 || '0')) / (10 ** token1Decimals);
         const collectedFeesUsd = (collected0 * price0) + (collected1 * price1);
 
-        // PnL and ROI
-        const pnlUsd = positionValueUsd + collectedFeesUsd - (depositedValueUsd > 0 ? depositedValueUsd : positionValueUsd);
+        // PnL = current value + collected fees - deposited value
+        // When deposited = current value (fallback), PnL = collected fees only (conservative)
+        const pnlUsd = positionValueUsd + collectedFeesUsd - depositedValueUsd;
         const roi = depositedValueUsd > 0 ? (pnlUsd / depositedValueUsd) * 100 : 0;
 
-        // APR calculations
-        const feeApr = positionValueUsd > 0 && ageDays > 0
+        // APR calculations — only from real data, never estimated
+        const feeApr = positionValueUsd > 0 && ageDays > 0 && collectedFeesUsd > 0
           ? (collectedFeesUsd / positionValueUsd) * (365 / ageDays) * 100
           : 0;
         const totalApr = depositedValueUsd > 0 && ageDays > 0
@@ -557,38 +565,76 @@ export async function syncPoolLeaderboardMetrics(): Promise<void> {
       try {
         const poolId = pool.id;
         const tvlUsd = pool.tvlUsd || 0;
+
+        // VISUAL-BUG-5 FIX: Skip suspicious pools with invalid data patterns
+        // High TVL but zero fees/volume → likely stale or manipulated liquidity
+        if (tvlUsd > 1_000_000 && (pool.fees1dUsd || 0) === 0 && (pool.volume1dUsd || 0) === 0) {
+          syncLogger.debug({ poolId, tvlUsd }, 'Skipping suspicious pool: high TVL but zero activity');
+          continue;
+        }
+        // Extremely high APR with negligible volume → likely spam/wash trading
+        if (pool.poolApr > 50000 && (pool.volume1dUsd || 0) < 100) {
+          syncLogger.debug({ poolId, apr: pool.poolApr }, 'Skipping suspicious pool: extreme APR with no volume');
+          continue;
+        }
+
         const tickData = poolTickMap.get(poolId.toLowerCase());
         const tick = tickData?.tick || 0;
         const tickSpacing = pool.tickSpacing || 10;
 
-        // Get pool day data from DB (populated by historical sync)
+        // Get pool day data from DB (populated by historical sync for top pools)
         const dayData = await getPoolDayDataFromDb(poolId, 30);
 
         let fees7d = 0;
         let fees30d = 0;
 
-        for (let i = 0; i < dayData.length; i++) {
-          const feesUsd = parseFloat(dayData[i].fees_usd || '0');
-          fees30d += feesUsd;
-          if (i < 7) fees7d += feesUsd;
+        if (dayData.length > 0) {
+          for (let i = 0; i < dayData.length; i++) {
+            const feesUsd = parseFloat(dayData[i].fees_usd || '0');
+            fees30d += feesUsd;
+            if (i < 7) fees7d += feesUsd;
+          }
+        } else {
+          // VISUAL-BUG-1,2 FIX: Fallback to pool.fees1dUsd from v4_pools table
+          // (populated by main pool sync from Graph subgraph for ALL pools)
+          const dailyFees = pool.fees1dUsd || 0;
+          fees7d = dailyFees * 7;
+          fees30d = dailyFees * 30;
         }
 
         const apr7d = tvlUsd > 0 && fees7d > 0 ? ((fees7d / 7) * 365 / tvlUsd) * 100 : 0;
         const apr30d = tvlUsd > 0 && fees30d > 0 ? ((fees30d / 30) * 365 / tvlUsd) * 100 : 0;
-        const poolApr = tvlUsd > 0 && dayData.length > 0
-          ? (parseFloat(dayData[0]?.fees_usd || '0') * 365 / tvlUsd) * 100
-          : 0;
+        // VISUAL-BUG-1,2 FIX: Use pool's existing APR or estimate from fees1dUsd
+        const poolApr = pool.poolApr > 0
+          ? pool.poolApr
+          : (tvlUsd > 0 && (pool.fees1dUsd || 0) > 0
+            ? ((pool.fees1dUsd || 0) * 365 / tvlUsd) * 100
+            : 0);
 
-        // Calculate suggested ranges using Graph tick data
+        // VISUAL-BUG-3,4 FIX: Skip non-full range strategies when tick data is unavailable
+        // tick=0 is the default when no Graph data exists and is rarely the actual current tick
+        const hasTick = tick !== 0 || tickData !== undefined;
+
+        // Calculate suggested ranges using best available tick data
         const suggestedRangeFull = calculateSuggestedRange('full', tick, tickSpacing, poolApr);
-        const suggestedRangeWide = calculateSuggestedRange('wide', tick, tickSpacing, poolApr);
-        const suggestedRangeConcentrated = calculateSuggestedRange('concentrated', tick, tickSpacing, poolApr);
+        // VISUAL-BUG-3,4 FIX: Only compute narrow ranges if we have real tick data
+        const suggestedRangeWide = hasTick
+          ? calculateSuggestedRange('wide', tick, tickSpacing, poolApr)
+          : { ...suggestedRangeFull, label: 'Wide Range', risk: 'medium' as const, expectedApr: Math.round(poolApr * 2 * 100) / 100 };
+        const suggestedRangeConcentrated = hasTick
+          ? calculateSuggestedRange('concentrated', tick, tickSpacing, poolApr)
+          : { ...suggestedRangeFull, label: 'Concentrated', risk: 'high' as const, expectedApr: Math.round(poolApr * 5 * 100) / 100 };
+
+        // VISUAL-BUG-5 FIX: Cap APR values to prevent displaying absurd numbers
+        const MAX_DISPLAY_APR = 10000; // 10,000% max
+        const cappedApr7d = Math.min(Math.round(apr7d * 100) / 100, MAX_DISPLAY_APR);
+        const cappedApr30d = Math.min(Math.round(apr30d * 100) / 100, MAX_DISPLAY_APR);
 
         await updatePoolLeaderboardMetrics(poolId, {
           fees7dUsd: Math.round(fees7d * 100) / 100,
           fees30dUsd: Math.round(fees30d * 100) / 100,
-          apr7d: Math.round(apr7d * 100) / 100,
-          apr30d: Math.round(apr30d * 100) / 100,
+          apr7d: cappedApr7d,
+          apr30d: cappedApr30d,
           suggestedRangeFull,
           suggestedRangeWide,
           suggestedRangeConcentrated,

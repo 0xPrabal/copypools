@@ -16,6 +16,46 @@ import {
   feeWithdrawal,
 } from "ponder:schema";
 
+/**
+ * Compute token amounts from liquidity + tick range (Uniswap V3/V4 math).
+ * Matches backend's services/price.ts implementation exactly.
+ */
+function tickToSqrtRatioX96(tick: number): bigint {
+  const sqrtRatio = Math.sqrt(1.0001 ** tick);
+  const Q96 = 2n ** 96n;
+  return BigInt(Math.floor(sqrtRatio * Number(Q96)));
+}
+
+function liquidityToAmounts(
+  liquidity: bigint,
+  sqrtPriceX96: bigint,
+  tickLower: number,
+  tickUpper: number
+): { amount0: bigint; amount1: bigint } {
+  const Q96 = 2n ** 96n;
+
+  const sqrtRatioA = tickToSqrtRatioX96(tickLower);
+  const sqrtRatioB = tickToSqrtRatioX96(tickUpper);
+
+  let amount0 = 0n;
+  let amount1 = 0n;
+
+  if (sqrtPriceX96 < sqrtRatioA) {
+    // Below range: all token0
+    amount0 = (liquidity * Q96 * (sqrtRatioB - sqrtRatioA)) / (sqrtRatioA * sqrtRatioB);
+  } else if (sqrtPriceX96 >= sqrtRatioB) {
+    // Above range: all token1
+    amount1 = (liquidity * (sqrtRatioB - sqrtRatioA)) / Q96;
+  } else {
+    // In range: both tokens
+    const sqrtRatioCurrent = sqrtPriceX96;
+    amount0 = (liquidity * Q96 * (sqrtRatioB - sqrtRatioCurrent)) / (sqrtRatioCurrent * sqrtRatioB);
+    amount1 = (liquidity * (sqrtRatioCurrent - sqrtRatioA)) / Q96;
+  }
+
+  return { amount0, amount1 };
+}
+
 // Contract addresses - use env vars with fallbacks to match ponder.config.ts
 const POSITION_MANAGER = (process.env.POSITION_MANAGER_ADDRESS || "0x7C5f5A4bBd8fD63184577525326123B519429bDc") as `0x${string}`;
 const V4_UTILS_ADDRESS = (process.env.V4_UTILS_ADDRESS || "0x37A199B0Baea8943AD493f04Cc2da8c4fa7C2cE1") as `0x${string}`;
@@ -261,6 +301,27 @@ ponder.on("V4Utils:PositionMinted", async ({ event, context }) => {
       hooks
     );
 
+    // Estimate deposited amounts from liquidity + pool sqrtPrice
+    // PositionMinted event doesn't include amount0/amount1, so we compute them
+    let estDeposited0 = "0";
+    let estDeposited1 = "0";
+    try {
+      const poolEntity = await context.db.find(pool, { id: poolId });
+      if (poolEntity && poolEntity.sqrtPriceX96 !== "0") {
+        const sqrtPrice = BigInt(poolEntity.sqrtPriceX96);
+        const { amount0, amount1 } = liquidityToAmounts(
+          BigInt(liquidity),
+          sqrtPrice,
+          Number(tickLower),
+          Number(tickUpper)
+        );
+        estDeposited0 = amount0.toString();
+        estDeposited1 = amount1.toString();
+      }
+    } catch {
+      // Non-fatal — deposited amounts will be updated on LiquidityIncreased if available
+    }
+
     // Create position
     try {
       await context.db.insert(position).values({
@@ -271,8 +332,8 @@ ponder.on("V4Utils:PositionMinted", async ({ event, context }) => {
         tickLower: Number(tickLower),
         tickUpper: Number(tickUpper),
         liquidity: liquidity.toString(),
-        depositedToken0: "0",
-        depositedToken1: "0",
+        depositedToken0: estDeposited0,
+        depositedToken1: estDeposited1,
         withdrawnToken0: "0",
         withdrawnToken1: "0",
         collectedFeesToken0: "0",

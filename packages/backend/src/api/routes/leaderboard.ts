@@ -268,20 +268,15 @@ router.get('/pools/:poolId/strategies', async (req: Request, res: Response) => {
   try {
     const { poolId } = req.params;
 
-    const { pools } = await getLeaderboardPools({
+    // BUG-5 FIX: Query only the specific pool instead of fetching all 200
+    const { pools: matchedPools } = await getLeaderboardPools({
       page: 1,
       limit: 1,
       sortBy: 'tvl',
+      poolId: poolId,
     });
 
-    // Find the specific pool
-    const { pools: allPools } = await getLeaderboardPools({
-      page: 1,
-      limit: 200,
-      sortBy: 'tvl',
-    });
-
-    const pool = allPools.find(p => p.id.toLowerCase() === poolId.toLowerCase());
+    const pool = matchedPools[0] || null;
 
     if (!pool) {
       if (res.headersSent) return;
