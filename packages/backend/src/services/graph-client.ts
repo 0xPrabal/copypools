@@ -67,7 +67,13 @@ async function queryGraph<T>(query: string, variables?: Record<string, unknown>)
       const result = await response.json() as { data?: T; errors?: Array<{ message: string }> };
 
       if (result.errors?.length) {
-        graphLogger.warn({ errors: result.errors, subgraphId }, 'Graph query returned errors');
+        graphLogger.warn({ errors: result.errors, subgraphId, hasData: !!result.data }, 'Graph query returned errors');
+        // Graph often returns partial data WITH errors (e.g., "bad indexers" warning).
+        // If we got data alongside errors, use it instead of falling through.
+        if (result.data) {
+          graphLogger.info({ subgraphId }, 'Using partial Graph data despite errors');
+          return result.data;
+        }
         continue;
       }
 
@@ -87,6 +93,14 @@ async function queryGraph<T>(query: string, variables?: Record<string, unknown>)
 // ─── Public API ────────────────────────────────────────────────
 
 // Types
+
+export interface GraphPosition {
+  id: string;
+  tokenId: string;
+  owner: string;
+  origin: string;
+  createdAtTimestamp: string;
+}
 
 export interface GraphPool {
   id: string;
@@ -673,6 +687,45 @@ export async function searchPools(tokenQuery: string, first: number = 20): Promi
   }
 
   return pools;
+}
+
+/**
+ * Fetch ALL V4 positions from Graph subgraph (paginated).
+ * Graph Position entity: id, tokenId, owner, origin, createdAtTimestamp
+ * No liquidity/tick data — that must come from on-chain RPC.
+ */
+export async function fetchGraphPositions(
+  first: number = 1000,
+  skip: number = 0,
+): Promise<GraphPosition[]> {
+  const cacheKey = `positions:${first}:${skip}`;
+  const cached = getCached<GraphPosition[]>(cacheKey);
+  if (cached) return cached;
+
+  const query = `{
+    positions(
+      first: ${first}
+      skip: ${skip}
+      orderBy: createdAtTimestamp
+      orderDirection: desc
+    ) {
+      id
+      tokenId
+      owner
+      origin
+      createdAtTimestamp
+    }
+  }`;
+
+  const data = await queryGraph<{ positions: GraphPosition[] }>(query);
+  const positions = data?.positions || [];
+
+  if (positions.length > 0) {
+    setCache(cacheKey, positions, 10 * 60 * 1000); // 10 min cache
+  }
+
+  graphLogger.info({ count: positions.length, skip }, 'Fetched positions from Graph');
+  return positions;
 }
 
 /**

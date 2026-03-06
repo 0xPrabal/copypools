@@ -11,7 +11,8 @@ import {
 import { getAllPositionsWithPool } from '../services/subgraph.js';
 import { liquidityToAmounts } from '../services/price.js';
 import { getPoolDayDataFromDb, getV4Pools } from '../services/database.js';
-import { fetchGraphPools, fetchTokenPrices, fetchPoolDayData } from '../services/graph-client.js';
+import { fetchGraphPools, fetchTokenPrices, fetchPoolDayData, fetchGraphPositions } from '../services/graph-client.js';
+import { getPositionInfo } from '../services/blockchain.js';
 
 const syncLogger = logger.child({ module: 'sync-top-positions' });
 
@@ -338,10 +339,11 @@ async function buildPoolFeeRateMap(
  * Sync top positions from Ponder into the leaderboard table.
  *
  * Data flow:
- * - Positions (ticks, liquidity, fees): Ponder (Graph doesn't have position tick/liquidity data)
+ * - Position list (tokenId, owner, createdAt): Graph subgraph (ALL V4 positions)
+ * - Position data (ticks, liquidity, poolKey): On-chain RPC via multicall (per position)
  * - Pool data (currentTick, sqrtPrice): Graph subgraph (primary) → Ponder (fallback)
  * - Token prices: Graph subgraph → DB cache → Ponder → hardcoded fallbacks
- * - Fee APR estimation: Graph poolDayData → lifetime average (when Ponder fees not yet indexed)
+ * - Fee APR estimation: Graph poolDayData → lifetime average (real pool fee rates)
  */
 export async function syncTopPositions(): Promise<void> {
   if (isSyncing) {
@@ -356,39 +358,139 @@ export async function syncTopPositions(): Promise<void> {
     syncLogger.info('Starting top positions sync...');
     graphPoolsRaw = []; // Reset for fresh data
 
-    // Step 1: Fetch all active positions from Ponder
-    // Ponder is the ONLY source for position-specific data (ticks, liquidity, deposited/collected)
-    // Graph V4 subgraph's Position entity doesn't include these fields
+    // Step 1: Fetch positions from Graph subgraph + enrich with on-chain RPC data
+    // Graph gives us ALL V4 positions (tokenId, owner, createdAt)
+    // On-chain multicall gives us liquidity, ticks, poolKey per position
+    // This replaces the Ponder-only approach which only had ~10 CopyPools-specific positions.
+
+    // 1a. Fetch positions from Graph (paginated)
+    // We fetch the most recent 1000 positions — recent positions are most likely active.
+    // The on-chain enrichment step filters out burned/zero-liquidity positions.
+    const graphPositions: any[] = [];
+    let gSkip = 0;
+    const gBatchSize = 1000;
+    let gHasMore = true;
+    const MAX_GRAPH_POSITIONS = 1000;
+
+    try {
+      while (gHasMore && graphPositions.length < MAX_GRAPH_POSITIONS) {
+        const batch = await fetchGraphPositions(gBatchSize, gSkip);
+        if (!batch || batch.length === 0) break;
+        graphPositions.push(...batch);
+        gSkip += gBatchSize;
+        gHasMore = batch.length === gBatchSize;
+      }
+    } catch (error) {
+      syncLogger.warn({ error: (error as Error).message }, 'Graph positions fetch failed');
+    }
+
+    syncLogger.info({ count: graphPositions.length, source: 'graph' }, 'Fetched positions from Graph subgraph');
+
+    if (graphPositions.length === 0) {
+      // Fallback: try Ponder if Graph has no positions
+      syncLogger.warn('No positions from Graph, falling back to Ponder');
+      const ponderResult = await getAllPositionsWithPool(500, 0, true);
+      const ponderItems = ponderResult?.positions?.items || [];
+      if (ponderItems.length === 0) {
+        syncLogger.warn('No positions found from any source');
+        return;
+      }
+      graphPositions.push(...ponderItems.map((p: any) => ({
+        tokenId: p.tokenId,
+        owner: p.owner,
+        createdAtTimestamp: p.createdAtTimestamp || '0',
+        _ponderEnriched: true,
+        _ponderData: p,
+      })));
+    }
+
+    // 1b. Enrich with on-chain data (liquidity, ticks, poolKey) using batched multicalls
+    // Each position = 1 multicall (3 contract reads batched). Concurrency = 10 parallel.
+    // Target: enrich enough positions to find ≥100 qualifying ones.
+    const ON_CHAIN_BATCH_SIZE = 10;
+    const ON_CHAIN_DELAY_MS = 150;
+    const MIN_ENRICHED_TARGET = 200; // Stop early once we have enough
     const allPositions: any[] = [];
-    let skip = 0;
-    const batchSize = 500;
-    let hasMore = true;
+    let onChainSuccess = 0;
+    let onChainFail = 0;
 
-    while (hasMore) {
-      const result = await getAllPositionsWithPool(batchSize, skip, true);
-      const items = result?.positions?.items || [];
-      allPositions.push(...items);
-      skip += batchSize;
-      hasMore = items.length === batchSize;
+    for (let i = 0; i < graphPositions.length; i += ON_CHAIN_BATCH_SIZE) {
+      const batch = graphPositions.slice(i, i + ON_CHAIN_BATCH_SIZE);
 
-      if (allPositions.length > 5000) {
-        syncLogger.warn('Too many positions, capping at 5000');
+      const results = await Promise.allSettled(
+        batch.map(async (gp: any) => {
+          // If already enriched from Ponder fallback, skip on-chain
+          if (gp._ponderEnriched && gp._ponderData) {
+            return gp._ponderData;
+          }
+
+          const tokenId = gp.tokenId;
+          try {
+            const info = await getPositionInfo(BigInt(tokenId));
+            if (!info || info.liquidity === '0') return null; // Skip zero-liquidity
+
+            return {
+              tokenId,
+              owner: info.owner || gp.owner,
+              liquidity: info.liquidity,
+              tickLower: info.tickLower,
+              tickUpper: info.tickUpper,
+              poolId: info.poolId, // format: currency0-currency1-fee
+              createdAtTimestamp: gp.createdAtTimestamp || '0',
+              // On-chain doesn't have deposited/collected — will be estimated
+              depositedToken0: '0',
+              depositedToken1: '0',
+              collectedFeesToken0: '0',
+              collectedFeesToken1: '0',
+              // Pool key data for pool matching
+              poolKey: info.poolKey,
+            };
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value) {
+          allPositions.push(result.value);
+          onChainSuccess++;
+        } else {
+          onChainFail++;
+        }
+      }
+
+      // Early termination: once we have enough enriched positions, stop
+      if (allPositions.length >= MIN_ENRICHED_TARGET) {
+        syncLogger.info(
+          { enriched: allPositions.length, processed: i + ON_CHAIN_BATCH_SIZE, total: graphPositions.length },
+          'Reached enrichment target, stopping early'
+        );
         break;
+      }
+
+      // Rate limit delay between batches
+      if (i + ON_CHAIN_BATCH_SIZE < graphPositions.length) {
+        await new Promise(resolve => setTimeout(resolve, ON_CHAIN_DELAY_MS));
       }
     }
 
+    syncLogger.info(
+      { total: graphPositions.length, enriched: onChainSuccess, failed: onChainFail, active: allPositions.length },
+      'On-chain enrichment complete'
+    );
+
     if (allPositions.length === 0) {
-      syncLogger.warn('No active positions found from Ponder');
+      syncLogger.warn('No active positions after on-chain enrichment');
       return;
     }
 
-    syncLogger.info({ count: allPositions.length }, 'Fetched active positions from Ponder');
-
-    // Step 2: Build pool data map — Graph subgraph is primary, Ponder is fallback
+    // Step 2: Build pool data map — Graph subgraph is primary source
     const poolDataMap = await buildPoolDataMap(allPositions);
 
     // Step 3: Collect token addresses ONLY from positions that have pool data
     // (positions without pool data will be skipped as "noPool" anyway)
+    // Also collect token addresses directly from on-chain poolKey data
     const tokenAddresses = new Set<string>();
     for (const pos of allPositions) {
       const poolId = (pos.poolId || '').toLowerCase();
@@ -396,6 +498,11 @@ export async function syncTopPositions(): Promise<void> {
       if (poolData) {
         tokenAddresses.add(poolData.token0Address);
         tokenAddresses.add(poolData.token1Address);
+      }
+      // On-chain positions have poolKey with direct token addresses
+      if (pos.poolKey) {
+        if (pos.poolKey.currency0) tokenAddresses.add(pos.poolKey.currency0.toLowerCase());
+        if (pos.poolKey.currency1) tokenAddresses.add(pos.poolKey.currency1.toLowerCase());
       }
     }
     // Remove empty string
@@ -428,6 +535,7 @@ export async function syncTopPositions(): Promise<void> {
         const poolId = (pos.poolId || '').toLowerCase();
 
         // Get pool data from our multi-source pool map
+        // On-chain positions use poolId format "currency0-currency1-fee" which matches Ponder index
         const poolData = poolDataMap.get(poolId);
         if (!poolData && !pos.poolTick && !pos.poolSqrtPriceX96) { skipReasons.noPool++; continue; }
         const currentTick = poolData?.tick ?? pos.poolTick ?? 0;
@@ -435,15 +543,19 @@ export async function syncTopPositions(): Promise<void> {
         const sqrtPriceX96 = BigInt(sqrtPriceX96Str);
         if (sqrtPriceX96 === 0n) { skipReasons.zeroSqrt++; continue; }
 
-        // Token addresses and metadata from pool data
-        const token0Address = poolData?.token0Address || (pos.token0Id || '').toLowerCase();
-        const token1Address = poolData?.token1Address || (pos.token1Id || '').toLowerCase();
+        // Token addresses: prefer Graph pool data, then on-chain poolKey, then Ponder
+        const token0Address = poolData?.token0Address
+          || (pos.poolKey?.currency0 || '').toLowerCase()
+          || (pos.token0Id || '').toLowerCase();
+        const token1Address = poolData?.token1Address
+          || (pos.poolKey?.currency1 || '').toLowerCase()
+          || (pos.token1Id || '').toLowerCase();
         const token0Decimals = poolData?.token0Decimals || pos.token0Decimals || 18;
         const token1Decimals = poolData?.token1Decimals || pos.token1Decimals || 18;
         const token0Symbol = poolData?.token0Symbol || pos.token0Symbol || null;
         const token1Symbol = poolData?.token1Symbol || pos.token1Symbol || null;
-        const fee = poolData?.fee || pos.poolFee || null;
-        const tickSpacing = poolData?.tickSpacing || pos.poolTickSpacing || null;
+        const fee = poolData?.fee || pos.poolKey?.fee || pos.poolFee || null;
+        const tickSpacing = poolData?.tickSpacing || pos.poolKey?.tickSpacing || pos.poolTickSpacing || null;
 
         if (!token0Address && !token1Address) { skipReasons.noTokens++; continue; }
 
