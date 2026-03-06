@@ -11,7 +11,7 @@ import {
 import { getAllPositionsWithPool } from '../services/subgraph.js';
 import { liquidityToAmounts } from '../services/price.js';
 import { getPoolDayDataFromDb, getV4Pools } from '../services/database.js';
-import { fetchGraphPools, fetchTokenPrices, fetchPoolDayData, fetchGraphPositions } from '../services/graph-client.js';
+import { fetchGraphPools, fetchTokenPrices, fetchPoolDayData, fetchGraphPositions, fetchGraphPositionsWithFees, fetchPositionCollects, fetchPositionMints } from '../services/graph-client.js';
 import { getPositionInfo } from '../services/blockchain.js';
 
 const syncLogger = logger.child({ module: 'sync-top-positions' });
@@ -28,7 +28,7 @@ const FALLBACK_PRICES: Record<string, number> = {
 };
 
 const SYNC_INTERVAL = '*/10 * * * *'; // Every 10 minutes
-const MIN_POSITION_VALUE_USD = 100;
+const MIN_POSITION_VALUE_USD = 50; // Lowered from 100 to include more positions
 const MIN_AGE_DAYS = 0;
 const MAX_POSITIONS = 500;
 
@@ -141,7 +141,8 @@ async function buildPoolDataMap(
  */
 async function buildPriceMap(
   tokenAddresses: Set<string>,
-  ponderPositions: any[]
+  ponderPositions: any[],
+  poolDataMapRef?: Map<string, any>
 ): Promise<Map<string, number>> {
   const priceMap = new Map<string, number>();
 
@@ -257,6 +258,58 @@ async function buildPriceMap(
     }
     if (derivedCount > 0) {
       syncLogger.info({ count: derivedCount }, 'Derived token prices from Graph pool pair data');
+    }
+  }
+
+  // Source 6: Derive prices from sqrtPriceX96 in pool data map
+  // For any pool where one token's USD price is known, derive the other using:
+  // price_ratio = (sqrtPriceX96 / 2^96)^2 = token1_per_token0 (raw, needs decimal adj)
+  if (poolDataMapRef) {
+    let sqrtDerivedCount = 0;
+    const Q96 = 2n ** 96n;
+    // Multiple passes to propagate through pool pairs
+    for (let pass = 0; pass < 3; pass++) {
+      for (const [, poolData] of poolDataMapRef.entries()) {
+        const t0 = poolData.token0Address;
+        const t1 = poolData.token1Address;
+        if (!t0 || !t1) continue;
+        if (priceMap.has(t0) && priceMap.has(t1)) continue; // Both known
+        if (!priceMap.has(t0) && !priceMap.has(t1)) continue; // Neither known
+
+        const sqrtPriceX96 = BigInt(poolData.sqrtPriceX96 || '0');
+        if (sqrtPriceX96 === 0n) continue;
+
+        const d0 = poolData.token0Decimals || 18;
+        const d1 = poolData.token1Decimals || 18;
+
+        // price_ratio = (sqrtPriceX96 / 2^96)^2 gives token0 price in terms of token1
+        // But we need to adjust for decimal differences
+        const sqrtPrice = Number(sqrtPriceX96) / Number(Q96);
+        const rawRatio = sqrtPrice * sqrtPrice; // token1_amount / token0_amount (in raw units)
+        // Adjust for decimals: price_token0_in_token1 = rawRatio * 10^(d0-d1)
+        const decimalAdj = 10 ** (d0 - d1);
+        const priceT0InT1 = rawRatio * decimalAdj;
+
+        if (!isFinite(priceT0InT1) || priceT0InT1 <= 0) continue;
+
+        if (priceMap.has(t1) && !priceMap.has(t0)) {
+          const derived = priceT0InT1 * priceMap.get(t1)!;
+          if (derived > 0 && derived < 10_000_000 && isFinite(derived)) {
+            priceMap.set(t0, derived);
+            sqrtDerivedCount++;
+          }
+        }
+        if (priceMap.has(t0) && !priceMap.has(t1) && priceT0InT1 > 0) {
+          const derived = priceMap.get(t0)! / priceT0InT1;
+          if (derived > 0 && derived < 10_000_000 && isFinite(derived)) {
+            priceMap.set(t1, derived);
+            sqrtDerivedCount++;
+          }
+        }
+      }
+    }
+    if (sqrtDerivedCount > 0) {
+      syncLogger.info({ count: sqrtDerivedCount }, 'Derived token prices from pool sqrtPriceX96 data');
     }
   }
 
@@ -409,7 +462,7 @@ export async function syncTopPositions(): Promise<void> {
     // Target: enrich enough positions to find ≥100 qualifying ones.
     const ON_CHAIN_BATCH_SIZE = 10;
     const ON_CHAIN_DELAY_MS = 150;
-    const MIN_ENRICHED_TARGET = 200; // Stop early once we have enough
+    const MIN_ENRICHED_TARGET = 500; // Increased from 200 to get more positions
     const allPositions: any[] = [];
     let onChainSuccess = 0;
     let onChainFail = 0;
@@ -508,7 +561,7 @@ export async function syncTopPositions(): Promise<void> {
     // Remove empty string
     tokenAddresses.delete('');
 
-    const priceMap = await buildPriceMap(tokenAddresses, allPositions);
+    const priceMap = await buildPriceMap(tokenAddresses, allPositions, poolDataMap);
 
     // Step 3b: Build pool fee rate map for APR estimation
     // When Ponder hasn't finished indexing collected fees, we use Graph fee data
@@ -519,6 +572,39 @@ export async function syncTopPositions(): Promise<void> {
       if (poolId) positionPoolIds.add(poolId);
     }
     const poolFeeRateMap = await buildPoolFeeRateMap(positionPoolIds);
+
+    // Step 3c: Fetch Graph fee/deposit data for enriched positions
+    // This gives us REAL collected fees (from Collect events) and deposits (from Mint events)
+    // which are essential for accurate Fee APR and PnL calculations
+    const enrichedTokenIds = allPositions.map((p: any) => p.tokenId).filter(Boolean);
+
+    let graphFeeMap = new Map<string, any>();
+    let graphCollectMap = new Map<string, { amount0: number; amount1: number; amount0USD: number; amount1USD: number; count: number }>();
+    let graphMintMap = new Map<string, { amount0: number; amount1: number; amountUSD: number; count: number }>();
+
+    try {
+      // Fetch enriched Position data (collectedFeesToken0/1, depositedToken0/1)
+      graphFeeMap = await fetchGraphPositionsWithFees(enrichedTokenIds);
+      syncLogger.info({ found: graphFeeMap.size }, 'Graph enriched position data loaded');
+    } catch (error) {
+      syncLogger.warn({ error: (error as Error).message }, 'Failed to fetch Graph enriched positions');
+    }
+
+    try {
+      // Fetch Collect events (real fee collection history)
+      graphCollectMap = await fetchPositionCollects(enrichedTokenIds);
+      syncLogger.info({ found: graphCollectMap.size }, 'Graph Collect events loaded');
+    } catch (error) {
+      syncLogger.warn({ error: (error as Error).message }, 'Failed to fetch Graph Collect events');
+    }
+
+    try {
+      // Fetch Mint events (real deposit history)
+      graphMintMap = await fetchPositionMints(enrichedTokenIds);
+      syncLogger.info({ found: graphMintMap.size }, 'Graph Mint events loaded');
+    } catch (error) {
+      syncLogger.warn({ error: (error as Error).message }, 'Failed to fetch Graph Mint events');
+    }
 
     // Step 4: Calculate metrics for each position
     const now = Math.floor(Date.now() / 1000);
@@ -535,7 +621,6 @@ export async function syncTopPositions(): Promise<void> {
         const poolId = (pos.poolId || '').toLowerCase();
 
         // Get pool data from our multi-source pool map
-        // On-chain positions use poolId format "currency0-currency1-fee" which matches Ponder index
         const poolData = poolDataMap.get(poolId);
         if (!poolData && !pos.poolTick && !pos.poolSqrtPriceX96) { skipReasons.noPool++; continue; }
         const currentTick = poolData?.tick ?? pos.poolTick ?? 0;
@@ -580,69 +665,131 @@ export async function syncTopPositions(): Promise<void> {
 
         // Calculate age
         const createdAt = parseInt(pos.createdAtTimestamp || '0');
-        const ageDays = createdAt > 0 ? Math.floor((now - createdAt) / 86400) : 0;
+        const ageDays = createdAt > 0 ? Math.max(0.01, (now - createdAt) / 86400) : 0; // Use fractional days for accuracy
         if (ageDays < MIN_AGE_DAYS) { skipReasons.youngAge++; continue; }
 
-        // Calculate deposited value from Ponder data
-        const deposited0 = Number(BigInt(pos.depositedToken0 || '0')) / (10 ** token0Decimals);
-        const deposited1 = Number(BigInt(pos.depositedToken1 || '0')) / (10 ** token1Decimals);
-        let depositedValueUsd = (deposited0 * price0) + (deposited1 * price1);
+        // In-range check
+        const inRange = currentTick >= tickLower && currentTick < tickUpper;
 
-        // When Ponder lacks deposit data (PositionMinted + LiquidityIncreased race condition
-        // or Ponder not fully synced), compute from real liquidity math.
-        // This is exact same math used for positionValueUsd — real on-chain derived value.
-        if (depositedValueUsd === 0 && positionValueUsd > 0) {
+        // === Collect fee data from multiple sources (priority order) ===
+        // 1. Graph Collect events (real on-chain fee collection history)
+        // 2. Graph Position entity (collectedFeesToken0/1)
+        // 3. Ponder data (collectedFeesToken0/1 from indexer)
+        // 4. Pool-level fee rate estimation (fallback)
+
+        let collectedFeesUsd = 0;
+        let hasRealFeeData = false;
+
+        // Source 1: Graph Collect events — most reliable real fee data
+        const collectData = graphCollectMap.get(pos.tokenId);
+        if (collectData && (collectData.amount0USD + collectData.amount1USD) > 0) {
+          collectedFeesUsd = collectData.amount0USD + collectData.amount1USD;
+          hasRealFeeData = true;
+        }
+
+        // Source 2: Graph Position entity fee fields
+        if (!hasRealFeeData) {
+          const graphPos = graphFeeMap.get(pos.tokenId);
+          if (graphPos) {
+            const gCollected0 = parseFloat(graphPos.collectedFeesToken0 || '0');
+            const gCollected1 = parseFloat(graphPos.collectedFeesToken1 || '0');
+            if (gCollected0 > 0 || gCollected1 > 0) {
+              // These are token amounts, convert to USD
+              const adj0 = gCollected0 / (10 ** token0Decimals);
+              const adj1 = gCollected1 / (10 ** token1Decimals);
+              collectedFeesUsd = (adj0 * price0) + (adj1 * price1);
+              if (collectedFeesUsd > 0) hasRealFeeData = true;
+            }
+          }
+        }
+
+        // Source 3: Ponder data (from position indexer)
+        if (!hasRealFeeData) {
+          const collected0 = Number(BigInt(pos.collectedFeesToken0 || '0')) / (10 ** token0Decimals);
+          const collected1 = Number(BigInt(pos.collectedFeesToken1 || '0')) / (10 ** token1Decimals);
+          collectedFeesUsd = (collected0 * price0) + (collected1 * price1);
+          if (collectedFeesUsd > 0) hasRealFeeData = true;
+        }
+
+        // === Deposit data from multiple sources ===
+        // 1. Graph Mint events (real deposit history with USD values)
+        // 2. Graph Position entity (depositedToken0/1)
+        // 3. Ponder data
+        // 4. Fallback: current position value (assumes price hasn't changed)
+
+        let depositedValueUsd = 0;
+        let hasRealDepositData = false;
+
+        // Source 1: Graph Mint events — includes amountUSD from the time of deposit
+        const mintData = graphMintMap.get(pos.tokenId);
+        if (mintData && mintData.amountUSD > 0) {
+          depositedValueUsd = mintData.amountUSD;
+          hasRealDepositData = true;
+        }
+
+        // Source 2: Graph Position entity deposit fields
+        if (!hasRealDepositData) {
+          const graphPos = graphFeeMap.get(pos.tokenId);
+          if (graphPos) {
+            const gDep0 = parseFloat(graphPos.depositedToken0 || '0');
+            const gDep1 = parseFloat(graphPos.depositedToken1 || '0');
+            if (gDep0 > 0 || gDep1 > 0) {
+              // Token amounts at deposit time — use current prices as approximation
+              const adj0 = gDep0 / (10 ** token0Decimals);
+              const adj1 = gDep1 / (10 ** token1Decimals);
+              depositedValueUsd = (adj0 * price0) + (adj1 * price1);
+              if (depositedValueUsd > 0) hasRealDepositData = true;
+            }
+          }
+        }
+
+        // Source 3: Ponder data
+        if (!hasRealDepositData) {
+          const deposited0 = Number(BigInt(pos.depositedToken0 || '0')) / (10 ** token0Decimals);
+          const deposited1 = Number(BigInt(pos.depositedToken1 || '0')) / (10 ** token1Decimals);
+          depositedValueUsd = (deposited0 * price0) + (deposited1 * price1);
+          if (depositedValueUsd > 0) hasRealDepositData = true;
+        }
+
+        // Fallback: use current position value as deposit estimate
+        if (depositedValueUsd <= 0 && positionValueUsd > 0) {
           depositedValueUsd = positionValueUsd;
         }
 
-        // Calculate collected fees from Ponder data (FeesCollected events)
-        const collected0 = Number(BigInt(pos.collectedFeesToken0 || '0')) / (10 ** token0Decimals);
-        const collected1 = Number(BigInt(pos.collectedFeesToken1 || '0')) / (10 ** token1Decimals);
-        const collectedFeesUsd = (collected0 * price0) + (collected1 * price1);
-        const hasRealFeeData = collectedFeesUsd > 0;
-
-        // In-range check (needed for APR estimation below)
-        const inRange = currentTick >= tickLower && currentTick < tickUpper;
-
-        // === Fee APR estimation from Graph pool data ===
-        // When Ponder hasn't indexed collected fees yet, estimate from pool fee rates
+        // === Fee APR calculation ===
         let estimatedFeeApr = 0;
         let estimatedPendingFeesUsd = 0;
 
-        if (!hasRealFeeData && positionValueUsd > 0) {
+        if (hasRealFeeData && positionValueUsd > 0 && ageDays > 0) {
+          // Real fee data → real APR
+          estimatedFeeApr = (collectedFeesUsd / positionValueUsd) * (365 / ageDays) * 100;
+        } else if (positionValueUsd > 0) {
+          // Estimate from pool-level fee rates × concentration factor
           const poolFeeRate = poolFeeRateMap.get(poolId);
           if (poolFeeRate && poolFeeRate.poolApr > 0 && poolFeeRate.tvlUsd > 0) {
-            // Concentration factor: narrower range earns proportionally more fees
             const MIN_TICK = -887272;
             const MAX_TICK = 887272;
             const fullRange = MAX_TICK - MIN_TICK;
             const posRange = tickUpper - tickLower;
-            // Cap concentration at 50x to avoid absurd values for very narrow positions
             const concentrationFactor = posRange > 0 ? Math.min(fullRange / posRange, 50) : 1;
-
-            // In-range positions earn fees; out-of-range earn nothing currently
-            // but have historical average (use 1x pool rate as conservative estimate)
             const effectiveConcentration = inRange ? concentrationFactor : 1;
-
             estimatedFeeApr = Math.min(poolFeeRate.poolApr * effectiveConcentration, 10000);
 
-            // Estimate accrued pending fees from position value × daily rate × age
+            // Estimate pending fees
             if (ageDays > 0) {
               estimatedPendingFeesUsd = positionValueUsd * (estimatedFeeApr / 100) * (Math.min(ageDays, 365) / 365);
             }
           }
         }
 
-        // Final APR: prefer real Ponder data, fall back to Graph-based estimate
-        const feeApr = hasRealFeeData && positionValueUsd > 0 && ageDays > 0
-          ? (collectedFeesUsd / positionValueUsd) * (365 / ageDays) * 100
-          : estimatedFeeApr;
+        const feeApr = hasRealFeeData ? estimatedFeeApr : estimatedFeeApr;
 
-        // PnL = current value + collected fees + estimated pending - deposited value
+        // === PnL calculation ===
+        // PnL = current value + collected fees - deposited value
         const effectiveFees = hasRealFeeData ? collectedFeesUsd : estimatedPendingFeesUsd;
         const pnlUsd = positionValueUsd + effectiveFees - depositedValueUsd;
 
-        const totalApr = feeApr; // Use fee APR as total when IL data not available from Ponder
+        const totalApr = feeApr;
         const roi = depositedValueUsd > 0 && pnlUsd !== 0
           ? (pnlUsd / depositedValueUsd) * 100
           : 0;
@@ -677,12 +824,12 @@ export async function syncTopPositions(): Promise<void> {
           depositedToken1: pos.depositedToken1 || '0',
           collectedFeesToken0: pos.collectedFeesToken0 || '0',
           collectedFeesToken1: pos.collectedFeesToken1 || '0',
-          pendingFeesUsd: Math.round(estimatedPendingFeesUsd * 100) / 100,
+          pendingFeesUsd: Math.round((hasRealFeeData ? 0 : estimatedPendingFeesUsd) * 100) / 100,
           feeApr: Math.max(-9999999, Math.min(Math.round(feeApr * 100) / 100, 9999999)),
           totalApr: Math.max(-9999999, Math.min(Math.round(totalApr * 100) / 100, 9999999)),
           pnlUsd: Math.max(-9999999999, Math.min(Math.round(pnlUsd * 100) / 100, 9999999999)),
           roi: Math.max(-9999999, Math.min(Math.round(roi * 100) / 100, 9999999)),
-          ageDays,
+          ageDays: Math.round(ageDays * 10) / 10, // Round to 1 decimal for fractional days
           compoundEnabled: false,
           rangeEnabled: false,
           exitEnabled: false,

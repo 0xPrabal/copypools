@@ -102,6 +102,32 @@ export interface GraphPosition {
   createdAtTimestamp: string;
 }
 
+export interface GraphPositionEnriched {
+  tokenId: string;
+  owner: string;
+  createdAtTimestamp: string;
+  collectedFeesToken0: string;
+  collectedFeesToken1: string;
+  depositedToken0: string;
+  depositedToken1: string;
+  withdrawnToken0: string;
+  withdrawnToken1: string;
+  pool?: {
+    id: string;
+    token0: { id: string; symbol: string; decimals: string };
+    token1: { id: string; symbol: string; decimals: string };
+    feeTier: string;
+  };
+}
+
+export interface GraphCollect {
+  id: string;
+  amount0: string;
+  amount1: string;
+  timestamp: string;
+  position: { tokenId: string };
+}
+
 export interface GraphPool {
   id: string;
   token0: { id: string; symbol: string; name: string; decimals: string };
@@ -726,6 +752,189 @@ export async function fetchGraphPositions(
 
   graphLogger.info({ count: positions.length, skip }, 'Fetched positions from Graph');
   return positions;
+}
+
+/**
+ * Fetch enriched Position data from Graph including fee/deposit fields.
+ * V4 subgraph Position entity may have: collectedFees0/1, depositedToken0/1, withdrawnToken0/1
+ * Falls back gracefully if some fields don't exist in the subgraph schema.
+ */
+export async function fetchGraphPositionsWithFees(tokenIds: string[]): Promise<Map<string, GraphPositionEnriched>> {
+  const result = new Map<string, GraphPositionEnriched>();
+  if (tokenIds.length === 0) return result;
+
+  const BATCH = 100;
+  for (let i = 0; i < tokenIds.length; i += BATCH) {
+    const batch = tokenIds.slice(i, i + BATCH);
+    const ids = batch.map(id => `"${id}"`).join(',');
+
+    try {
+      // Try full query with all fee/deposit fields
+      const query = `{
+        positions(where: { tokenId_in: [${ids}] }, first: ${BATCH}) {
+          tokenId
+          owner
+          createdAtTimestamp
+          collectedFeesToken0
+          collectedFeesToken1
+          depositedToken0
+          depositedToken1
+          withdrawnToken0
+          withdrawnToken1
+          pool {
+            id
+            token0 { id symbol decimals }
+            token1 { id symbol decimals }
+            feeTier
+          }
+        }
+      }`;
+
+      const data = await queryGraph<{ positions: GraphPositionEnriched[] }>(query);
+      if (data?.positions) {
+        for (const pos of data.positions) {
+          result.set(pos.tokenId, pos);
+        }
+        continue;
+      }
+    } catch {
+      // Full query failed, try minimal query
+    }
+
+    try {
+      // Fallback: try without deposit/withdrawn fields (may not exist in V4)
+      const query = `{
+        positions(where: { tokenId_in: [${ids}] }, first: ${BATCH}) {
+          tokenId
+          owner
+          createdAtTimestamp
+          collectedFeesToken0
+          collectedFeesToken1
+        }
+      }`;
+
+      const data = await queryGraph<{ positions: any[] }>(query);
+      if (data?.positions) {
+        for (const pos of data.positions) {
+          result.set(pos.tokenId, {
+            ...pos,
+            depositedToken0: '0',
+            depositedToken1: '0',
+            withdrawnToken0: '0',
+            withdrawnToken1: '0',
+          });
+        }
+      }
+    } catch (error) {
+      graphLogger.warn({ error: (error as Error).message, batch: batch.length }, 'Failed to fetch enriched positions');
+    }
+  }
+
+  graphLogger.info({ requested: tokenIds.length, found: result.size }, 'Fetched enriched positions from Graph');
+  return result;
+}
+
+/**
+ * Fetch Collect events (fee collections) for positions from Graph.
+ * Returns a map of tokenId → total collected fees in USD.
+ */
+export async function fetchPositionCollects(tokenIds: string[]): Promise<Map<string, { amount0: number; amount1: number; amount0USD: number; amount1USD: number; count: number }>> {
+  const result = new Map<string, { amount0: number; amount1: number; amount0USD: number; amount1USD: number; count: number }>();
+  if (tokenIds.length === 0) return result;
+
+  const BATCH = 50; // Smaller batch since we're querying related entities
+  for (let i = 0; i < tokenIds.length; i += BATCH) {
+    const batch = tokenIds.slice(i, i + BATCH);
+    const ids = batch.map(id => `"${id}"`).join(',');
+
+    try {
+      // Query collects for positions (V4 subgraph structure)
+      const query = `{
+        collects(
+          where: { position_: { tokenId_in: [${ids}] } }
+          first: 1000
+          orderBy: timestamp
+          orderDirection: desc
+        ) {
+          amount0
+          amount1
+          amount0USD
+          amount1USD
+          timestamp
+          position { tokenId }
+        }
+      }`;
+
+      const data = await queryGraph<{ collects: Array<{ amount0: string; amount1: string; amount0USD: string; amount1USD: string; position: { tokenId: string } }> }>(query);
+      if (data?.collects) {
+        for (const c of data.collects) {
+          const tid = c.position.tokenId;
+          const existing = result.get(tid) || { amount0: 0, amount1: 0, amount0USD: 0, amount1USD: 0, count: 0 };
+          existing.amount0 += parseFloat(c.amount0 || '0');
+          existing.amount1 += parseFloat(c.amount1 || '0');
+          existing.amount0USD += parseFloat(c.amount0USD || '0');
+          existing.amount1USD += parseFloat(c.amount1USD || '0');
+          existing.count++;
+          result.set(tid, existing);
+        }
+      }
+    } catch (error) {
+      graphLogger.debug({ error: (error as Error).message }, 'Failed to fetch Collect events batch');
+    }
+  }
+
+  graphLogger.info({ requested: tokenIds.length, withCollects: result.size }, 'Fetched Collect events from Graph');
+  return result;
+}
+
+/**
+ * Fetch Mint events (deposits) for positions from Graph.
+ * Returns a map of tokenId → total deposited amounts.
+ */
+export async function fetchPositionMints(tokenIds: string[]): Promise<Map<string, { amount0: number; amount1: number; amountUSD: number; count: number }>> {
+  const result = new Map<string, { amount0: number; amount1: number; amountUSD: number; count: number }>();
+  if (tokenIds.length === 0) return result;
+
+  const BATCH = 50;
+  for (let i = 0; i < tokenIds.length; i += BATCH) {
+    const batch = tokenIds.slice(i, i + BATCH);
+    const ids = batch.map(id => `"${id}"`).join(',');
+
+    try {
+      const query = `{
+        mints(
+          where: { position_: { tokenId_in: [${ids}] } }
+          first: 1000
+          orderBy: timestamp
+          orderDirection: desc
+        ) {
+          amount0
+          amount1
+          amountUSD
+          timestamp
+          position { tokenId }
+        }
+      }`;
+
+      const data = await queryGraph<{ mints: Array<{ amount0: string; amount1: string; amountUSD: string; position: { tokenId: string } }> }>(query);
+      if (data?.mints) {
+        for (const m of data.mints) {
+          const tid = m.position.tokenId;
+          const existing = result.get(tid) || { amount0: 0, amount1: 0, amountUSD: 0, count: 0 };
+          existing.amount0 += parseFloat(m.amount0 || '0');
+          existing.amount1 += parseFloat(m.amount1 || '0');
+          existing.amountUSD += parseFloat(m.amountUSD || '0');
+          existing.count++;
+          result.set(tid, existing);
+        }
+      }
+    } catch (error) {
+      graphLogger.debug({ error: (error as Error).message }, 'Failed to fetch Mint events batch');
+    }
+  }
+
+  graphLogger.info({ requested: tokenIds.length, withMints: result.size }, 'Fetched Mint events from Graph');
+  return result;
 }
 
 /**
